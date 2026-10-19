@@ -31,15 +31,17 @@
 
   <div class="card">
     <div>Latest version: <span id="ver">…</span></div>
-    <a class="btn" id="dl-win" href="https://github.com/Devilblader87/gsvr-companion/releases/latest">Download for Windows</a>
+    <a class="btn" id="dl-win" href="https://github.com/Devilblader87/gsvr-companion/releases/latest">Download GSVR-Setup.exe (Windows)</a>
     <a class="btn alt" href="https://github.com/Devilblader87/gsvr-companion/releases">All releases</a>
-    <div class="muted"><small>Already installed? The companion updates itself on start — nothing to download again.</small></div>
+    <div class="muted"><small>Already installed? The companion updates itself on start — nothing to download again.
+      Portable zip and source: see <a href="https://github.com/Devilblader87/gsvr-companion/releases">all releases</a>.</small></div>
   </div>
 
   <h2>Get playing in 3 steps</h2>
   <ol>
     <li><b>Install the game</b> you want to play on this PC (Steam: Counter-Strike 1.6). The companion finds Steam by itself.</li>
-    <li><b>Start GSVR Companion</b> (unzip, run <code>GSVR.exe</code>). Leave it running while you play.</li>
+    <li><b>Run GSVR-Setup.exe</b> — no admin rights needed, it starts with Windows and updates itself.
+      <br><small class="muted">Windows may say “Windows protected your PC” (new, unsigned app): click <b>More info → Run anyway</b>.</small></li>
     <li>In VRChat: <b>Settings → Comfort &amp; Safety → Allow Untrusted URLs: on</b>. Join the world — the lobby shows a green light when everything is ready, then pick a team.</li>
   </ol>
 
@@ -65,7 +67,7 @@
       const rel = (list || []).find(r => !r.draft);
       if (!rel) { document.getElementById("ver").textContent = "-"; return; }
       document.getElementById("ver").textContent = rel.tag_name;
-      const a = (rel.assets || []).find(x => x.name === "gsvr-companion-windows-x64.zip");
+      const a = (rel.assets || []).find(x => x.name === "GSVR-Setup.exe");
       if (a) document.getElementById("dl-win").href = a.browser_download_url;
     })
     .catch(() => { document.getElementById("ver").textContent = "see releases"; });
