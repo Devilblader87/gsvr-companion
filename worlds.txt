@@ -1,0 +1,3 @@
+# Official GSVR worlds: the companion serves the game files only to these VRChat worlds (one id per line).
+# Counter-Strike
+wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb
