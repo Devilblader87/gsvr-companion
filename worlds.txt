@@ -3,3 +3,5 @@
 wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb
 # Half-Life
 wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a
+# Sven Co-op
+wrld_19508790-4711-46f7-bf73-e5b96f944db9
