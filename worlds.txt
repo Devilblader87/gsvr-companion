@@ -7,3 +7,5 @@ wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a
 wrld_19508790-4711-46f7-bf73-e5b96f944db9
 # Warcraft III
 wrld_71563253-4115-40d3-b165-7cdba23bff06
+# Warcraft III Videoprobe
+wrld_cca6e8e8-d737-494c-8265-4a7a01d00476
