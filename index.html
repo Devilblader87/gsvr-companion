@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GSVR Companion</title>
-<meta name="description" content="Play your own copy of Counter-Strike 1.6, Half-Life and Sven Co-op in VRChat: the GSVR companion app converts your installed game files locally.">
+<meta name="description" content="Play your own copy of Counter-Strike 1.6, Half-Life, Sven Co-op and Warcraft III in VRChat: the GSVR companion app converts your installed game files locally.">
 <style>
   :root { --bg: #14130f; --panel: #1f1c15; --text: #e8dcc0; --muted: #a8987a; --accent: #ffb42a; --line: #3a3324; }
   @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #f4efe4; --panel: #fffaf0; --text: #2a2418; --muted: #6d5f45; --accent: #b86e00; --line: #dccfb3; } }
@@ -27,8 +27,8 @@
 <body>
 <main>
   <h1>GSVR <span>Companion</span></h1>
-  <p class="lead">Play Counter-Strike 1.6, the Half-Life campaign and Sven Co-op in VRChat — built from <b>your own</b> installed games, on your PC.</p>
-  <p class="muted">Three separate worlds: <b>GSVR - Counter-Strike</b> (classic rounds, bomb, hostages, bots), <b>GSVR - Half-Life</b> (the campaign in co-op: HL weapons, HEV, monsters) and <b>GSVR - Sven Co-op</b> (co-op maps with Sven weapons, monsters and allies). Each world only needs the game it is built from.</p>
+  <p class="lead">Play Counter-Strike 1.6, the Half-Life campaign, Sven Co-op and Warcraft III in VRChat — built from <b>your own</b> installed games, on your PC.</p>
+  <p class="muted">Four separate worlds: <b>GSVR - Counter-Strike</b> (classic rounds, bomb, hostages, bots), <b>GSVR - Half-Life</b> (the campaign in co-op: HL weapons, HEV, monsters), <b>GSVR - Sven Co-op</b> (co-op maps with Sven weapons, monsters and allies) and <b>Warcraft III</b> (melee, tower defense and other custom maps on a table — box-select with the trigger, right click with the grip — with your friends). Each world only needs the game it is built from.</p>
 
   <div class="card">
     <div>Latest version: <span id="ver">…</span></div>
@@ -40,7 +40,7 @@
 
   <h2>Get playing in 3 steps</h2>
   <ol>
-    <li><b>Install the game</b> you want to play on this PC (Steam: Counter-Strike 1.6, Half-Life and/or Sven Co-op). The companion finds Steam by itself.</li>
+    <li><b>Install the game</b> you want to play on this PC: Counter-Strike 1.6, Half-Life and/or Sven Co-op (Steam is found by itself; an install without Steam or in another folder can be chosen in the settings: <i>Half-Life / Counter-Strike Ordner</i>), or Warcraft III (classic 1.21 – 1.31). The <b>Spiele</b> tab of the companion shows where each game was found and lets you change the folder.</li>
     <li><b>Run GSVR-Setup.exe</b> — no admin rights needed, it starts with Windows and updates itself.
       <br><small class="muted">Windows may say “Windows protected your PC” (new, unsigned app): click <b>More info → Run anyway</b>.</small></li>
     <li>In VRChat: <b>Settings → Comfort &amp; Safety → Allow Untrusted URLs: on</b>. Join the world — the lobby shows a green light when everything is ready, then pick a team.</li>
@@ -49,16 +49,25 @@
   <h2>Why a companion app?</h2>
   <p>The world does not contain any game files. The companion reads maps, models and sounds from the copy of the game
   that you own, converts them on your PC and hands them to VRChat over <code>127.0.0.1</code> (your own computer only).
-  Nothing is uploaded anywhere, and only games you have installed can be played.</p>
+  Only games you have installed can be played; game data never leaves your PC.</p>
+
+  <h2>Warcraft III: sharing fan maps</h2>
+  <p>Like in the original game, the host can play a custom map that a friend does not have: the friend's companion
+  downloads <b>only the map file</b> through the GSVR relay (<code>w3relay.heimserver.me</code>, files are kept 24 h and
+  can only be fetched by their exact hash) and builds the map from the friend's own Warcraft III. The map keeps its name
+  and is saved in <code>Warcraft III\Maps\Download\GSVR</code>, so it also works in the real game. Blizzard's own maps
+  and game data are never sent. You can switch it off in the settings (<i>Karten vom Host automatisch laden</i>: on / ask / off).
+  Takedown requests: <code>abuse@heimserver.me</code>.</p>
 
   <h2>Trouble?</h2>
   <ul>
     <li><b>"Companion not found"</b> — the app is not running, or a firewall blocks local connections.</li>
     <li><b>"Untrusted URLs"</b> — switch the VRChat setting above on and rejoin.</li>
-    <li><b>"Game not installed"</b> — install it in Steam, the companion rescans automatically.</li>
+    <li><b>"Game not installed"</b> — install it in Steam (the companion rescans automatically) or choose the game folder in the settings.</li>
+    <li><b>"Map not in your install"</b> (Warcraft III) — the host's map could not be fetched: check that map sharing is on, or copy the map into your <code>Maps</code> folder.</li>
     <li>VRChat on PC (Windows) only — Quest / Android cannot load local files.</li>
   </ul>
-  <p class="muted"><small>Fan project, not affiliated with Valve or VRChat. Counter-Strike and Half-Life are trademarks of Valve Corporation.</small></p>
+  <p class="muted"><small>Fan project, not affiliated with Valve, Blizzard Entertainment or VRChat. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment.</small></p>
 </main>
 <script>
   // newest release (pre-releases included) from the public GitHub API — no server of our own involved
