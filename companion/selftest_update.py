@@ -631,13 +631,14 @@ def test_converter_low_priority():
     else:
         check(callable(kw.get("preexec_fn")), "POSIX: nice in the child")
     seen = {}
-    orig = sp.run
+    orig, orig_popen = sp.run, sp.Popen
 
     def spy(argv, **k):
         seen.update(k)
         raise OSError("spy")
     b = builder.Converter(os.path.join(HERE, "x.py"), template="{python} -c pass {out}", timeout=5)
     sp.run = spy
+    sp.Popen = spy                 # the converters run through buildprog.run (Popen, streaming progress)
     try:
         tmp = tempfile.mkdtemp(prefix="gsvr-prio-")
         bsp = os.path.join(tmp, "m.bsp")
@@ -648,7 +649,7 @@ def test_converter_low_priority():
             pass
         shutil.rmtree(tmp, ignore_errors=True)
     finally:
-        sp.run = orig
+        sp.run, sp.Popen = orig, orig_popen
     check(all(seen.get(k) is not None for k in kw), "builder starts the converter with them (%s)" % sorted(seen))
 
 

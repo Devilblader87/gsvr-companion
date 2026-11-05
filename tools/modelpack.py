@@ -158,7 +158,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 1, "valve": 1, "svencoop": 1, "gearbox": 1}
+PACK_REV = {"cstrike": 1, "valve": 1, "svencoop": 2, "gearbox": 2}
 
 
 def version_for_mod(mod):
@@ -724,13 +724,14 @@ SVEN_MONSTERS = tuple((n, a, x, b) for n, a, x, b in MONSTERS if n != "gman") + 
     ("hgrunt_opfor", (47, 32, 48, 49), ("crouching_saw", "deadstomach", "deadside", "deadsitting", "dead_on_back"), 0),
     ("hgrunt_medic", (47, 33, 34, 48, 49), ("deadstomach", "deadside", "deadsitting"), 0),
     ("otis", (32, 33, 34), ("lying_on_back", "lying_on_side", "lying_on_stomach"), 0),
-    ("gonome", (), ("attack2",), 0),                                 # attack2 = the bite chain (events 19..22)
+    ("gonome", (65,), ("attack2",), 0),                              # attack2 = the bite chain (events 19..22); 65 victory dance
     ("zombie_barney", (), (), 0),
     ("zombie_soldier", (), (), 0),
     ("pit_drone", (7,), (), 0),
     ("strooper", (47,), (), 0),
     ("massn", (47,), ("crouching_m40a1",), 0),
-    ("agrunt", (), (), 0),
+    # agrunt: slAGruntVictoryDance plays ACT_CROUCH / ACT_VICTORY_DANCE / ACT_STAND / ACT_THREAT_DISPLAY at the corpse
+    ("agrunt", (17, 19, 57, 65), (), 0),
     # controller: the floating sequences by name (LookupFloat picks them by the velocity [obs CController 0x9aeb0])
     ("controller", (), ("up", "down", "forward", "backward", "left", "right"), 0),
     ("babygarg", (), (), 0),
@@ -776,7 +777,7 @@ OF_MONSTERS = tuple(MONSTERS) + (
     ("hgrunt_medic", (47, 33, 34, 48, 49), ("deadstomach", "deadside", "deadsitting"), 0),
     ("hgrunt_torch", (47, 32, 48, 49), ("deadstomach", "deadside", "deadsitting"), 0),
     ("otis", (32, 33, 34), ("lying_on_back", "lying_on_side", "lying_on_stomach"), 0),
-    ("gonome", (), ("attack2",), 0),
+    ("gonome", (65,), ("attack2",), 0),                              # 65 = slGonomeVictoryDance's ACT_VICTORY_DANCE
     ("zombie_barney", (), (), 0),
     ("zombie_soldier", (), (), 0),
     ("pit_drone", (7,), (), 0),
@@ -786,8 +787,8 @@ OF_MONSTERS = tuple(MONSTERS) + (
     ("recruit", (), (), 0),
     ("drill", (), (), 0),
     # bosses / big props: own pose vertex budget (5th field)
-    ("voltigore", (), (), 0, 40000),
-    ("baby_voltigore", (), (), 0, 12000),
+    ("voltigore", (65,), (), 0, 40000),                         # 65 = the victory dance at the enemy corpse
+    ("baby_voltigore", (65,), (), 0, 12000),
     ("geneworm", (), (), 0, 30000),
     ("pit_worm_up", (), (), 0, 30000),
     ("pit_worm", (), (), 0, 30000),           # not in every install (this one lacks it): the runtime then keeps its Big Momma stand-in

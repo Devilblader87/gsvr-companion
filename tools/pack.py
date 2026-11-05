@@ -71,6 +71,14 @@
 #   "NAVN" count = A·A: uint16 next hop, entry [target·A + from] = the neighbour of `from` on the cheapest path to
 #     `target` (0xFFFF = unreachable, target itself = target); padded to 4 bytes. Cost = 3D centre distance, ×1.5 into
 #     crouch areas, +50 u into jump areas (precomputed so Udon never runs a path search)
+#   optional AI node graph (tools/nodegraph.py; older loaders skip it, a loader without it falls back to the nav mesh):
+#   "NODG" count = N nodes: the HL CGraph of the map's info_node / info_node_air entities — the game's own
+#     maps/graphs/<map>.nod when it matches the map (FLoadGraph), else the offline CTestHull build. i32 version 16,
+#     i32 N, i32 L links, i32 T route tables, i32 slot[8] (hull × 2 + capability variant → table), N × 48 bytes
+#     (f32 origin xyz, f32 peek xyz, i32 info (1 land 2 air 4 water), i32 firstLink, i32 linkCount, i32 hintType,
+#     i32 hintActivity, f32 hintYaw), L × 20 bytes (i32 src, i32 dst, i32 hull bits (1 small 2 human 4 large 8 fly),
+#     i32 link entity index (−1 none), f32 weight = 2-D length), T × N·N uint16 next node [from·N + to] (from = no
+#     path); padded to 4. Layout spec: tools/nodegraph.py:section
 #   optional surface materials (older loaders skip it):
 #   "TMAT" count = I/3: uint8 per PACK triangle t (= idx[3t..3t+2], i.e. the index buffer above: world render
 #     triangles (solid first), then every model's own index range in MODL order), padded to 4 bytes. Value = the CS
@@ -1289,6 +1297,9 @@ def write_v3(out, p):
             (b"EKVS", struct.pack(f"<{len(v3['ekvs'])}i", *v3["ekvs"]), len(v3["ekvs"]) // 4)]
     if p.get("nav"):
         secs += nav_sections(p["nav"])
+    if p.get("nodg"):
+        blob, n = p["nodg"]
+        secs.append((b"NODG", blob, n))
     if p.get("tmat"):
         assert len(p["tmat"]) * 3 == ic
         secs.append((b"TMAT", p["tmat"] + b"\0" * (-len(p["tmat"]) % 4), len(p["tmat"])))
@@ -1340,6 +1351,38 @@ def write_v3(out, p):
     if p["stats"]:
         print("stats:", p["stats"])
 
+
+
+def node_graph(bsp, game_root, mod, nod_path, max_mb, log):
+    """AI node graph → (NODG section bytes, node count) or None: the game's .nod for this map when it matches the
+    map's node entities (CGraph::FLoadGraph), else the offline CTestHull build (tools/nodegraph.py)."""
+    import navgen, nodegraph
+    try:
+        C, _sz = navgen.load(bsp)
+        if not any(e.get("classname") in ("info_node", "info_node_air") for e in C.ents):
+            log("node graph: no info_node entities")
+            return None
+        g = None
+        nod = nod_path or nodegraph.find_nod(bsp, game_root, mod)
+        if nod:
+            g = nodegraph.load_nod(nod, C.ents, log=log)
+            if g:
+                log(f"node graph: file {nod} ({len(g['nodes'])} nodes, {len(g['links'])} links, {len(g['tables'])} route tables)")
+        if g is None:
+            g = nodegraph.build(C=C, log=log)
+            if g:
+                log(f"node graph: built from {len(g['nodes'])} info_node entities ({len(g['links'])} links, "
+                    f"{len(g['tables'])} route tables)")
+        if g is None:
+            return None
+        blob = nodegraph.section(g)
+        if len(blob) > max_mb * 1024 * 1024:
+            print(f"node graph left out: {len(blob) / 1e6:.1f} MB > --node-max-mb {max_mb:g}")
+            return None
+        return blob, len(g["nodes"])
+    except Exception as e:                       # noqa: BLE001 — a broken graph must not cost the map
+        log(f"node graph: skipped ({e})")
+        return None
 
 
 def find_nav(bsp, game_root, mod):
@@ -1489,6 +1532,11 @@ if __name__ == "__main__":
     ap.add_argument("--nav-max-mb", type=float, default=24.0,
                     help="leave the nav mesh out when its next-hop table (areas² × 2 bytes) is bigger than this; big "
                          "generated meshes of open Sven Co-op maps would otherwise fill the 100 MB download cap")
+    ap.add_argument("--no-nodes", action="store_true", help="leave out the NODG AI node graph (info_node entities)")
+    ap.add_argument("--nod", help="the game's node graph file (.nod); default: <mod>/maps/graphs/<map>.nod, else built "
+                                  "from the map's info_node entities with tools/nodegraph.py")
+    ap.add_argument("--node-max-mb", type=float, default=16.0,
+                    help="leave the node graph out when its section (route tables N² × 2 bytes each) is bigger than this")
     ap.add_argument("--no-sky", action="store_true", help="leave out the SKY6 skybox faces")
     ap.add_argument("--no-sounds", action="store_true", help="leave out the SNDS entity sounds (ambient_generic, movers …)")
     ap.add_argument("--sound-mb", type=float, default=24.0, help="SNDS budget in MB of float32 samples (ambient first)")
@@ -1540,6 +1588,8 @@ if __name__ == "__main__":
                 print(f"nav left out: {na} areas need a {na * na * 2 / 1e6:.1f} MB next-hop table (> --nav-max-mb {a.nav_max_mb:g})")
                 data["nav"] = None
     bprog.progress("nav", 1, 1)
+    if a.format == 3 and a.bsp and not a.no_nodes:
+        data["nodg"] = node_graph(a.bsp, a.game_root, a.mod, a.nod, a.node_max_mb, log)
     if a.format == 3 and a.bsp and not a.no_sky:
         import sky
         try:
@@ -1584,7 +1634,7 @@ if __name__ == "__main__":
         mt //= 2
         print(f"pack {os.path.getsize(a.out) / 1e6:.1f} MB > {a.max_bytes / 1e6:.0f} MB: rebuilding with --max-tex {mt}")
         small = conv(a.bsp, a.game_root, a.mod, mt, not a.no_entities_brushes, log)
-        for k in ("nav", "sky", "snds", "titl", "sent"):
+        for k in ("nav", "nodg", "sky", "snds", "titl", "sent"):
             if data.get(k):
                 small[k] = data[k]
         data = small

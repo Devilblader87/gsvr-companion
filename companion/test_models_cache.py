@@ -110,11 +110,15 @@ class Adopt(Base):
         olds = {m: self.old_file(m) for m in MODS}
         for m in MODS:
             r = self.mb.build(self.cache, m, self.root, log=self.logs.append)
+            if f"{modelpack.VERSION}-{m}-r{modelpack.PACK_REV[m]}" != models.LEGACY_ADOPT[m][0]:
+                self.assertFalse(r["cached"], m + ": rev bumped since 0.9.23, the old cache must not be adopted")
+                continue
             self.assertTrue(r["cached"], m)
             self.assertFalse(os.path.exists(olds[m]), "old file is renamed, not copied")
             self.assertTrue(os.path.isfile(r["path"]))
             self.assertIn(self.mb.mod_version(m), r["path"])
-        self.assertEqual(self.ran(), [])
+        bumped = [m for m in MODS if f"{modelpack.VERSION}-{m}-r{modelpack.PACK_REV[m]}" != models.LEGACY_ADOPT[m][0]]
+        self.assertEqual(len(self.ran()), len(bumped), "only the mods with a bumped rev are rebuilt")
         self.assertTrue(any("adopted" in l for l in self.logs))
 
     def test_does_not_adopt_other_input_state(self):
