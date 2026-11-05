@@ -1,0 +1,206 @@
+name: build
+
+# Windows release build of the GSVR companion: PyInstaller one-folder build + Inno Setup installer, optionally
+# signed by SignPath (Foundation, free for OSS). Runs on version tags and by hand. Nothing here publishes a
+# release unless the repository variable GSVR_CI_RELEASE is 'true' (releases are currently made from the Wine
+# container with companion/packaging/BUILD_WINE.md + `gh release`).
+#
+# Signing is skipped silently while the secret SIGNPATH_API_TOKEN does not exist. When it exists, set the variable
+# SIGNPATH_ORGANIZATION_ID as well. SignPath project slug: gsvr-companion, signing policy: release-signing,
+# artifact configurations: initial (.signpath/initial.xml) and installer (.signpath/installer.xml).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read          # SignPath reads the uploaded artifact through the GitHub API (origin verification)
+    env:
+      # secrets cannot be tested in `if:` directly; a job-level env value can
+      HAVE_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+      PYTHONIOENCODING: utf-8
+      BUILD: companion/build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"      # the frozen build uses 3.12 (build_windows.bat prefers 3.13/3.12; pinned PyInstaller 6.11.1 needs < 3.14)
+          cache: pip
+          cache-dependency-path: companion/packaging/requirements-build.txt
+
+      - name: Check tag matches companion/version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $v = (python -I -c "import sys; sys.path.insert(0, 'companion'); import version; print(version.VERSION)").Trim()
+          if ("${{ github.ref_name }}" -ne "v$v") { throw "tag ${{ github.ref_name }} != v$v (companion/version.py)" }
+
+      - name: Install build requirements
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -r companion/packaging/requirements-build.txt
+
+      - name: Compile the PyInstaller bootloader (own binary, fewer antivirus false positives)
+        shell: pwsh
+        run: |
+          $env:PYINSTALLER_COMPILE_BOOTLOADER = "1"
+          python -m pip install --disable-pip-version-check --force-reinstall --no-deps --no-binary pyinstaller pyinstaller==6.11.1
+
+      - name: Self-tests from source
+        run: python -I companion/selftest_update.py
+
+      - name: PyInstaller build
+        run: python -m PyInstaller --noconfirm --clean --distpath "${{ env.BUILD }}/dist" --workpath "${{ env.BUILD }}/work" companion/packaging/gsvr.spec
+
+      - name: Smoke tests of the frozen build
+        shell: pwsh
+        run: |
+          $d = "$env:BUILD/dist/GSVR"
+          & "$d/gsvr-cli.exe" --version; if ($LASTEXITCODE) { throw "version" }
+          & "$d/gsvr-cli.exe" --run-converter "$d/_internal/tools/modelpack.py" --version; if ($LASTEXITCODE) { throw "converter" }
+          & "$d/gsvr-cli.exe" --selftest; if ($LASTEXITCODE) { throw "selftest" }
+
+      # ---- signing step 1: the two executables --------------------------------------------------------------
+      - name: Collect unsigned executables
+        if: env.HAVE_SIGNPATH == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force unsigned-exe | Out-Null
+          Copy-Item "$env:BUILD/dist/GSVR/GSVR.exe", "$env:BUILD/dist/GSVR/gsvr-cli.exe" unsigned-exe/
+
+      - name: Upload unsigned executables
+        if: env.HAVE_SIGNPATH == 'true'
+        id: upload-exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: unsigned-exe/*
+          if-no-files-found: error
+
+      - name: Sign executables (SignPath)
+        if: env.HAVE_SIGNPATH == 'true'
+        uses: signpath/github-action-submit-signing-request@v1.1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: gsvr-companion
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: initial
+          github-artifact-id: ${{ steps.upload-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-exe
+
+      - name: Put the signed executables into the dist folder
+        if: env.HAVE_SIGNPATH == 'true'
+        shell: pwsh
+        run: |
+          Copy-Item signed-exe/GSVR.exe, signed-exe/gsvr-cli.exe "$env:BUILD/dist/GSVR/" -Force
+          foreach ($f in "GSVR.exe", "gsvr-cli.exe") {
+            $s = Get-AuthenticodeSignature "$env:BUILD/dist/GSVR/$f"
+            "$f : $($s.Status)"
+            if ($s.Status -ne "Valid" -and $s.Status -ne "UnknownError") { throw "$f is not signed ($($s.Status))" }
+          }
+
+      # ---- archives, installer ------------------------------------------------------------------------------
+      - name: Archives and checksums (exactly the names the self-updater expects)
+        shell: pwsh
+        run: |
+          python -I companion/packaging/release.py package --platform windows-x64
+          if ($LASTEXITCODE) { throw "package" }
+          python -I companion/packaging/release.py source
+          if ($LASTEXITCODE) { throw "source" }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $ver = (& "$env:BUILD/dist/GSVR/gsvr-cli.exe" --version).Trim()
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc /Q "/DAppVersion=$ver" "/DDistDir=$PWD\$env:BUILD\dist\GSVR" "/DOutDir=$PWD\$env:BUILD\release" companion\packaging\gsvr_setup.iss
+          if ($LASTEXITCODE) { throw "ISCC" }
+
+      # ---- signing step 2: the installer --------------------------------------------------------------------
+      - name: Upload unsigned installer
+        if: env.HAVE_SIGNPATH == 'true'
+        id: upload-setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: companion/build/release/GSVR-Setup.exe
+          if-no-files-found: error
+
+      - name: Sign installer (SignPath)
+        if: env.HAVE_SIGNPATH == 'true'
+        uses: signpath/github-action-submit-signing-request@v1.1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: gsvr-companion
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-installer
+
+      - name: Replace the installer by the signed one
+        if: env.HAVE_SIGNPATH == 'true'
+        shell: pwsh
+        run: Copy-Item signed-installer/GSVR-Setup.exe "$env:BUILD/release/GSVR-Setup.exe" -Force
+
+      - name: Installer checksum
+        shell: pwsh
+        run: |
+          python -I -c "import hashlib,sys;p=sys.argv[1];open(p+'.sha256','w',newline='\n').write(hashlib.sha256(open(p,'rb').read()).hexdigest()+'  GSVR-Setup.exe\n')" "$env:BUILD/release/GSVR-Setup.exe"
+          if ($LASTEXITCODE) { throw "sha256" }
+          Get-ChildItem "$env:BUILD/release" | Format-Table Name, Length
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsvr-companion-release
+          path: |
+            companion/build/release/GSVR-Setup.exe
+            companion/build/release/GSVR-Setup.exe.sha256
+            companion/build/release/gsvr-companion-windows-x64.zip
+            companion/build/release/gsvr-companion-windows-x64.zip.sha256
+            companion/build/release/gsvr-companion-source.zip
+            companion/build/release/gsvr-companion-source.zip.sha256
+          if-no-files-found: error
+
+  release:
+    # disabled by default: set the repository variable GSVR_CI_RELEASE to 'true' to let CI attach the files to the tag's release
+    if: startsWith(github.ref, 'refs/tags/v') && vars.GSVR_CI_RELEASE == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gsvr-companion-release
+          path: release
+      - name: Create the release if needed and upload the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # pre-release by default (as release.py does); promote by hand
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --prerelease --title "GSVR Companion $TAG" --notes "Built by GitHub Actions."
+          gh release upload "$TAG" release/* --clobber

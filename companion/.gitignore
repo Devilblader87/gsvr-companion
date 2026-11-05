@@ -1,0 +1,2 @@
+# PyInstaller build output, venvs and release archives (companion/packaging/build_*.{bat,sh})
+build/

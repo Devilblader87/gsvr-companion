@@ -12,3 +12,12 @@ Play your own copy of **Counter-Strike 1.6, Half-Life, Sven Co-op and Warcraft I
 * PC (Windows) VRChat only. Needs the VRChat setting *Allow Untrusted URLs*.
 
 Fan project, not affiliated with Valve, Blizzard Entertainment or VRChat. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment.
+
+## License, code signing and privacy
+
+GSVR Companion is free software under the [GNU GPL v3](LICENSE). The Windows binaries are built by GitHub Actions from this source and signed with a certificate from the SignPath Foundation (free code signing by [SignPath.io](https://about.signpath.io/)). See the [code signing policy and privacy statement](CODE_SIGNING_POLICY.md). The source of the converter and companion is in `companion/` and `tools/`; build instructions: `companion/packaging/` (`build_windows.bat`, `.github/workflows/build.yml`).
+
+    GSVR Companion - copyright (C) 2026 the GSVR Companion contributors.
+    This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+    License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
+    version. It is distributed WITHOUT ANY WARRANTY; see the license for details.

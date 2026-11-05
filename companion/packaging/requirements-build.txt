@@ -1,0 +1,4 @@
+# Build-time + bundled runtime. The companion is stdlib-only; Pillow is bundled for the Warcraft III converter
+# (tools/w3pack.py: BLP textures are JPEG inside). Pinned for reproducible builds.
+pyinstaller==6.11.1
+pillow==13.0.0
