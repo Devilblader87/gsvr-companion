@@ -92,7 +92,7 @@ jobs:
 
       - name: Sign executables (SignPath)
         if: env.HAVE_SIGNPATH == 'true'
-        uses: signpath/github-action-submit-signing-request@v1.1
+        uses: signpath/github-action-submit-signing-request@v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -147,7 +147,7 @@ jobs:
 
       - name: Sign installer (SignPath)
         if: env.HAVE_SIGNPATH == 'true'
-        uses: signpath/github-action-submit-signing-request@v1.1
+        uses: signpath/github-action-submit-signing-request@v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
