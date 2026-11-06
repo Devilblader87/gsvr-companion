@@ -30,6 +30,7 @@ KNOWN_APPS = {
     30: ("Day of Defeat", "dod"),
     40: ("Deathmatch Classic", "dmc"),
     50: ("Half-Life: Opposing Force", "gearbox"),
+    60: ("Ricochet", "ricochet"),
     130: ("Half-Life: Blue Shift", "bshift"),
 }
 MOD_TO_APP = {mod: appid for appid, (_, mod) in KNOWN_APPS.items()}

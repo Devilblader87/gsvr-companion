@@ -44,6 +44,53 @@ def write(path, data):
         fh.write(data)
 
 
+def swap_first_lumps(bsp):
+    """Blue Shift layout: a v30 file whose directory entries 0 (entities) and 1 (planes) are swapped."""
+    e0, e1 = bsp[4:12], bsp[12:20]
+    return bsp[:4] + e1 + e0 + bsp[20:]
+
+
+class BlueShiftLumpSwap(unittest.TestCase):
+    TEXT = ents(wad="\\half-life\\valve\\halflife.wad", skyname="desert")
+
+    def test_swapped_directory_is_swapped_back(self):
+        plain = make_bsp(self.TEXT, pad=2000)             # 2000 = multiple of 20 bytes of planes
+        bs = swap_first_lumps(plain)
+        self.assertNotEqual(plain, bs)
+        self.assertEqual(csshare.bsp_lump_dir(bs), csshare.bsp_lump_dir(plain))
+        self.assertEqual(csshare.bsp_entity_text(bs), csshare.bsp_entity_text(plain))
+        self.assertEqual(csshare.parse_bsp(bs).sky, "desert")
+
+    def test_normal_and_textless_maps_are_untouched(self):
+        plain = make_bsp(self.TEXT)
+        self.assertEqual(csshare.bsp_lump_dir(plain)[0], struct.unpack_from("<ii", plain, 4))
+        # no entity text anywhere: left alone, not guessed
+        junk = struct.pack("<i", 30) + struct.pack("<ii", 124, 40) + struct.pack("<ii", 164, 40) + b"\0" * (13 * 8) + bytes(range(1, 41)) * 2
+        self.assertEqual(csshare.bsp_lump_dir(junk)[0], (124, 40))
+
+    def test_binary_garbage_after_the_opening_text_still_counts(self):
+        # ba_tram2 has binary bytes ~10 bytes into the entity lump (a mangled wad value)
+        txt = b'{\n"wad" "\xd4\xc2\x9c\x81\xd8\n\x9e\x81\\half-life"\n}\n\0'
+        planes = b"\x00\x00\x00\x00" * 10
+        hdr = struct.pack("<i", 30) + struct.pack("<ii", 124 + len(txt), len(planes)) + struct.pack("<ii", 124, len(txt)) + b"\0" * (13 * 8)
+        self.assertEqual(csshare.bsp_lump_dir(hdr + txt + planes)[0], (124, len(txt)))
+
+    def test_agrees_with_tools_bsp30(self):
+        sys.path.insert(0, os.path.join(REPO, "tools"))
+        import bsp30
+        for d in (make_bsp(self.TEXT, pad=2000), swap_first_lumps(make_bsp(self.TEXT, pad=2000)), make_bsp(self.TEXT, pad=0)):
+            self.assertEqual(bsp30.lump_dir(d), csshare.bsp_lump_dir(d))
+
+    def test_changelevel_targets_reads_swapped_maps(self):
+        import companion
+        text = '{\n"classname" "worldspawn"\n}\n' + entity(classname="trigger_changelevel", map="ba_next", landmark="lm")
+        bs = swap_first_lumps(make_bsp(text, pad=2000))
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "ba_x.bsp")
+            write(p, bs)
+            self.assertEqual(companion.changelevel_targets(p), ["ba_next"])
+
+
 class Parser(unittest.TestCase):
     def test_collects_the_files_a_map_names(self):
         text = (ents(wad="\\half-life\\valve\\halflife.wad;/maps/custom.wad;C:\\x\\Other.WAD", skyname="mysky")
@@ -594,10 +641,20 @@ class StateFlow(Tmp):
         path, bsp = self.custom_map(host)
         write(os.path.join(host, "cstrike", "maps", "de_dust2.bsp"), make_bsp(ents()))
         srv, url = self.relay_server()
-        h = self.state(host, url)
-        rev = h.index_rev
-        maps = {m["name"]: m for m in h.index_json()["mods"]["cstrike"]["maps"]}
-        self.assertNotIn("share", maps["de_custom"])                              # the scan itself never hashes
+        gate, orig_key = threading.Event(), csshare.ShareKeys.key                 # hold the background hasher: it would race the assertion below
+        def gated(self_, name, path, compute=True):
+            if compute:
+                gate.wait(15)
+            return orig_key(self_, name, path, compute)
+        csshare.ShareKeys.key = gated
+        try:
+            h = self.state(host, url)
+            rev = h.index_rev
+            maps = {m["name"]: m for m in h.index_json()["mods"]["cstrike"]["maps"]}
+            self.assertNotIn("share", maps["de_custom"])                          # the scan itself never hashes
+        finally:
+            gate.set()
+            csshare.ShareKeys.key = orig_key
         h.share_thread.join(15)                                                   # the background hasher fills the keys in
         self.assertGreater(h.index_rev, rev)
         maps = {m["name"]: m for m in h.index_json()["mods"]["cstrike"]["maps"]}

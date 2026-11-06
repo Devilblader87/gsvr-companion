@@ -263,7 +263,7 @@ def public(slot):
     return {k: v for k, v in slot.items() if k != "path"}
 
 
-PREWARM_MODS = ("cstrike", "valve", "svencoop", "gearbox")      # mods with a modelpack.py profile
+PREWARM_MODS = ("cstrike", "valve", "svencoop", "gearbox", "bshift", "ricochet", "dmc")      # mods with a modelpack.py profile
 
 
 def prewarm(state, mconv, mod, log):

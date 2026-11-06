@@ -47,6 +47,8 @@ FIXED = {
     "func_recharge": ("items/suitchargeok1.wav", "items/suitcharge1.wav", "items/suitchargeno1.wav"),  # [obs CRecharge::Precache]
     "func_mortar_field": ("weapons/mortar.wav", "weapons/mortarhit.wav"),                              # [obs CFuncMortarField::Precache]
     "env_spark": tuple(f"buttons/spark{n}.wav" for n in range(1, 7)),                                # [obs CEnvSpark::Precache 0x89550]
+    # CRope::Precache: the three creak clips; CRopeSegment::Touch: the grab clip [obs opfor.so]
+    "env_rope": ("items/rope1.wav", "items/rope2.wav", "items/rope3.wav", "items/grab_rope.wav"),
     "env_explosion": ("weapons/explode3.wav", "weapons/explode4.wav", "weapons/explode5.wav"),       # [ext: TE_EXPLOSION client sound]
     "func_pushable": ("debris/pushbox1.wav", "debris/pushbox2.wav", "debris/pushbox3.wav"),         # [obs NOTES §3.11]
     "monster_cockroach": ("roach/rch_die.wav", "roach/rch_walk.wav", "roach/rch_smash.wav"),          # [obs CRoach::Precache]
@@ -55,6 +57,9 @@ FIXED = {
                                "player/pl_step1.wav", "player/pl_step2.wav", "player/pl_step3.wav",
                                "player/pl_step4.wav"),
     # Sven Co-op (S1): the xen portal wav (point_checkpoint.as precaches it for the same TE_C_XEN_PORTAL effect)
+    # Opposing Force CTF: CTFGoalFlag::Precache's four flag cues (taken by each side, captured by each side), the damage powerup's victim ping
+    "item_ctfflag": ("ctf/bm_flagtaken.wav", "ctf/soldier_flagtaken.wav", "ctf/civ_flag_capture.wav", "ctf/marine_flag_capture.wav"),   # [obs CTFGoalFlag::Precache]
+    "item_ctfaccelerator": ("turret/tu_ping.wav", "ctf/itemthrow.wav"),                              # [obs CBasePlayer::TakeDamage, DropPlayerCTFPowerup]
     "env_xenmaker": ("debris/beamstart7.wav",),                                                      # [inf]
     "point_checkpoint": ("debris/beamstart7.wav",),                                                  # [ext point_checkpoint.as]
     # CBaseTurret::Precache [obs 0x136050] (shared by monster_turret / miniturret / sentry)
@@ -164,8 +169,9 @@ def norm(rel):
     return r
 
 
-def wanted(ents):
-    """[(name, priority)] in first-use order; priority 0 ambient_generic / env_message, 1 movers, 2 the rest."""
+def wanted(ents, mod=None):
+    """[(name, priority)] in first-use order; priority 0 ambient_generic / env_message, 1 movers, 2 the rest.
+    mod "dmc": trigger_teleport without spawnflag 2 hums ambience/hum1.wav (CTriggerTeleport::Spawn, DMC only)."""
     out = {}
 
     def add(n, pri):
@@ -178,6 +184,8 @@ def wanted(ents):
         c = e.get("classname", "")
         if c == "ambient_generic":
             add(e.get("message", ""), 0)
+        elif c == "trigger_teleport" and mod == "dmc" and not (_int(e.get("spawnflags")) & 2):
+            add("ambience/hum1.wav", 0)
         elif c == "env_message":
             add(e.get("messagesound", ""), 0)
         elif c in ("func_door", "func_door_rotating", "momentary_door"):
@@ -304,7 +312,7 @@ def load(ents, game_root, mod, max_bytes=24 * 1024 * 1024, max_seconds=60.0, log
     if not game_root:
         return []
     clips, used, missing, skipped = [], 0, [], []
-    for name, _pri in wanted(ents):
+    for name, _pri in wanted(ents, mod):
         p = find(game_root, mod, name)
         if not p:
             missing.append(name)

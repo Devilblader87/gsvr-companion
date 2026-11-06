@@ -64,15 +64,14 @@ def changelevel_targets(bsp_path):
     import re
     try:
         with open(bsp_path, "rb") as fh:
-            head = fh.read(12)
-            if len(head) < 12:
+            data = fh.read(64 << 20)
+            if len(data) < 4 + 15 * 8:
                 return []
-            off, ln = struct.unpack_from("<ii", head, 4)
+            off, ln = csshare.bsp_lump_dir(data)[0]        # Blue Shift stores entities/planes swapped
             if off <= 0 or ln <= 0 or ln > 16 << 20:
                 return []
-            fh.seek(off)
-            txt = fh.read(ln).decode("latin-1", "replace")
-    except OSError:
+            txt = data[off:off + ln].decode("latin-1", "replace")
+    except (OSError, struct.error):
         return []
     out = []
     for blk in re.findall(r"\{([^{}]*)\}", txt):

@@ -23,7 +23,7 @@
 #   INDEXALPHA rgb = palette[255] (the sprite's single colour), a = i (index = coverage, 0 transparent … 255 opaque)
 #   ALPHTEST   index 255 → (0, 0, 0, 0), else rgb = palette[i], a = 255
 # Frame groups are flattened (their intervals are kept in Frame.interval, 0 for single frames).
-import os, struct, sys, zlib
+import copy, os, struct, sys, zlib
 
 TYPES = ("vp_parallel_upright", "facing_upright", "vp_parallel", "oriented", "vp_parallel_oriented")
 FORMATS = ("normal", "additive", "indexalpha", "alphatest")
@@ -33,6 +33,7 @@ SPR_NORMAL, SPR_ADDITIVE, SPR_INDEXALPHA, SPR_ALPHTEST = range(4)
 class Frame:
     def __init__(self, ox, oy, w, h, rgba, interval=0.0):
         self.ox, self.oy, self.w, self.h, self.rgba, self.interval = ox, oy, w, h, rgba, interval
+        self.k = 1      # stored at 1/k resolution (half_sprite): the world size is w * k * scale (SPR2 frame word 6)
 
 
 class Sprite:
@@ -108,6 +109,35 @@ def to_rgba(idx, pal, fmt):
 def load(path):
     with open(path, "rb") as fh:
         return Sprite(fh.read(), os.path.basename(path))
+
+
+def half_rgba(rgba, w, h):
+    """2x2 box filter of an RGBA image (w, h even multiples where it matters; odd edge rows/cols are dropped)."""
+    nw, nh = max(1, w // 2), max(1, h // 2)
+    out = bytearray(nw * nh * 4)
+    row = w * 4
+    for y in range(nh):
+        r0 = rgba[2 * y * row:(2 * y + 1) * row]
+        r1 = rgba[(2 * y + 1) * row:(2 * y + 2) * row] if 2 * y + 1 < h else r0
+        s = [a + b for a, b in zip(r0, r1)]
+        o = y * nw * 4
+        for c in range(4):
+            out[o + c:o + nw * 4:4] = bytes([(a + b + 2) >> 2 for a, b in zip(s[c:nw * 8:8], s[c + 4:nw * 8:8])])
+    return bytes(out)
+
+
+def half_sprite(s, half=None):
+    """A copy of s stored at half resolution: every frame 2x2 box-filtered, origin halved (floor), w / h halved, k = 2 so
+    the runtime world size (w * k * scale) stays the same as the full-resolution sprite. Used for the gearbox fexplo (texel budget)."""
+    half = half or half_rgba
+    out = copy.copy(s)
+    out.width, out.height = max(1, s.width // 2), max(1, s.height // 2)
+    out.frames = []
+    for f in s.frames:
+        g = Frame(f.ox // 2, f.oy // 2, max(1, f.w // 2), max(1, f.h // 2), half(f.rgba, f.w, f.h), f.interval)
+        g.k = 2 * f.k
+        out.frames.append(g)
+    return out
 
 
 # ───────────────────────── GSM1 extension: sprites (used by tools/modelpack.py) ─────────────────────────
@@ -213,9 +243,10 @@ def read_gsm1_sprites(data):
 #   [8]  spriteCount, frameCount, atlasW, atlasH, mips, 0, 0, 0
 #   [spriteCount*8]  nameOff, nameLen, type, texFormat, frameCount, firstFrame, width, height   (as SPR1; frame k of a
 #                    sprite is frame record firstFrame + k)
-#   [frameCount*8]   originX, originY, w, h, atlasX, atlasY, 0, 0   (atlasX/Y = top-left pixel of the frame, rows top ->
+#   [frameCount*8]   originX, originY, w, h, atlasX, atlasY, k, 0   (atlasX/Y = top-left pixel of the frame, rows top ->
 #                    bottom; both are multiples of 4, so mips <= 3 never mix two frames; the 2+ px around the frame is its
-#                    edge-extended gutter)
+#                    edge-extended gutter; k = 0 or 1: stored at full size; k = 2: stored at half size, the runtime world size
+#                    is w * k * scale, GsvrModelLoader.GetFxFrameSize)
 #   uint8 atlas RGBA32, mip levels 0..mips-1 concatenated (level l = (atlasW>>l) x (atlasH>>l)), rows top -> bottom
 SPR2_ATLAS_W = 1024
 SPR2_MIPS = 3
@@ -287,7 +318,7 @@ def spr2_chunk(sprites, name, mips, half):
             line = row[:4] * px + row + row[-4:] * (sw - px - f.w)
             o = ((sy + y) * aw + sx) * 4
             img[o:o + sw * 4] = line
-        ftab += struct.pack("<8i", f.ox, f.oy, f.w, f.h, sx + px, sy + py, 0, 0)
+        ftab += struct.pack("<8i", f.ox, f.oy, f.w, f.h, sx + px, sy + py, f.k if f.k != 1 else 0, 0)
     levels, lw, lh, cur = [bytes(img)], aw, ah, bytes(img)
     for _ in range(1, mips):
         cur = half(cur, lw, lh)
@@ -344,13 +375,14 @@ def parse_spr2(names, q, size):
             raise ValueError("SPR2 sprite out of range")
         sprites.append(dict(name=names[no:no + nl].decode("ascii"), type=typ, fmt=fmt, frames=nf, first=first, w=w, h=hh))
     q2 = q + 32 + 32 * n
-    fr = [struct.unpack_from("<6i", names, q2 + 32 * c) for c in range(cells)]
+    fr = [struct.unpack_from("<7i", names, q2 + 32 * c) for c in range(cells)]
     for f in fr:
-        if f[2] <= 0 or f[3] <= 0 or f[4] < 2 or f[5] < 2 or f[4] + f[2] > aw or f[5] + f[3] > ah:
+        if f[2] <= 0 or f[3] <= 0 or f[4] < 2 or f[5] < 2 or f[4] + f[2] > aw or f[5] + f[3] > ah or f[6] < 0:
             raise ValueError("SPR2 frame outside the atlas")
     q2 += 32 * cells
     for s in sprites:
-        s["rects"] = fr[s["first"]:s["first"] + s["frames"]]
+        s["rects"] = [f[:6] for f in fr[s["first"]:s["first"] + s["frames"]]]
+        s["k"] = [f[6] or 1 for f in fr[s["first"]:s["first"] + s["frames"]]]
     return sprites, (aw, ah, smips, names[q2:q2 + aw * ah * 4])
 
 
@@ -474,6 +506,7 @@ def check_spr2(data, game_root, png):
     used = bytearray(aw * ah)           # slot occupancy: no two frames may overlap
     for s in sprites:
         ref = _find_ref(game_root, s["name"])
+        hal = half_sprite(ref, half_rgba) if ref is not None and 2 in s["k"] else None     # stored at half size (k = 2)
         if ref is not None and (len(ref.frames) != s["frames"] or ref.type != s["type"] or ref.tex_format != s["fmt"]):
             print(f"  FAIL {s['name']}: header differs from the .spr"); bad += 1; continue
         for k, (ox, oy, w, h, ax, ay) in enumerate(s["rects"]):
@@ -485,7 +518,7 @@ def check_spr2(data, game_root, png):
                     print(f"  FAIL {s['name']} frame {k}: overlaps another frame"); bad += 1; break
                 used[y * aw + ax - 2:y * aw + ax + w + 2] = b"\1" * (w + 4)
             if ref is not None:
-                fr = ref.frames[k]
+                fr = (hal if s["k"][k] == 2 else ref).frames[k]
                 got = b"".join(lvl0[((ay + y) * aw + ax) * 4:((ay + y) * aw + ax + w) * 4] for y in range(h))
                 if (fr.ox, fr.oy, fr.w, fr.h) != (ox, oy, w, h) or got != fr.rgba:
                     print(f"  FAIL {s['name']} frame {k}: differs from the .spr decode"); bad += 1

@@ -1,6 +1,6 @@
 # Builds a GSM1 weapon + player model + sound pack for the VRChat loader (unity/Assets/GoldSrcVR/Scripts/GsvrModelLoader.cs)
 # from the player's OWN game install (companion route /pack/models.bin). Stdlib only (runs inside the companion).
-# usage: python3 -I modelpack.py --game-root input/Half-Life --mod cstrike|valve|svencoop|gearbox out.bin
+# usage: python3 -I modelpack.py --game-root input/Half-Life --mod cstrike|valve|svencoop|gearbox|bshift|ricochet|dmc out.bin
 #        optional: --no-view (skip v_ models), --max-atlas-px N (texel budget, default 4096*2048), --max-clip-s 6,
 #                  --players default (cstrike terror,urban; valve gordon,helmet; 'all', 'none' or a comma list),
 #                  --player-classes all (or a subset of the mod's classes, e.g. ak47,rifle,mp5,onehanded,carbine),
@@ -135,6 +135,7 @@ import argparse, array, hashlib, math, os, struct, sys, time, wave
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mdl10 import Mdl, xform, rotate, mat_mul   # noqa: E402
 import spr                              # noqa: E402
+import bsp30                            # noqa: E402
 
 VERSION = "gsm1-2.7"      # 2.1: valve / svencoop VR grips (hand pick, glove clusters, muzzle pick) + GSX1 PGRP chunk; header version stays 2
                           # 2.2: cstrike v_: silencer part moved out of the v_ mesh (parked 45 cm behind the USP in unsil poses) into a VSIL bone-frame mesh, knife / grenade hand
@@ -158,7 +159,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 1, "valve": 1, "svencoop": 2, "gearbox": 2}
+PACK_REV = {"cstrike": 3, "valve": 6, "svencoop": 6, "gearbox": 11, "bshift": 4, "ricochet": 2, "dmc": 2}   # bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard)
 
 
 def version_for_mod(mod):
@@ -306,6 +307,34 @@ FX_SPRITES = (
     "sprites/wall_puff1.spr", "sprites/wall_puff2.spr", "sprites/wall_puff3.spr", "sprites/wall_puff4.spr",
     "sprites/pistol_smoke1.spr", "sprites/rifle_smoke1.spr",
 )
+# Per-mod additions to FX_SPRITES (spliced into the priority order by fx_sprite_order): the sprites the ported
+# effects name that only these mods ship (GsvrTempFx.SpriteCreate / SpriteExpand / BeamStyled resolve them by lower-case name through
+# FindSprite): gonome / bullsquid spit (bigspit, tinyspit), big mama spit, gargantua eye glow, xen exit flash, OF displacer ring,
+# grapple tongue, spore launcher bursts. valve / bshift ship the HL set; gearbox has its own plus the valve fallback of find().
+FX_SPRITES_MOD = {
+    "valve": ("sprites/bigspit.spr", "sprites/mommaspit.spr", "sprites/gargeye1.spr", "sprites/tinyspit.spr", "sprites/exit1.spr"),
+    "bshift": ("sprites/bigspit.spr", "sprites/mommaspit.spr", "sprites/gargeye1.spr", "sprites/tinyspit.spr", "sprites/exit1.spr"),
+    "gearbox": ("sprites/bigspit.spr", "sprites/gargeye1.spr", "sprites/tinyspit.spr", "sprites/tongue.spr", "sprites/disp_ring.spr",
+                "sprites/spore_exp_01.spr", "sprites/spore_exp_b_01.spr", "sprites/spore_exp_c_01.spr"),
+}
+# Effect sprites stored at HALF resolution per mod (spr.half_sprite: frames 2x2 box-filtered, k = 2 in the SPR2 frame table, the
+# runtime world size is unchanged). gearbox: fexplo is 30 frames of 80x96 (the largest of the set); at half size the OF displacer
+# ring / spore bursts fit the 99 MB guard's texel budget (they were dropped before, see PACK_REV gearbox 10).
+FX_HALF = {"gearbox": ("sprites/fexplo.spr",)}
+FX_MOD_BEFORE = {"gearbox": "sprites/smoke.spr"}   # per-mod splice point (default FX_MOD_BEFORE_DEFAULT): the gearbox pack sits at the size guard, so its
+FX_MOD_BEFORE_DEFAULT = "sprites/glow04.spr"          # block goes ahead of the glow / smoke sprites it would otherwise lose entirely; the budget drops from the end
+
+
+def fx_sprite_order(mod):
+    """FX_SPRITES with the mod's FX_SPRITES_MOD block spliced in before FX_MOD_BEFORE[mod] (appended when that one is absent)."""
+    extra = FX_SPRITES_MOD.get(mod, ())
+    if not extra:
+        return FX_SPRITES
+    at = FX_MOD_BEFORE.get(mod, FX_MOD_BEFORE_DEFAULT)
+    i = FX_SPRITES.index(at) if at in FX_SPRITES else len(FX_SPRITES)
+    return FX_SPRITES[:i] + tuple(n for n in extra if n not in FX_SPRITES) + FX_SPRITES[i:]
+
+
 # per-mod default budgets (texels at level 0, 5.25 bytes each with the mips): the cstrike pack is already ~94 MB, so it only keeps the core
 FX_TEXELS_MOD = {"cstrike": 1024 * 512}
 FX_TEXELS = 1024 * 1536          # SPR2 atlas budget (texels at level 0; 5.25 bytes per texel with the mips); valve / cstrike packs stay near 90 MB
@@ -343,14 +372,13 @@ def map_entity_lumps(root, mod):
             seen.add(fn.lower())
             try:
                 with open(os.path.join(d, fn), "rb") as fh:
-                    head = fh.read(12)
-                    if len(head) < 12 or struct.unpack_from("<i", head, 0)[0] != 30:
+                    data = fh.read()
+                    if len(data) < 4 + 15 * 8 or struct.unpack_from("<i", data, 0)[0] != 30:
                         continue
-                    off, ln = struct.unpack_from("<ii", head, 4)
+                    off, ln = bsp30.lump_dir(data)[0]       # Blue Shift stores entities/planes swapped
                     if not 0 < ln < 4 << 20:
                         continue
-                    fh.seek(off)
-                    yield fh.read(ln).split(b"\0")[0].decode("latin-1")
+                    yield data[off:off + ln].split(b"\0")[0].decode("latin-1")
             except (OSError, struct.error):
                 continue
 
@@ -378,6 +406,45 @@ def map_gib_models(root, mod):
             m = m.replace("\\", "/").lower()
             if m.startswith("models/") and ".." not in m.split("/") and len(m) < 96 and re.fullmatch(r"[a-z0-9_./()\-]+", m):
                 cnt[m] += 1
+    return [n for n, _c in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+# ── studio props (MON1 rows the runtime draws as GsvrHlMonsters prop variants, VProp0..) ──
+# The map's decorative studio-model entities: `cycler` (CGenericCycler: the map `model` key), `cycler_prdroid`
+# (CCyclerProbe: models/prdroid.mdl), `xen_spore_small / _medium / _large` (CXenSpore: the skin-selected entry of
+# pModelNames = fungus(small) / fungus / fungus(large) [obs string_arrays CXenSpore::pModelNames]) and `xen_hair`
+# (CXenHair: models/hair.mdl). Every sequence is kept ("*": a cycler steps through all of them when shot) under its own
+# pose vertex budget. Only the mods whose profile sets props=True (valve, gearbox) carry them.
+PROP_FIXED = {"cycler_prdroid": "models/prdroid.mdl", "xen_spore_small": "models/fungus(small).mdl",
+              "xen_spore_medium": "models/fungus.mdl", "xen_spore_large": "models/fungus(large).mdl", "xen_hair": "models/hair.mdl"}
+PROP_MAX_MODELS = 16           # prop models per pack (most-used first; the runtime has 8 prop rows per map)
+PROP_POSE_VERTS = 12000        # pose vertex budget per prop model (key caps scale down like the Sven monsters)
+
+
+def map_prop_models(root, mod):
+    """Studio-prop model stems the mod's maps place (see PROP_FIXED / `cycler` model keys), most-used first, ties by name.
+    Entity lumps are parsed as text only; names are sanitised like the gib models."""
+    import collections, re
+    cnt = collections.Counter()
+    for ents in map_entity_lumps(root, mod):
+        seen = set()
+        for body in re.findall(r"\{([^{}]*)\}", ents):
+            m = re.search(r'"classname"\s*"([^"\\]*)"', body)
+            if not m:
+                continue
+            cls = m.group(1).lower()
+            if cls == "cycler":
+                mo = re.search(r'"model"\s*"([^"\\]*)"', body)
+                name = mo.group(1) if mo else ""
+            else:
+                name = PROP_FIXED.get(cls, "")
+            name = name.replace("\\", "/").lower()
+            if not (name.startswith("models/") and name.endswith(".mdl") and ".." not in name.split("/") and len(name) < 96
+                    and re.fullmatch(r"[a-z0-9_./()\-]+", name)) or "/" in name[7:]:
+                continue
+            seen.add(name[7:-4])
+        for n in seen:
+            cnt[n] += 1
     return [n for n, _c in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
@@ -541,6 +608,8 @@ VALVE_PLAYER_SOUNDS = ([P + f"pl_{s}{i}.wav" for s in ("step", "dirt", "metal", 
                        + [f"debris/bust{m}{i}.wav" for m in ("glass", "crate", "metal", "flesh", "concrete") for i in (1, 2)]
                        + ["debris/bustceiling.wav", "items/suitchargeok1.wav", "common/wpn_denyselect.wav",
                           "common/wpn_select.wav"]
+                       # HEV flashlight on / off click (CBasePlayer::FlashlightTurnOn / Off, GsvrHlFlashlight)
+                       + ["items/flashlight1.wav"]
                        # CBreakable::MaterialSoundRandom / DamageSound tables (func_breakable hits, gib and debris impacts;
                        # GsvrCsAudio.PlayDebris, GsvrEntSystem.BreakDamageSound)
                        + [f"debris/{m}{i}.wav" for m in ("wood", "glass", "metal", "concrete") for i in (1, 2, 3)]
@@ -552,7 +621,14 @@ VALVE_PLAYER_SOUNDS = ([P + f"pl_{s}{i}.wav" for s in ("step", "dirt", "metal", 
                        + [f"boid/boid_{k}{i}.wav" for k in ("alert", "idle") for i in (1, 2)]
                        # CLeech bite / alert samples (Precache + HandleAnimEvent / AlertSound, by-name lookup)
                        + [f"leech/leech_bite{i}.wav" for i in (1, 2, 3)]
-                       + [f"leech/leech_alert{i}.wav" for i in (1, 2)])
+                       + [f"leech/leech_alert{i}.wav" for i in (1, 2)]
+                       # crowbar / crossbow impact variants the weapon records do not all carry as kind slots
+                       # (CCrowbar::Swing / CCrossbowBolt::BoltTouch; looked up by name, missing files are skipped)
+                       + ["weapons/cbar_hit2.wav", "weapons/cbar_hitbod3.wav", "weapons/xbow_hitbod2.wav",
+                          "fvox/beep.wav"]
+                       # CSqueakGrenade::Precache / GibMonster (by-name lookup: bite, hunt variants, gib splat).
+                       # The snark weapon record only maps fire/fire2/special1/special2, so the rest ride here.
+                       + ["squeek/sqk_hunt1.wav", "squeek/sqk_deploy1.wav", "common/bodysplat.wav"])
 
 # ── monsters (GSX1 chunk "MON1", --mod valve) ──
 # Activity ids = the DWARF enum Activity of hl.so [obs evidence/enums.txt]: 1 IDLE 3 WALK 4 RUN 7 HOP 8 LEAP 10 LAND
@@ -656,7 +732,7 @@ PROFILES = {
                   classes=VALVE_PLAYER_CLASSES, anim_ext=VALVE_ANIM_EXT, class_anims=VALVE_CLASS_ANIMS,
                   deaths=VALVE_DEATHS, death_alias=((A_CDEATH, A_DEATH),), player_models=VALVE_PLAYER_MODELS,
                   default_players=VALVE_DEFAULT_PLAYERS, player_sounds=VALVE_PLAYER_SOUNDS, sprites=(),
-                  monsters=MONSTERS, script_seqs=SCRIPT_SEQS,
+                  monsters=MONSTERS, script_seqs=SCRIPT_SEQS, props=True,
                   # arms / hands of the v_ models: HL HEV glove set, Sven soldier_arm / soldier_hand, medkit ld_hev_*,
                   # displacer hand.BMP / skin.BMP; hand_tex = the hand proper (glove, not sleeve) for the grip fallback
                   arm_tex=("glove", "sleeve", "knuckle", "handpak", "forearm", "soldier_arm", "soldier_hand", "hev_arm",
@@ -677,7 +753,8 @@ SVEN_WEAPONS = list(VALVE_WEAPONS) + [
     (33, "medkit", "grenade", {"fire": "items/medshot4.wav", "fire2": "items/medshot5.wav",
                                "special1": "items/medshotno1.wav", "special2": "items/medcharge4.wav"},
      {"w": "w_pmedkit.mdl"}),
-    (35, "desert_eagle", "pistol", {"fire": W + "desert_eagle_fire.wav", "special1": W + "desert_eagle_sight.wav",
+    (35, "desert_eagle", "pistol", {"fire": W + "desert_eagle_fire.wav", "reload1": W + "desert_eagle_reload.wav",
+                                    "special1": W + "desert_eagle_sight.wav",
                                     "special2": W + "desert_eagle_sight2.wav"}, {}),
     (36, "uzi", "gun", {"fire": W + "uzi/shoot1.wav", "fire2": W + "uzi/shoot2.wav", "special1": W + "uzi/fire_both1.wav",
                         "special2": W + "uzi/akimbo_pull1.wav", "special3": W + "uzi/akimbo_deploy.wav"}, {}),
@@ -753,7 +830,7 @@ SVEN_PLAYER_SOUNDS = VALVE_PLAYER_SOUNDS + ["items/smallmedkit1.wav", "weapons/u
 # key caps scaled to a pose-vertex budget per monster (≥ 2 keys per anim); the atlas budget halves the v_ textures.
 PROFILES["svencoop"] = dict(PROFILES["valve"], weapons=SVEN_WEAPONS, view_seqs=SVEN_VIEW_SEQS, monsters=SVEN_MONSTERS,
                             player_sounds=SVEN_PLAYER_SOUNDS, model_dirs=("hlclassic", "opfor"), default_players=(),
-                            script_seqs={}, mon_part_verts=800, mon_pose_verts=55000, pw_tex_max=128, v_tex_max=128,
+                            script_seqs={}, props=False, mon_part_verts=800, mon_pose_verts=55000, pw_tex_max=128, v_tex_max=128,
                             atlas_px=4096 * 1536, view_anims=False)
 
 # ───────────────────────── Opposing Force (--mod gearbox) ─────────────────────────
@@ -780,7 +857,7 @@ OF_MONSTERS = tuple(MONSTERS) + (
     ("gonome", (65,), ("attack2",), 0),                              # 65 = slGonomeVictoryDance's ACT_VICTORY_DANCE
     ("zombie_barney", (), (), 0),
     ("zombie_soldier", (), (), 0),
-    ("pit_drone", (7,), (), 0),
+    ("pit_drone", (7, 35, 45, 54), (), 0),           # + ACT_EAT / ACT_INSPECT_FLOOR / ACT_DETECT_SCENT (CPitdrone eat / wallow schedules)
     ("strooper", (47,), (), 0),
     ("massn", (47,), ("crouching_m40a1",), 0),
     ("cleansuit_scientist", (63, 64, 58, 59, 18, 19, 33, 34, 40, 41, 42, 43), ("crouch",), 0),
@@ -798,11 +875,57 @@ OF_MONSTERS = tuple(MONSTERS) + (
     ("blkop_osprey", (), (), 0, 30000),
     ("osprey", (), (), 0, 30000),
 )
-OF_PLAYER_SOUNDS = VALVE_PLAYER_SOUNDS + ["items/smallmedkit1.wav", "ctf/pow_backpack.wav"]
+OF_PLAYER_SOUNDS = VALVE_PLAYER_SOUNDS + ["items/smallmedkit1.wav", "ctf/pow_backpack.wav", "ctf/pow_armor_charge.wav", "ctf/pow_health_charge.wav",
+                                           "ctf/pow_big_jump.wav", "ctf/itemthrow.wav",       # CTF powerup cues (charge loops, long jump, throw)
+                                           "player/hud_nightvision.wav"]      # night vision toggle (GsvrHlFlashlight, gearbox; items/nightvision1/2.wav are not in the install)
 PROFILES["gearbox"] = dict(PROFILES["valve"], weapons=OF_WEAPONS, view_seqs=SVEN_VIEW_SEQS, monsters=OF_MONSTERS,
                            player_sounds=OF_PLAYER_SOUNDS, default_players=(),
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
-                           mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536)
+                           mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
+                           # studio-prop skins at most 128 px: the pack sits at the 99 MB guard (the props push the tail sprite fexplo1 out)
+                           prop_tex_max=128)
+
+
+# ───────────────────────── Blue Shift (--mod bshift) ─────────────────────────
+# bshift/models holds the Blue Shift versions of the HL weapons (same file stems as valve, so the rows are the valve rows) and Barney's
+# set; files the mod does not repeat fall back to valve/ (find()). Blue Shift has no rpg / gauss / egon / hornet gun (ids 8..11) and no
+# rpg / gauss ammo boxes (29, 30). Monsters: the valve table + Otis (the OF row; bshift/models/otis.mdl, same sequences). Caps as for the other
+# non-CS mods (the unrestricted set would be over the 100 MB pack limit).
+BS_WEAPONS = [r for r in VALVE_WEAPONS if r[0] not in (8, 9, 10, 11, 29, 30)]
+BS_MONSTERS = tuple(MONSTERS) + tuple(r for r in OF_MONSTERS if r[0] == "otis")
+PROFILES["bshift"] = dict(PROFILES["valve"], weapons=BS_WEAPONS, monsters=BS_MONSTERS, default_players=(),
+                          mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
+                          prop_tex_max=128)
+
+# ───────────────────────── Ricochet (--mod ricochet) ─────────────────────────
+# One weapon: the disc launcher (id 45, GsvrHlWeaponDb.RicDisc), v_disc / p_disc (the runtime names models/p_disc.mdl and models/v_disc.mdl;
+# the flying disc models/disc.mdl is a projectile and is not a weapon mesh). No monsters, no players, no props. Sounds are not listed: the
+# install's sound names could not be checked on the machine that wrote this profile (no ricochet content there), the runtime's HL stand-ins play.
+RIC_WEAPONS = [(45, "disc", "grenade", {}, {"w": None})]
+PROFILES["ricochet"] = dict(PROFILES["valve"], weapons=RIC_WEAPONS, monsters=(), props=False, player_sounds=[], default_players=(),
+                            script_seqs={}, view_anims=True, pw_tex_max=256, v_tex_max=256)
+
+# ───────────────────────── Deathmatch Classic (--mod dmc) ─────────────────────────
+# The Quake weapon layer: ids 51..58 (GsvrHlWeaponDb.QAx..QLightning) use the models the runtime names (QView / QWorld: v_crowbar = axe, v_shot /
+# v_shot2, v_nail / v_nail2, v_rock = rocket launcher, v_rock2 = grenade launcher, v_light) and the five weapon pickups (ids 46..50, DmcWorldModel:
+# g_nail, g_nail2, g_shot2, g_rock2, g_light) as world-mesh items. Same caveat as Ricochet: no sounds listed (names unchecked), no monsters / players.
+DMC_WEAPONS = [
+    (46, "g_nail", "item", {}, {"w": "g_nail.mdl"}),
+    (47, "g_nail2", "item", {}, {"w": "g_nail2.mdl"}),
+    (48, "g_shot2", "item", {}, {"w": "g_shot2.mdl"}),
+    (49, "g_rock2", "item", {}, {"w": "g_rock2.mdl"}),
+    (50, "g_light", "item", {}, {"w": "g_light.mdl"}),
+    (51, "crowbar", "knife", {}, {"w": None}),
+    (52, "shot", "gun", {}, {"w": None}),
+    (53, "shot2", "gun", {}, {"w": None}),
+    (54, "nail", "gun", {}, {"w": None}),
+    (55, "nail2", "gun", {}, {"w": None}),
+    (56, "rock", "gun", {}, {"w": None}),
+    (57, "rock2", "gun", {}, {"w": None}),
+    (58, "light", "gun", {}, {"w": None}),
+]
+PROFILES["dmc"] = dict(PROFILES["valve"], weapons=DMC_WEAPONS, monsters=(), props=False, player_sounds=[], default_players=(),
+                       script_seqs={}, view_anims=True, pw_tex_max=256, v_tex_max=256)
 
 
 def log(msg):
@@ -1160,11 +1283,14 @@ class Builder:
             return
         p = self.find("sprites", want.split("/", 1)[1]) if rel.startswith("sprites/") else None
         if not p:
-            if want in FX_SPRITES:
+            if want in FX_SPRITES or any(want in v for v in FX_SPRITES_MOD.values()):
                 self.missing.append(want)
             return
         try:
-            self.fx_sprites.append((rel, spr.load(p)))
+            s = spr.load(p)
+            if rel in FX_HALF.get(self.mod, ()):
+                s = spr.half_sprite(s, half_rgba)
+            self.fx_sprites.append((rel, s))
         except (ValueError, struct.error, OSError) as e:
             log(f"{rel}: unreadable ({e})")
 
@@ -1356,7 +1482,9 @@ class Builder:
         # glove set GLOVED_sleeve / rubbergloveCHROME / GLOVED_knuckle / GLOVE_handpak, shotgun HAND_ForeArm1, xbow_sleeve;
         # Sven: soldier_arm / soldier_hand, ld_hev_arm / ld_hev_glove, displacer hand / skin; see PROFILES arm_tex);
         # the bone names are not uniform (Bip01 … in some, Bone_Righthand / BoneNN / r_wrist / R_Hand in others)
-        armtex = {i for i, t in enumerate(m.textures) if any(k in t.name.lower() for k in self.prof["arm_tex"])}
+        # + the shotgun's ejected-shell bodypart (texture shell.bmp, bone "shell" at the model origin = the eye): a 3 cm cylinder that
+        # hangs at the eye in the desktop view (cut by the near plane there) and floats behind the controller in VR -> hidden like the arms
+        armtex = {i for i, t in enumerate(m.textures) if any(k in t.name.lower() for k in self.prof["arm_tex"]) or t.name.lower() == "shell.bmp"}
         handtex = {i for i, t in enumerate(m.textures) if any(k in t.name.lower() for k in self.prof.get("hand_tex", ()))}
         count = {}
         keyarm = {}
@@ -1634,7 +1762,23 @@ class Builder:
     def vbake(self, m, si, f):
         """m.bake() for a v_ pose minus the parts that are not on the gun in the unsilenced poses we bake (bake_v)."""
         subs = m.bake(si, f)
-        return [sm for sm in subs if sm["tex"] not in self._vdrop] if self._vdrop else subs
+        if self._vdrop:
+            subs = [sm for sm in subs if sm["tex"] not in self._vdrop]
+        return [self.chrome_uv(m, sm) for sm in subs]
+
+    @staticmethod
+    def chrome_uv(m, sm):
+        """STUDIO_NF_CHROME textures (the HL crowbar / shotgun metal and every rubber glove, CS view_glove) store ONE constant
+        (s, t) per vertex: the engine ignores it and env-maps the texture from the vertex normal in view space (R_StudioChrome).
+        Without that the whole surface samples one texel = a flat, untextured grey/black mesh (2026-11-05, v_crowbar).
+        View models are in the eye frame (x forward, y left, z up): s from the right component (-y), t from the up one (z)."""
+        ti = sm["tex"]
+        if not (0 <= ti < len(m.textures)) or not (m.textures[ti].flags & 2):
+            return sm
+        tris = []
+        for tri in sm["tris"]:
+            tris.append(tuple((pos, nrm, 0.5 - 0.5 * nrm[1], 0.5 - 0.5 * nrm[2], bone, key) for pos, nrm, _s, _t, bone, key in tri))
+        return dict(sm, tris=tris)
 
     def bake_v(self, m, w, stem):
         tk = self.tex_keys(m, True, "v_tex_max")
@@ -1888,7 +2032,7 @@ class Builder:
         self.hands.extend(hands)
 
     # ---- monsters (GSX1 MON1) ----
-    def monster(self, name, extra_acts, extra_names, body, pose_verts=None):
+    def monster(self, name, extra_acts, extra_names, body, pose_verts=None, tex_cap_key=None):
         """models/<name>.mdl → one kind-4 mesh per bodypart model, all with the same poses: the key frames of every
         kept sequence (MON_ACTS + the extras, ≤ MON_PER_ACT per activity, plus named ones), adaptive like VAN1 but on
         bone positions. Records: activity, weight, speed, key times, events (see the MON1 layout in the header)."""
@@ -1931,7 +2075,8 @@ class Builder:
             # sequence 0 (SetActivity falls back to it). A monster with 0 anims / 0 poses fails the loader's MON1 check.
             take(0)
             log(f"monster {name}: no activity matched, keeping sequence 0 '{m.sequences[0]['label']}'")
-        tk = self.tex_keys(m, True)            # monster skins may be halved under the atlas budget (like v_ textures)
+        # monster skins may be halved under the atlas budget (like v_ textures); studio props: the profile's prop_tex_max side
+        tk = self.tex_keys(m, True, tex_cap_key) if tex_cap_key else self.tex_keys(m, True)
         # bodypart models: the default body's model of every bodypart always; the alternatives (heads, guns) while the
         # monster stays within MON_PART_VERTS source vertices (svencoop's HD grunt has 12 models / 9k vertices)
         dflt = [(bi, (body // max(1, bp["base"])) % max(1, len(bp["models"]))) for bi, bp in enumerate(m.bodyparts)
@@ -2320,19 +2465,7 @@ def shelf_pack(sizes, width):
     return pos, y + shelf
 
 
-def half_rgba(rgba, w, h):
-    """2x2 box filter of an RGBA image (w, h even multiples where it matters; odd edge rows/cols are dropped)."""
-    nw, nh = max(1, w // 2), max(1, h // 2)
-    out = bytearray(nw * nh * 4)
-    row = w * 4
-    for y in range(nh):
-        r0 = rgba[2 * y * row:(2 * y + 1) * row]
-        r1 = rgba[(2 * y + 1) * row:(2 * y + 2) * row] if 2 * y + 1 < h else r0
-        s = [a + b for a, b in zip(r0, r1)]
-        o = y * nw * 4
-        for c in range(4):
-            out[o + c:o + nw * 4:4] = bytes([(a + b + 2) >> 2 for a, b in zip(s[c:nw * 8:8], s[c + 4:nw * 8:8])])
-    return bytes(out)
+half_rgba = spr.half_rgba      # 2x2 box filter (defined in spr.py with half_sprite)
 
 
 def read_wav(path, max_s):
@@ -2452,6 +2585,12 @@ def main(argv=None):
             b.monster(*row)
             mdone += 1
             bprog.progress("monsters", mdone, len(mons))
+    if prof.get("props") and mons:
+        # studio props after the monster table (their MON1 index is looked up by name, never by position)
+        props = [p for p in map_prop_models(a.game_root, a.mod) if p not in known][:PROP_MAX_MODELS]
+        for p in props:
+            b.monster(p, (), ("*",), 0, PROP_POSE_VERTS, "prop_tex_max")
+        log(f"studio props: {len(props)} map-named models ({', '.join(props)})")
     bprog.progress("extras", 0, 1)
     if not a.no_gibs:
         for g in prof.get("gib_models", GIB_MODELS):
@@ -2472,7 +2611,7 @@ def main(argv=None):
             b.sprite(rel)
         b.fx_texels = a.fx_texels or FX_TEXELS_MOD.get(a.mod, FX_TEXELS)
         b.max_bytes = a.max_bytes
-        for rel in FX_SPRITES:
+        for rel in fx_sprite_order(a.mod):
             b.fx_sprite(rel)
         extra = map_sprites(a.game_root, a.mod)
         for rel in extra:

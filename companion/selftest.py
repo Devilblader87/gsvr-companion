@@ -513,6 +513,7 @@ def war3_test(work, war3_root):
     wst = companion.State.__new__(companion.State)
     wst.lock = __import__("threading").RLock(); wst.index_rev = 1; wst.seq = 0
     wst.last_watch, wst.watch_sig, wst.index, wst.ownership = 0.0, None, {}, {}
+    wst.cs_keys = None                                 # no relay in this test: rescan skips the CS share keys
     wst.args = argparse.Namespace(prebuilt_dir=None, game_root=w, mods=None, steam_root=None, no_war3=False,
                                   war3_root=w, war3_maps=None, cache_dir=os.path.join(work, "war3_watch_cache"))
     old_watch_s, companion.MAP_WATCH_S = companion.MAP_WATCH_S, 0
@@ -813,9 +814,9 @@ def models_test(work, game_root, sabotage):
             try:
                 g = gsm1_summary(data)
                 mp5 = g["rec"].get(4)
-                check(code == 200 and len(data) == mdl["size"] and len(data) <= 80 * 1000 * 1000 and mp5 is not None
-                      and mp5[1] >= 0 and mp5[4] >= 0 and b"MON1" in data[-200000:],
-                      f"valve GSM1: {g['weapons']} weapons, {g['meshes']} meshes, {len(data) / 1e6:.1f} MB (<= 80), "
+                check(code == 200 and len(data) == mdl["size"] and len(data) <= 99 * 1000 * 1000 and mp5 is not None
+                      and mp5[1] >= 0 and mp5[4] >= 0 and b"MON1" in data,     # not a tail window: the 8 MB SPR2 chunk follows MON1
+                      f"valve GSM1: {g['weapons']} weapons, {g['meshes']} meshes, {len(data) / 1e6:.1f} MB (<= 99, modelpack max_bytes guard), "
                       f"MP5 has P mesh + fire sound, MON1 chunk present")
             except ValueError as e:
                 check(False, f"valve GSM1 parses ({e})")

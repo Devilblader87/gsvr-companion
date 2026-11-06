@@ -151,13 +151,31 @@ def parse_entities(text):
     return out
 
 
+def _looks_like_entities(data, off, ln):
+    """True when the lump is entity text: inside the file, first non-blank byte '{', first 8 bytes printable."""
+    if ln <= 0 or off < 0 or off + ln > len(data):
+        return False
+    head = data[off:off + min(ln, 8)]
+    return head.lstrip()[:1] == b"{" and all(c in (9, 10, 13, 0) or 32 <= c < 127 for c in head)
+
+
+def bsp_lump_dir(data):
+    """The 15 (offset, length) lump entries of a BSP v30 in canonical order. Blue Shift's maps are v30 but store
+    LUMP_ENTITIES and LUMP_PLANES swapped (the engine swaps them back): entry 0 is not entity text but entry 1 is -> swap.
+    Same rule as tools/bsp30.lump_dir (companion/test_csshare.py checks both agree)."""
+    d = [struct.unpack_from("<ii", data, 4 + 8 * i) for i in range(BSP_LUMPS)]
+    if not _looks_like_entities(data, *d[0]) and _looks_like_entities(data, *d[1]):
+        d[0], d[1] = d[1], d[0]
+    return d
+
+
 def bsp_entity_text(data):
     """Header + lump bounds + entity text of a GoldSrc BSP v30. Raises ValueError. Nothing else is read."""
     if len(data) < BSP_HEADER or len(data) > MAX_BUNDLE_BYTES:
         raise ValueError("not a BSP (size)")
     if struct.unpack_from("<i", data, 0)[0] != BSP_VERSION:
         raise ValueError("not a BSP v30")
-    lumps = [struct.unpack_from("<ii", data, 4 + 8 * i) for i in range(BSP_LUMPS)]
+    lumps = bsp_lump_dir(data)
     for off, ln in lumps:                               # the engine refuses lumps outside the file too
         if off < 0 or ln < 0 or off + ln > len(data):
             raise ValueError("BSP lump out of range")

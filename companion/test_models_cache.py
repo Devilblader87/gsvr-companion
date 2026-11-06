@@ -15,7 +15,7 @@ sys.path.insert(0, TOOLS)
 import models, modelpack, modelpack_rev_check as rc          # noqa: E402
 
 CONV = os.path.join(TOOLS, "modelpack.py")
-MODS = ("cstrike", "valve", "svencoop", "gearbox")
+MODS = ("cstrike", "valve", "svencoop", "gearbox", "bshift", "ricochet", "dmc")
 
 
 def tiny_pack():
@@ -92,6 +92,35 @@ class Versions(Base):
         self.assertEqual(tail("gsm1-2.7-9032733190c4"), "v-6838689b2e54")        # the 0.9.23 global version
 
 
+class Profiles(unittest.TestCase):
+    """The per-mod weapon tables of tools/modelpack.py (no game files): bshift / ricochet / dmc exist, are prewarmed, have a rev and the weapon ids the runtime uses."""
+
+    def test_every_mod_has_profile_rev_and_prewarm(self):
+        for m in MODS:
+            self.assertIn(m, modelpack.PROFILES)
+            self.assertIn(m, modelpack.PACK_REV)
+            self.assertIn(m, models.PREWARM_MODS)
+        self.assertEqual(set(modelpack.PACK_REV), set(modelpack.PROFILES))
+
+    def test_weapon_ids_match_the_runtime(self):
+        ids = lambda m: [r[0] for r in modelpack.PROFILES[m]["weapons"]]
+        self.assertEqual(ids("ricochet"), [45])                                       # GsvrHlWeaponDb.RicDisc
+        self.assertEqual(ids("dmc"), list(range(46, 59)))                             # DmcNailgun .. DmcLightning, QAx .. QLightning
+        bs = ids("bshift")
+        self.assertTrue({1, 2, 3, 4, 6, 7, 12, 13, 14, 15} <= set(bs))
+        self.assertFalse({8, 9, 10, 11} & set(bs), "Blue Shift has no rpg / gauss / egon / hornet gun")
+        for m in ("bshift", "ricochet", "dmc"):
+            self.assertEqual(len(ids(m)), len(set(ids(m))), m + ": duplicate weapon id")
+            for r in modelpack.PROFILES[m]["weapons"]:
+                self.assertEqual(len(r), 5)
+
+    def test_dmc_stems_are_the_models_the_runtime_names(self):
+        db = open(os.path.join(REPO, "unity", "Assets", "GoldSrcVR", "Scripts", "GsvrHlWeaponDb.cs"), encoding="utf-8").read()
+        for wid, stem, _cls, _snd, files in modelpack.PROFILES["dmc"]["weapons"]:
+            name = files.get("w") if wid <= 50 else "v_%s.mdl" % stem
+            self.assertTrue(name and ("models/" + name) in db, "%s is not a model GsvrHlWeaponDb names" % name)
+
+
 class Adopt(Base):
     def old_file(self, mod, t="v-6838689b2e54", data=None):
         p = os.path.join(self.cache, f"models-{mod}-{self.inhash(mod)}-{t}.gsm")
@@ -107,19 +136,22 @@ class Adopt(Base):
         self.assertTrue(self.mb.build(self.cache, "cstrike", self.root, log=self.logs.append)["cached"])
 
     def test_adopts_old_cache_without_rebuild(self):
+        # only a mod still at PACK_REV 1 produces the 0.9.23 output, so only those adopt; a bumped mod rebuilds
+        rev1 = [m for m in MODS if m in models.LEGACY_ADOPT and modelpack.PACK_REV.get(m, 0) == 1]       # bshift / ricochet / dmc never had a 0.9.23 pack
         olds = {m: self.old_file(m) for m in MODS}
         for m in MODS:
             r = self.mb.build(self.cache, m, self.root, log=self.logs.append)
-            if f"{modelpack.VERSION}-{m}-r{modelpack.PACK_REV[m]}" != models.LEGACY_ADOPT[m][0]:
-                self.assertFalse(r["cached"], m + ": rev bumped since 0.9.23, the old cache must not be adopted")
+            if m not in rev1:
+                self.assertFalse(r["cached"], m + " (PACK_REV bumped: no adoption)")
                 continue
             self.assertTrue(r["cached"], m)
             self.assertFalse(os.path.exists(olds[m]), "old file is renamed, not copied")
             self.assertTrue(os.path.isfile(r["path"]))
             self.assertIn(self.mb.mod_version(m), r["path"])
-        bumped = [m for m in MODS if f"{modelpack.VERSION}-{m}-r{modelpack.PACK_REV[m]}" != models.LEGACY_ADOPT[m][0]]
+        bumped = [m for m in MODS if m not in models.LEGACY_ADOPT or f"{modelpack.VERSION}-{m}-r{modelpack.PACK_REV[m]}" != models.LEGACY_ADOPT[m][0]]
         self.assertEqual(len(self.ran()), len(bumped), "only the mods with a bumped rev are rebuilt")
-        self.assertTrue(any("adopted" in l for l in self.logs))
+        if len(bumped) < len(MODS):
+            self.assertTrue(any("adopted" in l for l in self.logs))      # every rev bumped (0.9.25 view model fix): nothing left to adopt
 
     def test_does_not_adopt_other_input_state(self):
         p = os.path.join(self.cache, f"models-cstrike-{'0' * 16}-v-6838689b2e54.gsm")
@@ -151,6 +183,8 @@ class Golden(unittest.TestCase):
         with open(rc.GOLDEN, encoding="utf-8") as fh:
             g = json.load(fh)
         for m in MODS:
+            if m in ("ricochet", "dmc") and m not in g:
+                continue            # no ricochet / dmc install on the dev machines yet: the golden is recorded by the first machine that has one (rev check --update)
             self.assertEqual(g[m]["rev"], modelpack.PACK_REV[m], f"{m}: run tools/modelpack_rev_check.py --update")
             self.assertEqual(len(g[m]["out_sha1"]), 40)
 

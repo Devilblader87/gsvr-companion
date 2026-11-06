@@ -8,13 +8,31 @@ LUMPS = ["entities", "planes", "textures", "vertices", "visibility", "nodes", "t
          "lighting", "clipnodes", "leaves", "marksurfaces", "edges", "surfedges", "models"]
 
 
+def _looks_like_entities(data, off, ln):
+    """True when the lump is entity text: inside the file, first non-blank byte '{', first 8 bytes printable."""
+    if ln <= 0 or off < 0 or off + ln > len(data):
+        return False
+    head = data[off:off + min(ln, 8)]
+    return head.lstrip()[:1] == b"{" and all(c in (9, 10, 13, 0) or 32 <= c < 127 for c in head)
+
+
+def lump_dir(data):
+    """The 15 (offset, length) lump entries of a BSP v30 in canonical order (entities, planes, ...).
+    Blue Shift's shipped maps are v30 but store LUMP_ENTITIES and LUMP_PLANES swapped; the engine detects this and swaps
+    them back. Same rule here: entry 0 is not entity text but entry 1 is -> swap. Normal maps are returned untouched."""
+    d = [struct.unpack_from("<ii", data, 4 + i * 8) for i in range(15)]
+    if not _looks_like_entities(data, *d[0]) and _looks_like_entities(data, *d[1]):
+        d[0], d[1] = d[1], d[0]
+    return d
+
+
 class Bsp:
     def __init__(self, path):
         self.data = open(path, "rb").read()
         version, = struct.unpack_from("<i", self.data, 0)
         if version != 30:
             raise ValueError(f"not BSP v30: {version}")
-        self.lumps = {name: struct.unpack_from("<ii", self.data, 4 + i * 8) for i, name in enumerate(LUMPS)}
+        self.lumps = dict(zip(LUMPS, lump_dir(self.data)))     # Blue Shift: entities/planes swapped, see lump_dir
         self.vertices = list(struct.iter_unpack("<3f", self.lump("vertices")))
         self.edges = list(struct.iter_unpack("<2H", self.lump("edges")))
         self.surfedges = [s[0] for s in struct.iter_unpack("<i", self.lump("surfedges"))]

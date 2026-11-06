@@ -44,7 +44,9 @@ EPS = 0.03125           # DIST_EPSILON
 SOLID, SKY = -2, -6
 DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))   # north (−y), east, south, west
 OPP = (2, 3, 0, 1)
-BLOCKING = ("func_wall", "func_wall_toggle", "func_pushable", "func_conveyor")
+# CFuncMonsterClip (func_monsterclip) is solid to NPCs only: pack.py keeps it a player volume (INVISIBLE_CLASSES),
+# while the monster nav mesh must route around its brush model (HL pev->flags & FL_MONSTERCLIP).
+BLOCKING = ("func_wall", "func_wall_toggle", "func_pushable", "func_conveyor", "func_monsterclip")
 
 
 # ───────────────────────── collision ─────────────────────────

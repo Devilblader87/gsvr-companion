@@ -522,18 +522,28 @@ def from_bsp(path, game_root, mod, max_tex, brushes, log):
 # search) / PM_CatagorizeTextureType 0x1110a0 (same prefix strip). Parser: skip leading whitespace; a line whose first
 # non-blank char is '/' or not a letter is ignored; letter = toupper(that char); skip blanks; the name runs to the
 # next whitespace (a name that reaches the end of the buffer without whitespace after it is dropped), cut at 16.
+# The Half-Life / Sven Co-op server (_global::TEXTURETYPE_Init) is the same parser with smaller limits: names cut at
+# 12 and at most 512 entries; TEXTURETYPE_Find then compares only those 12 chars. The pack bakes one letter per
+# triangle, so the limits are chosen per mod here (CS keeps 16 / 1024).
 MAT_NAME = 16
 MAT_MAX = 1024
+MAT_NAME_HL = 12
+MAT_MAX_HL = 512
 
 
-def load_materials(paths):
-    """First existing materials.txt -> (list of (LETTER, name <= 16 chars) in file order, path used)."""
+def mat_limits(mod):
+    """→ (name chars, max entries) of the game's server TEXTURETYPE_Init; Counter-Strike keeps 16 / 1024."""
+    return (MAT_NAME, MAT_MAX) if (mod or "") == "cstrike" else (MAT_NAME_HL, MAT_MAX_HL)
+
+
+def load_materials(paths, name_len=MAT_NAME, max_entries=MAT_MAX):
+    """First existing materials.txt -> (list of (LETTER, name <= name_len chars) in file order, path used)."""
     for p in paths:
         if p and os.path.isfile(p):
             data = open(p, "rb").read().decode("latin-1")
             out = []
             for ln in data.splitlines(keepends=True):
-                if len(out) >= MAT_MAX:
+                if len(out) >= max_entries:
                     break
                 ln = ln[:0x1ff]
                 i = 0
@@ -550,26 +560,35 @@ def load_materials(paths):
                     k += 1
                 if j >= len(ln) or k >= len(ln):           # no name / no whitespace after it -> line skipped
                     continue
-                out.append((letter, ln[j:k][:MAT_NAME]))
+                out.append((letter, ln[j:k][:name_len]))
             return out, p
     return [], None
 
 
-def strip_texture_prefix(name):
+def strip_texture_prefix(name, name_len=MAT_NAME):
     """UTIL_TextureHit / PM_CatagorizeTextureType: '-0'..'+9' animation/tiling prefix (2 chars), then one of
-    '{' '~' '!' ' ' (1 char); the result is cut at 16 chars."""
+    '{' '~' '!' ' ' (1 char); the result is cut at the game's name length."""
     if name[:1] in ("-", "+"):
         name = name[2:]
     if name[:1] in ("{", "~", "!", " "):
         name = name[1:]
-    return name[:MAT_NAME]
+    return name[:name_len]
 
 
-def material_of(name, mats, cache):
-    """Server rule (TEXTURETYPE_Find): first entry equal in the first 16 chars, case-insensitive; default 'C'."""
-    key = strip_texture_prefix(name).lower()
+def find_texture_type(name, mats, name_len=MAT_NAME):
+    """TEXTURETYPE_Find after the caller's prefix strip: first entry whose first name_len chars equal the name's
+    first name_len chars, case-insensitive; 'C' when nothing matches. The comparison truncates both sides, so an
+    entry longer than name_len still matches a name sharing that prefix."""
+    key = strip_texture_prefix(name, len(name)).lower()[:name_len]
+    return next((c for c, n in mats if n.lower()[:name_len] == key), "C")
+
+
+def material_of(name, mats, cache, name_len=MAT_NAME):
+    """Server rule (TEXTURETYPE_Find): first entry equal in the first name_len chars, case-insensitive; default 'C'.
+    The cache is per pack build, so name_len is part of the key for clarity."""
+    key = (strip_texture_prefix(name, len(name)).lower()[:name_len], name_len)
     if key not in cache:
-        cache[key] = next((c for c, n in mats if n.lower() == key), "C")
+        cache[key] = find_texture_type(name, mats, name_len)
     return cache[key]
 
 
@@ -1134,7 +1153,8 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
         blocks.append((w, h, rgb) if rgb is not None else (1, 1, None))
     LW, LH, light, origins, neutral, steps, pages = build_lightmap(blocks, log)
 
-    mats, mat_path = load_materials(materials_paths(path, game_root, mod))
+    mat_name_len, mat_max = mat_limits(mod)
+    mats, mat_path = load_materials(materials_paths(path, game_root, mod), mat_name_len, mat_max)
     mat_cache = {}
     log(f"materials: {len(mats)} entries from {mat_path}" if mat_path else "materials: no sound/materials.txt -> no TMAT")
     pos, uv0, uv1, rect, idx, tmat = [], [], [], [], [], bytearray()
@@ -1164,7 +1184,7 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
                 else:
                     uv1 += [(neutral[0] + 0.5) / LW, (neutral[1] + 0.5) / LH]
                 rect += r
-            letter = ord(material_of(b.textures[miptex][0], mats, mat_cache))
+            letter = ord(material_of(b.textures[miptex][0], mats, mat_cache, mat_name_len))
             for i in range(1, len(poly) - 1):
                 groups[g] += [base, base + i, base + i + 1]
                 gmat[g].append(letter)
@@ -1225,7 +1245,7 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
     assert len(tmat) * 3 == len(idx)
     if mats:
         srt = client_sorted(mats)
-        diff = sorted(k for k in mat_cache if material_of_client(k, srt) != mat_cache[k])
+        diff = sorted(k for k in mat_cache if material_of_client(k[0], srt) != mat_cache[k])
         hist = {}
         for c in tmat:
             hist[chr(c)] = hist.get(chr(c), 0) + 1
