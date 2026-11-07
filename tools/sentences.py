@@ -47,9 +47,11 @@ KEYS = "pvset"
 TALK_PREFIX = {
     "monster_scientist": "SC", "monster_sitting_scientist": "SC", "monster_cleansuit_scientist": "SC",
     "monster_barney": "BA", "monster_otis": "OT", "monster_human_grunt": "HG",
+    "monster_drillsergeant": "DR",
     "monster_human_grunt_ally": "FG", "monster_human_medic_ally": "FG", "monster_human_torch_ally": "FG",
 }
 GRUNTS = ("HG", "FG")
+SLAVE_CLASSES = ("monster_alien_slave",)     # CISlave::AlertSound / IdleSound: SLV_ALERT (pri 2), SLV_IDLE (pri 3)
 TALK2 = ("OK", "WAIT", "STOP", "POK", "HELLO", "SCARED")
 BARNEY2 = ("SHOT", "MAD", "KILL", "ATTACK")
 GRUNT2 = ("ALERT", "MONST", "GREN", "COVER")
@@ -201,6 +203,9 @@ def wanted(ents):
         if c in ("monstermaker", "squadmaker") and e.get("monstertype"):
             classes.append(e["monstertype"].strip().lower())
     prefixes = []
+    if any(c in SLAVE_CLASSES for c in classes):
+        add("SLV_ALERT", 2)
+        add("SLV_IDLE", 3)
     for c in classes:
         p = TALK_PREFIX.get(c)
         if p and p not in prefixes:
@@ -212,7 +217,7 @@ def wanted(ents):
         else:
             for g in TALK2:
                 add(f"{p}_{g}", 2)
-            if p in ("BA", "OT"):
+            if p in ("BA", "OT", "DR"):               # CDrillSergeant::TalkInit shares Barney's SHOT / MAD / KILL / ATTACK
                 for g in BARNEY2:
                     add(f"{p}_{g}", 2)
     for p in prefixes:

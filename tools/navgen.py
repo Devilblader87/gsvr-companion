@@ -32,6 +32,7 @@ STEP = 25.0             # [obs] GenerationStepSize
 STEP_HEIGHT = 18.0      # [obs] StepHeight = ducking waist height in LearnStep; also our box-fit lift [inf]
 JUMP_CROUCH = 58.0      # [obs] JumpCrouchHeight; LearnStep rejects rises > 58.1
 MAX_DROP = 200.0        # [obs] LearnStep rejects drops > 200
+MAX_DROP_SPECIAL = 400.0   # [inf] deathmatch bots take no fall damage and must get down from jump pad platforms
 MIN_NORMAL_Z = 0.7      # [obs] LearnStep ground normal.z < 0.7 → not walkable; MarkJumpAreas threshold
 NODE_Z_TOL = 11.25      # [obs] CNavNode::GetNode tolerance
 PLANE_TOL = 5.0         # [obs] TestArea off-plane tolerance
@@ -272,6 +273,7 @@ class Gen:
         self.C = clip
         self.log = log
         self.nodes = []
+        self.max_drop = MAX_DROP
         self.grid = {}          # (gx, gy) → [Node]
 
     def find(self, gx, gy, z):
@@ -380,7 +382,7 @@ class Gen:
                   and h[1] >= MIN_NORMAL_Z and self.waist_clear(n, bx, by, h[0])]
         bz = g[0]
         dz = bz - n.z
-        if dz > JUMP_CROUCH + 0.1 or -dz > MAX_DROP or not self.waist_clear(n, bx, by, bz):
+        if dz > JUMP_CROUCH + 0.1 or -dz > self.max_drop or not self.waist_clear(n, bx, by, bz):
             return None, extras
         for k in range(1, 6):
             t = k / 5.0
@@ -729,6 +731,258 @@ def connect(areas, cells):
                 a.connect[d].add(best)
 
 
+# ───────────────────────── special links: ladders, jump pads, teleporters, hurt volumes (deathmatch maps) ─────────────────────────
+# The grid mesh only knows walking, stepping up to 58 u and dropping down. A Half-Life deathmatch map also moves players over
+# func_ladder, trigger_push and trigger_teleport; without those the mesh falls apart into islands (bounce: 36 % of the areas form
+# one walk-both-ways component). special_links() adds directed links with the entry / exit points; pack.py writes them as the NAVX
+# section and puts them into the next-hop table. [inf] all of it is our own design; the game's generator knows only ladders
+# (CNavLadder) and no pads or teleporters. Used for Half-Life deathmatch maps only (generate(..., special=True)).
+
+KIND_LADDER, KIND_PUSH, KIND_TELEPORT = 1, 2, 3
+LADDER_SPEED, LADDER_WALK = 200.0, 250.0          # [obs] player ladder climb speed; walking to / from the rungs
+PUSH_REACH = 256.0                                # [inf] horizontal reach of a jump pad flight (+128 u for pads of speed ≥ 1000)
+HURT_MIN_DMG = 10.0
+
+
+def floor_at(grid, x, y, lo, hi, want):
+    """Area under (x, y) whose floor there lies in [lo, hi], nearest to `want` → (area, floor z) or None."""
+    best, bd = None, 1e9
+    for a in grid.at(x, y):
+        z = area_z(a, x, y)
+        if lo <= z <= hi and abs(z - want) < bd:
+            best, bd = (a, z), abs(z - want)
+    return best
+
+
+def move_dir(e):
+    """SetMovedir: angle -1 = up, -2 = down, else the forward vector of the angles."""
+    if "angle" in e and "angles" not in e:
+        try:
+            ang = float(e["angle"])
+        except ValueError:
+            ang = 0.0
+        if ang == -1:
+            return (0.0, 0.0, 1.0)
+        if ang == -2:
+            return (0.0, 0.0, -1.0)
+        a = (0.0, ang, 0.0)
+    else:
+        a = num3(e.get("angles", "0 0 0"))
+        if a == (0.0, -1.0, 0.0):
+            return (0.0, 0.0, 1.0)
+        if a == (0.0, -2.0, 0.0):
+            return (0.0, 0.0, -1.0)
+    p, y = math.radians(a[0]), math.radians(a[1])
+    return (math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), -math.sin(p))
+
+
+def ladder_boxes(C):
+    """func_ladder volumes; boxes that overlap in the plane and touch in height (one ladder made of stacked brushes) merge."""
+    boxes = []
+    for e in C.ents:
+        if e.get("classname") == "func_ladder" and e.get("model", "").startswith("*"):
+            lo, hi = box_of(C, e, 0.0)
+            boxes.append([list(lo), list(hi)])
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                a, b = boxes[i], boxes[j]
+                if a[0][0] - 8 <= b[1][0] and b[0][0] - 8 <= a[1][0] and a[0][1] - 8 <= b[1][1] and b[0][1] - 8 <= a[1][1] \
+                   and a[0][2] - 16 <= b[1][2] and b[0][2] - 16 <= a[1][2]:
+                    boxes[i] = [[min(a[0][k], b[0][k]) for k in range(3)], [max(a[1][k], b[1][k]) for k in range(3)]]
+                    del boxes[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return boxes
+
+
+def mk_link(a, b, kind, entry, mid, exit_, secs):
+    return {"frm": a.id, "to": b.id, "kind": kind, "entry": tuple(entry), "mid": tuple(mid), "exit": tuple(exit_), "secs": secs}
+
+
+def ladder_links(C, grid, log):
+    links = []
+    sides = ((1, 0), (-1, 0), (0, 1), (0, -1))
+    skipped = 0
+    for lo, hi in ladder_boxes(C):
+        cx, cy = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2
+        hx, hy = (hi[0] - lo[0]) / 2, (hi[1] - lo[1]) / 2
+        bot, top = [], []
+        for si, (sx, sy) in enumerate(sides):
+            half = hx if sx else hy
+            for want, rng, out in ((lo[2] - 8, (lo[2] - 72, lo[2] + 48), bot), (hi[2], (hi[2] - 56, hi[2] + 48), top)):
+                for off in (14, 26, 40, 56, 72):
+                    px, py = cx + sx * (half + off), cy + sy * (half + off)
+                    r = floor_at(grid, px, py, rng[0], rng[1], want)
+                    if r is not None:
+                        out.append((si, r[0], (px, py, r[1])))
+                        break
+        best, bs = None, 1e9
+        for sb, ab, pb in bot:
+            for st, at, pt in top:
+                if ab is at or pt[2] - pb[2] < 24.0:
+                    continue
+                sc = math.hypot(pt[0] - pb[0], pt[1] - pb[1]) + (40.0 if sb == st else 0.0)
+                if sc < bs:
+                    best, bs = (ab, pb, at, pt), sc
+        if best is None:
+            skipped += 1
+            continue
+        ab, pb, at, pt = best
+        mx = min(max(pb[0], lo[0]), hi[0])
+        my = min(max(pb[1], lo[1]), hi[1])
+        dz = abs(pt[2] - pb[2])
+        secs = (math.hypot(mx - pb[0], my - pb[1]) + math.hypot(mx - pt[0], my - pt[1])) / LADDER_WALK + dz / LADDER_SPEED
+        links.append(mk_link(ab, at, KIND_LADDER, pb, (mx, my, pt[2]), pt, secs))
+        links.append(mk_link(at, ab, KIND_LADDER, pt, (mx, my, pb[2]), pb, secs))
+    log(f"  special links: {len(links)} ladder ({skipped} ladder volumes without floors on both ends)")
+    return links
+
+
+def teleport_links(C, areas, grid, log):
+    links = []
+    for e in C.ents:
+        if e.get("classname") != "trigger_teleport" or not e.get("model", "").startswith("*") or not e.get("target"):
+            continue
+        dest = next((d for d in C.ents if d.get("targetname") == e["target"] and "origin" in d), None)
+        if dest is None:
+            continue
+        do = num3(dest["origin"])
+        r = floor_at(grid, do[0], do[1], do[2] - 24.0, do[2] + 40.0, do[2])
+        if r is None:
+            continue
+        lo, hi = box_of(C, e, 0.0)
+        inside = []
+        for a in areas:
+            cx, cy = (a.nw.x + a.se.x) / 2, (a.nw.y + a.se.y) / 2
+            z = area_z(a, cx, cy)
+            if lo[0] <= cx <= hi[0] and lo[1] <= cy <= hi[1] and lo[2] - 16 <= z <= hi[2] + 24 and a is not r[0]:
+                inside.append((-(a.se.x - a.nw.x) * (a.se.y - a.nw.y), a.id, a, (cx, cy, z)))
+        inside.sort(key=lambda t: t[:2])
+        for _sz, _id, a, c in inside[:4]:
+            links.append(mk_link(a, r[0], KIND_TELEPORT, c, c, (do[0], do[1], r[1]), 0.2))
+    log(f"  special links: {len(links)} teleporter")
+    return links
+
+
+def push_links(C, areas, grid, log):
+    """trigger_push: the field carries the player along speed·movedir while he stands in it (basevelocity), then he keeps his own
+    velocity and falls. [inf] A column that lifts (movedir.z ≥ 0.5) reaches floors up to its top within PUSH_REACH of the field;
+    a sideways pad throws the player ahead of it onto floors within ±64 u of its height. The flight is a parabola over the chord
+    entry → exit; links need open space at 7 points along it (hull 0 point checks; air control does the rest)."""
+    links = []
+    for e in C.ents:
+        if e.get("classname") != "trigger_push" or not e.get("model", "").startswith("*"):
+            continue
+        lo, hi = box_of(C, e, 0.0)
+        try:
+            speed = float(e.get("speed", "100"))
+        except ValueError:
+            speed = 100.0
+        d = move_dir(e)
+        cx, cy = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2
+        entries = []
+        for a in areas:
+            ax, ay = (a.nw.x + a.se.x) / 2, (a.nw.y + a.se.y) / 2
+            z = area_z(a, ax, ay)
+            if lo[0] - 8 <= ax <= hi[0] + 8 and lo[1] - 8 <= ay <= hi[1] + 8 and lo[2] - 24 <= z <= hi[2]:
+                entries.append((a, (ax, ay, z)))
+        if not entries:
+            for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                px = cx + ox * ((hi[0] - lo[0]) / 2 + 20)
+                py = cy + oy * ((hi[1] - lo[1]) / 2 + 20)
+                r = floor_at(grid, px, py, lo[2] - 24, hi[2], lo[2])
+                if r:
+                    entries.append((r[0], (px, py, r[1])))
+                    break
+        if not entries:
+            continue
+        up = d[2] >= 0.5
+        if not up and speed < 600.0:
+            continue                                  # a current / fan, not a launch pad
+        apex = hi[2] + min(max(speed / 8.0, 24.0), 700.0)      # [inf] the real lift of a pad depends on its speed
+        reach = PUSH_REACH + (128.0 if speed >= 1000.0 else 0.0)
+        hd = math.hypot(d[0], d[1])
+        for ea, ep in entries[:3]:
+            cand = []
+            for b in areas:
+                if b is ea:
+                    continue
+                bx, by = (b.nw.x + b.se.x) / 2, (b.nw.y + b.se.y) / 2
+                bz = area_z(b, bx, by)
+                if up:
+                    gap = max(lo[0] - bx, bx - hi[0], lo[1] - by, by - hi[1], 0.0)
+                    if gap > reach or not (ep[2] + 24.0 <= bz <= apex - 16.0):
+                        continue
+                    score = math.hypot(bx - cx, by - cy) + abs(bz - hi[2])
+                else:
+                    vx, vy = bx - ep[0], by - ep[1]
+                    dist = math.hypot(vx, vy)
+                    if hd < 0.3 or dist < 96.0 or dist > 128.0 + min(speed, 800.0) * 0.6 or abs(bz - ep[2]) > 64.0:
+                        continue
+                    if (vx * d[0] + vy * d[1]) / (dist * hd) < 0.85:
+                        continue
+                    score = dist
+                cand.append((score, b.id, b, (bx, by, bz)))
+            cand.sort(key=lambda t: t[:2])
+            made = 0
+            for _sc, _id, b, bp in cand:
+                if made >= (6 if speed >= 1000.0 else 3):
+                    break
+                ap = apex if up else max(ep[2], bp[2]) + 40.0
+                ok = True
+                for k in range(1, 8):
+                    t = k / 8.0
+                    q = (ep[0] + (bp[0] - ep[0]) * t, ep[1] + (bp[1] - ep[1]) * t,
+                         ep[2] + (bp[2] - ep[2]) * t + 4.0 * (ap - (ep[2] + bp[2]) / 2) * t * (1 - t) + 36.0)
+                    if C.solid_at(0, *q):
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                secs = max(0.6, math.hypot(bp[0] - ep[0], bp[1] - ep[1]) / 300.0 + math.sqrt(max(ap - ep[2], 1.0) / 400.0))
+                links.append(mk_link(ea, b, KIND_PUSH, ep, (ep[0] + (bp[0] - ep[0]) / 2, ep[1] + (bp[1] - ep[1]) / 2, ap), bp, secs))
+                made += 1
+    log(f"  special links: {len(links)} jump pad")
+    return links
+
+
+def drop_hurt_areas(C, areas, log):
+    """Areas whose centre lies in a trigger_hurt volume (damage ≥ HURT_MIN_DMG, not 'start off') are cut out of the mesh: slime pits,
+    radiation, kill floors. Returns the surviving areas; connections to the dropped ones are removed."""
+    vols = []
+    for e in C.ents:
+        if e.get("classname") != "trigger_hurt" or not e.get("model", "").startswith("*"):
+            continue
+        try:
+            dmg = float(e.get("dmg", "10"))
+            fl = int(float(e.get("spawnflags", "0")))
+        except ValueError:
+            continue
+        if dmg >= HURT_MIN_DMG and not fl & 2:
+            vols.append(box_of(C, e, 0.0))
+    if not vols:
+        return areas
+    dead = set()
+    for a in areas:
+        cx, cy = (a.nw.x + a.se.x) / 2, (a.nw.y + a.se.y) / 2
+        cz = area_z(a, cx, cy)
+        for lo, hi in vols:
+            if lo[0] <= cx <= hi[0] and lo[1] <= cy <= hi[1] and lo[2] - 8 <= cz <= hi[2]:
+                dead.add(a)
+                break
+    if dead:
+        for a in areas:
+            for d in range(4):
+                a.connect[d] -= dead
+        log(f"  hurt volumes: {len(dead)} areas cut out of the mesh")
+    return [a for a in areas if a not in dead]
+
+
 # ───────────────────────── hiding spots / places ─────────────────────────
 
 def in_cover(C, x, y, z):
@@ -843,10 +1097,12 @@ def box_of(C, e, pad):
 
 # ───────────────────────── driver ─────────────────────────
 
-def generate(path, log=print):
+def generate(path, log=print, special=False):
     t0 = time.time()
     C, bsp_size = load(path)
     G = Gen(C, log)
+    if special:
+        G.max_drop = MAX_DROP_SPECIAL
     ents = C.ents
     spawns = [num3(e["origin"]) for e in ents
               if e.get("classname") in ("info_player_start", "info_player_deathmatch") and "origin" in e]
@@ -883,11 +1139,16 @@ def generate(path, log=print):
         if area_normal_z(a) < MIN_NORMAL_Z:          # [obs] MarkJumpAreas
             a.flags |= 2
     connect(areas, cells)
+    links = []
+    if special:
+        areas = drop_hurt_areas(C, areas, log)
+        grid = AreaGrid(areas)
+        links = ladder_links(C, grid, log) + teleport_links(C, areas, grid, log) + push_links(C, areas, grid, log)
     t2 = time.time()
     hiding_spots(C, areas)
     pl = places(C, areas, os.path.splitext(os.path.basename(path))[0].lower())
     t3 = time.time()
-    nav = {"version": 5, "bsp_size": bsp_size, "places": pl, "areas": [], "trailing": 0, "generated": True}
+    nav = {"version": 5, "bsp_size": bsp_size, "places": pl, "areas": [], "trailing": 0, "generated": True, "links": links}
     for a in areas:
         nav["areas"].append({
             "id": a.id, "flags": a.flags,

@@ -104,11 +104,12 @@ class Profiles(unittest.TestCase):
 
     def test_weapon_ids_match_the_runtime(self):
         ids = lambda m: [r[0] for r in modelpack.PROFILES[m]["weapons"]]
-        self.assertEqual(ids("ricochet"), [45])                                       # GsvrHlWeaponDb.RicDisc
+        self.assertEqual(ids("ricochet"), [45, 46])                                       # GsvrHlWeaponDb.RicDisc
         self.assertEqual(ids("dmc"), list(range(46, 59)))                             # DmcNailgun .. DmcLightning, QAx .. QLightning
         bs = ids("bshift")
-        self.assertTrue({1, 2, 3, 4, 6, 7, 12, 13, 14, 15} <= set(bs))
-        self.assertFalse({8, 9, 10, 11} & set(bs), "Blue Shift has no rpg / gauss / egon / hornet gun")
+        # Blue Shift's server dll links + precaches rpg / gauss / egon / hornet gun (decomp/bshift) and ba_yard5 places an RPG: a missing pack
+        # entry made the equipped RPG invisible (0.9.25 live)
+        self.assertTrue({1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} <= set(bs))
         for m in ("bshift", "ricochet", "dmc"):
             self.assertEqual(len(ids(m)), len(set(ids(m))), m + ": duplicate weapon id")
             for r in modelpack.PROFILES[m]["weapons"]:

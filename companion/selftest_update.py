@@ -552,6 +552,18 @@ def test_dispatch(tmp, game_root):
                      log=lambda m: None)
     check(res["size"] > 0 and builder.validate_pack(res["path"]) == res["size"],
           f"crossfire built through the frozen-style exe ({res['size']} bytes, {res['seconds']} s)")
+    # the pack carries the CEIL section (tools/ceilclass.py: the duck-scheme ceiling flags, so the VRChat loader does not classify at map load)
+    import struct
+    with open(res["path"], "rb") as fh:
+        raw = fh.read()
+    d = struct.unpack_from("<i", raw, 60)[0]
+    secs = {raw[d + 4 + 16 * k:d + 8 + 16 * k]: struct.unpack_from("<3i", raw, d + 8 + 16 * k) for k in range(struct.unpack_from("<i", raw, d)[0])}
+    ceil = secs.get(b"CEIL")
+    check(ceil is not None and struct.unpack_from("<2i", raw, ceil[0])[0] == 1 and ceil[1] > 1000 and ceil[1] % 4 == 0,
+          f"crossfire pack carries the CEIL section (ceilclass.py bundled and run through the exe): {ceil[1] if ceil else 0} bytes")
+    navx = secs.get(b"NAVX")
+    check(navx is not None and navx[1] > 0 and navx[1] % 4 == 0 and b"NAVA" in secs and b"CEIL" in secs,
+          f"crossfire pack carries the NAVX bot-link section next to CEIL and the NAV sections: {navx[1] if navx else 0} bytes")
 
 
 def controller_test(Controller, chk):

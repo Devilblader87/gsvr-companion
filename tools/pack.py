@@ -67,6 +67,10 @@
 #     i32 firstLink, i32 linkCount, i32 firstSpot, i32 spotCount
 #   "NAVL" count L: i32 (target area index | direction << 24), direction 0 N 1 E 2 S 3 W
 #   "NAVS" count S: f32 x y z, i32 flags (1 cover 2 good sniper 4 ideal sniper)
+#   "NAVX" count X (Half-Life deathmatch maps only; older loaders skip it): special links the grid cannot walk, 16 words each:
+#     i32 from area, i32 to area (indexes), i32 kind (1 ladder, 2 jump pad, 3 teleporter), f32 seconds, f32 entry xyz,
+#     f32 mid xyz (ladder: the rungs at the exit height; pad: the apex of the flight), f32 exit xyz, 3 x i32 0. Feet positions,
+#     GoldSrc units. The NAVN table routes over them (cost = way to the entry + seconds x 250 u + way from the exit)
 #   "NAVP" count = places: NUL-separated ASCII names (place n = name n-1), padded to 4 bytes
 #   "NAVN" count = A·A: uint16 next hop, entry [target·A + from] = the neighbour of `from` on the cheapest path to
 #     `target` (0xFFFF = unreachable, target itself = target); padded to 4 bytes. Cost = 3D centre distance, ×1.5 into
@@ -94,6 +98,9 @@
 #   suspension bridge): "CLIP" count = T collision-only triangles: float32 pos [3 V] (Unity space, metres) then int32 idx [3 T]
 #   (indices into those V vertices). Walkable (normal.y >= 0.7) surfaces of the world's hull 1 that no hull-0 brush backs,
 #   recovered by tools/pack.py clip_floors(); the loader appends them to the map collider (never rendered).
+#   optional duck-scheme ceiling flags (older loaders skip it and classify at map load; a loader that finds it uses it when it fits):
+#   "CEIL" uint8 per triangle of the world collider (world solid + merged models + CLIP floors, in the loader's order) and per collision
+#     triangle of each pooled brush model, 1 = ceiling, 0 = floor / wall; layout + rules: tools/ceilclass.py, docs/goldsrc_base_layer.md
 #   optional render modes (older loaders skip it; they then draw every brush model opaque):
 #   "REND" count = R (one per MODL record, same order): int32 × 2 { mode | renderamt << 8 | renderfx << 16,
 #     rendercolor r | g << 8 | b << 16 } from the entity keys rendermode (0 normal, 1 color, 2 texture, 3 glow,
@@ -1323,6 +1330,9 @@ def write_v3(out, p):
     if p.get("tmat"):
         assert len(p["tmat"]) * 3 == ic
         secs.append((b"TMAT", p["tmat"] + b"\0" * (-len(p["tmat"]) % 4), len(p["tmat"])))
+    if p.get("ceil"):
+        blob, n = p["ceil"]
+        secs.append((b"CEIL", blob, n))
     if p.get("sky"):
         import sky
         secs.append((b"SKY6", sky.section(p["sky"]), 6))
@@ -1422,8 +1432,10 @@ def find_nav(bsp, game_root, mod):
     return None
 
 
-def next_hop_table(areas, index):
-    """Dijkstra from every target over the reversed area graph → next hop toward the target for every area."""
+def next_hop_table(areas, index, links=()):
+    """Dijkstra from every target over the reversed area graph → next hop toward the target for every area.
+    links = navgen's special links (ladders / jump pads / teleporters of a deathmatch map): directed edges, cost = the way
+    to the entry point + the traversal time at 250 u/s + the way from the exit point."""
     import heapq
     A = len(areas)
     cen = [((a["lo"][0] + a["hi"][0]) / 2, (a["lo"][1] + a["hi"][1]) / 2, (a["lo"][2] + a["hi"][2]) / 2) for a in areas]
@@ -1439,6 +1451,11 @@ def next_hop_table(areas, index):
                 if fl & 1: c *= 1.5
                 if fl & 2: c += 50.0
                 rev[v].append((u, c))
+    for lk in links:
+        u, v = index.get(lk["frm"]), index.get(lk["to"])
+        if u is None or v is None or u == v:
+            continue
+        rev[v].append((u, math.dist(cen[u], lk["entry"]) + lk["secs"] * 250.0 + math.dist(lk["exit"], cen[v])))
     out = [0xFFFF] * (A * A)
     for t in range(A):
         dist = [math.inf] * A
@@ -1474,11 +1491,23 @@ def nav_sections(nav):
             navs += struct.pack("<3fi", *sp["pos"], sp["flags"])
     names = b"\0".join(n.encode("ascii", "replace") for n in nav["places"]) + b"\0"
     names += b"\0" * (-len(names) % 4)
-    nxt = next_hop_table(areas, index)
+    links = [lk for lk in nav.get("links", ()) if lk["frm"] in index and lk["to"] in index]
+    nxt = next_hop_table(areas, index, links)
     nxt_b = struct.pack(f"<{len(nxt)}H", *nxt)
     nxt_b += b"\0" * (-len(nxt_b) % 4)
-    return [(b"NAVA", bytes(nava), len(areas)), (b"NAVN", nxt_b, len(nxt)), (b"NAVL", struct.pack(f"<{len(navl)}i", *navl), len(navl)),
+    secs = [(b"NAVA", bytes(nava), len(areas)), (b"NAVN", nxt_b, len(nxt)), (b"NAVL", struct.pack(f"<{len(navl)}i", *navl), len(navl)),
             (b"NAVS", bytes(navs), len(navs) // 16), (b"NAVP", names, len(nav["places"]))]
+    if links:
+        secs.append((b"NAVX", navx_bytes(links, index), len(links)))
+    return secs
+
+
+def navx_bytes(links, index):
+    """NAVX records (16 words each): from, to, kind, seconds, entry xyz, mid xyz, exit xyz, 3 reserved."""
+    out = bytearray()
+    for lk in links:
+        out += struct.pack("<3i10f3i", index[lk["frm"]], index[lk["to"]], lk["kind"], lk["secs"], *lk["entry"], *lk["mid"], *lk["exit"], 0, 0, 0)
+    return bytes(out)
 
 
 def synthetic(n=128, size=60.0):
@@ -1564,12 +1593,13 @@ if __name__ == "__main__":
     ap.add_argument("--no-sentences", action="store_true", help="leave out the SENT speech sentences (and their word wavs)")
     ap.add_argument("--sentence-mb", type=float, default=8.0,
                     help="budget in MB of float32 samples for the sentence word wavs (scripted_sentence first, then talk groups)")
+    ap.add_argument("--no-ceil", action="store_true", help="leave out the CEIL duck-scheme ceiling flags (the runtime then classifies at map load)")
     ap.add_argument("-q", "--quiet", action="store_true")
     ap.add_argument("out")
     a = ap.parse_args()
     t0 = time.time()
     import bprog
-    bprog.plan(convert=55, nav=20, sky=2, sounds=15, write=8)
+    bprog.plan(convert=50, ceil=8, nav=18, sky=2, sounds=14, write=8)
     _marks = (("diffuse atlas", 1), ("lightmap atlas", 2), ("materials:", 3))        # progress of the silent convert stage
     _log = (lambda m: None) if a.quiet else (lambda m: print("  " + m))
 
@@ -1582,14 +1612,27 @@ if __name__ == "__main__":
     conv = from_bsp_v3 if a.format == 3 else from_bsp
     data = synthetic() if a.synthetic else conv(a.bsp, a.game_root, a.mod, a.max_tex, not a.no_entities_brushes, log)
     bprog.progress("convert", 4, 4)
+    if a.format == 3 and a.bsp and not a.no_ceil:
+        import ceilclass
+        bprog.progress("ceil", 0, 1)
+        tc = time.time()
+        try:
+            data["ceil"] = ceilclass.build_section(data, log)
+            log(f"ceil: {time.time() - tc:.1f} s")
+        except Exception as e:                       # noqa: BLE001 — without the section the runtime classifies itself, slower
+            log(f"ceil: skipped ({e})")
+        bprog.progress("ceil", 1, 1)
     if a.format == 3 and a.bsp and not a.no_nav:
         import nav5
         np_ = a.nav or find_nav(a.bsp, a.game_root, a.mod)
         if not np_ and a.gen_nav:
             import navgen
             bprog.progress("nav", 0, 1)
-            data["nav"] = navgen.generate(a.bsp, log=log)
-            log(f"nav source: generated by navgen ({len(data['nav']['areas'])} areas, {len(data['nav']['places'])} places)")
+            # Half-Life deathmatch map (valve, >= 2 info_player_deathmatch): ladder / jump pad / teleporter links, hurt volumes cut out
+            dm = a.mod == "valve" and data["ents"].count(b"info_player_deathmatch") >= 2
+            data["nav"] = navgen.generate(a.bsp, log=log, special=dm)
+            log(f"nav source: generated by navgen ({len(data['nav']['areas'])} areas, {len(data['nav']['places'])} places"
+                + (f", {len(data['nav']['links'])} special links" if dm else "") + ")")
         elif not np_:
             log("nav source: none (no .nav found, --no-gen-nav)")
         if np_:
@@ -1654,7 +1697,7 @@ if __name__ == "__main__":
         mt //= 2
         print(f"pack {os.path.getsize(a.out) / 1e6:.1f} MB > {a.max_bytes / 1e6:.0f} MB: rebuilding with --max-tex {mt}")
         small = conv(a.bsp, a.game_root, a.mod, mt, not a.no_entities_brushes, log)
-        for k in ("nav", "nodg", "sky", "snds", "titl", "sent"):
+        for k in ("nav", "nodg", "sky", "snds", "titl", "sent", "ceil"):
             if data.get(k):
                 small[k] = data[k]
         data = small

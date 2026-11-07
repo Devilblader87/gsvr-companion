@@ -71,6 +71,9 @@
 #   in their own atlas; --no-sprites leaves the block out (byte-identical to the pre-sprite packs).
 #   Chunk "SPR2" = effect sprites (FX_SPRITES + the sprites the mod's maps reference, FX_TEXELS budget) shelf-packed into a second
 #   atlas (layout in tools/spr.py); --no-sprites leaves it out too. Sprites only ever come from the player's own install.
+#   Chunk "HUD1" = the Half-Life client HUD art (valve / gearbox / bshift [+ dmc / ricochet when they ship a hud.txt]): the 640 sprite rects of
+#   hud.txt + weapon_*.txt (numbers, cross, suit, flashlight, damage icons, bucket + weapon + ammo icons ...) over one 8-bit atlas of the
+#   sprite sheets, pain arrows, train frames (layout in tools/hudpack.py). --no-sprites leaves it out; older loaders skip it (text HUD).
 #   Chunk "GIB1" = gib models (GIB_MODELS + the maps' gibmodel / shootmodel models): int32 N, int32 P, N x int32[4] (nameOff, nameLen,
 #   pieceFirst, pieceCount), P x int32[2] (mesh index or -1, vertex count). A piece = one model of bodypart 0 (the CGib `body` value
 #   selects it), a kind-6 mesh with one pose in model space (frame like the W meshes). --no-gibs leaves it out.
@@ -135,6 +138,7 @@ import argparse, array, hashlib, math, os, struct, sys, time, wave
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mdl10 import Mdl, xform, rotate, mat_mul   # noqa: E402
 import spr                              # noqa: E402
+import hudpack                          # noqa: E402
 import bsp30                            # noqa: E402
 
 VERSION = "gsm1-2.7"      # 2.1: valve / svencoop VR grips (hand pick, glove clusters, muzzle pick) + GSX1 PGRP chunk; header version stays 2
@@ -159,7 +163,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 3, "valve": 6, "svencoop": 6, "gearbox": 11, "bshift": 4, "ricochet": 2, "dmc": 2}   # bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard)
+PACK_REV = {"cstrike": 3, "valve": 7, "svencoop": 6, "gearbox": 12, "bshift": 6, "ricochet": 4, "dmc": 2}   # ricochet 4: disc.mdl / disc_hard.mdl thrown disc, no v_ rig for the disc (hand holds p_disc); bshift 6: weapons 8..11 + ammo 29/30 back in the pack (RPG was invisible on Blue Shift); valve 7 / gearbox 12 / bshift 5: GSX1 HUD1 chunk (HL client HUD sprites, tools/hudpack.py) + common/wpn_hudon, wpn_moveselect, wpn_hudoff, player/geiger1-4 sounds; bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard)
 
 
 def version_for_mod(mod):
@@ -888,10 +892,12 @@ PROFILES["gearbox"] = dict(PROFILES["valve"], weapons=OF_WEAPONS, view_seqs=SVEN
 
 # ───────────────────────── Blue Shift (--mod bshift) ─────────────────────────
 # bshift/models holds the Blue Shift versions of the HL weapons (same file stems as valve, so the rows are the valve rows) and Barney's
-# set; files the mod does not repeat fall back to valve/ (find()). Blue Shift has no rpg / gauss / egon / hornet gun (ids 8..11) and no
-# rpg / gauss ammo boxes (29, 30). Monsters: the valve table + Otis (the OF row; bshift/models/otis.mdl, same sequences). Caps as for the other
+# set; files the mod does not repeat fall back to valve/ (find()). Blue Shift DOES have rpg / gauss / egon / hornet gun (ids 8..11) and the
+# rpg / gauss ammo boxes (29, 30): its server dll links + precaches them (decomp/bshift weapon_rpg, UTIL_PrecacheOtherWeapon("weapon_rpg")),
+# bshift/models ships v_/p_/w_ of all four and ba_yard5 places a weapon_rpg. An earlier cut dropped them, so the RPG (ids 8) was invisible
+# (no pack entry -> placeholder) when it was equipped (2026-11-06 live). Monsters: the valve table + Otis (the OF row; bshift/models/otis.mdl, same sequences). Caps as for the other
 # non-CS mods (the unrestricted set would be over the 100 MB pack limit).
-BS_WEAPONS = [r for r in VALVE_WEAPONS if r[0] not in (8, 9, 10, 11, 29, 30)]
+BS_WEAPONS = list(VALVE_WEAPONS)
 BS_MONSTERS = tuple(MONSTERS) + tuple(r for r in OF_MONSTERS if r[0] == "otis")
 PROFILES["bshift"] = dict(PROFILES["valve"], weapons=BS_WEAPONS, monsters=BS_MONSTERS, default_players=(),
                           mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
@@ -901,7 +907,13 @@ PROFILES["bshift"] = dict(PROFILES["valve"], weapons=BS_WEAPONS, monsters=BS_MON
 # One weapon: the disc launcher (id 45, GsvrHlWeaponDb.RicDisc), v_disc / p_disc (the runtime names models/p_disc.mdl and models/v_disc.mdl;
 # the flying disc models/disc.mdl is a projectile and is not a weapon mesh). No monsters, no players, no props. Sounds are not listed: the
 # install's sound names could not be checked on the machine that wrote this profile (no ricochet content there), the runtime's HL stand-ins play.
-RIC_WEAPONS = [(45, "disc", "grenade", {}, {"w": None})]
+# Rev 3 (flying disc) + 4 (no v_ rig, held p_disc): the flying disc models (disc.mdl = world mesh of id 45, disc_hard.mdl = pickup-class row 46; GsvrHlProjectiles.RicDisc*WorldId).
+# The thrown disc was a plain 8 cm placeholder box before. Ids 46+ do not collide with DMC's: a pack holds one mod.
+# Ricochet's v_disc.mdl is byte-identical to Half-Life's v_grenade.mdl (a hand with a grenade; checked 2026-11-06, cmp), so the original draws a GRENADE
+# view model for the disc launcher. a VR player report (0.9.25): "I hold a grenade, there is no disc". So the pack carries NO v_ for the disc and the VR hand
+# holds p_disc.mdl (the real disc, PGRP grip) instead; the thrown disc is disc.mdl.
+RIC_WEAPONS = [(45, "disc", "grenade", {}, {"w": "disc.mdl", "v": None}),
+               (46, "disc_hard", "item", {}, {"w": "disc_hard.mdl"})]
 PROFILES["ricochet"] = dict(PROFILES["valve"], weapons=RIC_WEAPONS, monsters=(), props=False, player_sounds=[], default_players=(),
                             script_seqs={}, view_anims=True, pw_tex_max=256, v_tex_max=256)
 
@@ -926,6 +938,11 @@ DMC_WEAPONS = [
 ]
 PROFILES["dmc"] = dict(PROFILES["valve"], weapons=DMC_WEAPONS, monsters=(), props=False, player_sounds=[], default_players=(),
                        script_seqs={}, view_anims=True, pw_tex_max=256, v_tex_max=256)
+
+# HL client HUD sounds (CHudAmmo weapon menu clicks, CHudGeiger clicks: GsvrHlHud); valve / gearbox / bshift only (svencoop keeps its pack)
+HUD_SOUNDS = ["common/wpn_hudon.wav", "common/wpn_moveselect.wav", "common/wpn_hudoff.wav"] + [f"player/geiger{i}.wav" for i in range(1, 5)]
+for _m in ("valve", "gearbox", "bshift"):
+    PROFILES[_m]["player_sounds"] = list(PROFILES[_m]["player_sounds"]) + [x for x in HUD_SOUNDS if x not in PROFILES[_m]["player_sounds"]]
 
 
 def log(msg):
@@ -1174,6 +1191,7 @@ class Builder:
         self.grips = {}         # weapon id -> dict(vsrc, vbone, vgrip, vmuzzle, psrc, pgrip) for tools/gripcheck.py + the PGRP chunk
         self.sprites = []       # (rel name, spr.Sprite) for the GSX1 SPR1 chunk
         self.fx_sprites = []    # same for the GSX1 SPR2 chunk (effect sprites, shelf-packed)
+        self.hud = None         # hudpack.HudData for the GSX1 HUD1 chunk (HL client HUD sprites), None = no chunk
         self.fx_texels = FX_TEXELS
         self.max_bytes = 99_000_000
         self.vanims = []        # (weapon id, anim, mesh index, key frames, key times s) for the GSX1 VAN1 chunk
@@ -2386,6 +2404,10 @@ class Builder:
                                                                        else b"".join(struct.pack("<i", v) for v in list(gt) + list(gp)))
             chunks.append(b"GIB1" + struct.pack("<i", len(gbody)) + gbody)
             log(f"gib models: {len(self.gibs)} ({len(gp) // 2} pieces, {sum(len(self.meshes[p[0]].texkeys) for _n, ps in self.gibs for p in ps if p[0] >= 0)} verts)")
+        if self.hud is not None:
+            ch, (haw, hah, hn) = hudpack.hud1_chunk(self.hud, name)
+            chunks.append(ch)
+            log(f"HUD sprites: {hn} rects from {len(self.hud.sheets)} sheets in a {haw}x{hah} 8-bit atlas, {len(ch) / 1e6:.2f} MB")
         atab, aflt, hflt, gflt = array.array("i"), array.array("f"), array.array("f"), array.array("f")
         for aid, cls, first, nf, dist, sec, loop in self.panims:
             atab.extend([aid, cls, first, nf])
@@ -2617,6 +2639,9 @@ def main(argv=None):
         for rel in extra:
             b.fx_sprite(rel)
         log(f"effect sprite candidates: {len(b.fx_sprites)} ({len(extra)} referenced by the {a.mod} maps)")
+        b.hud = hudpack.load(a.game_root, a.mod)
+        if b.hud is not None and b.hud.missing:
+            log("HUD sprites missing / out of range: " + ", ".join(b.hud.missing[:8]))
     bprog.progress("extras", 1, 1)
     bprog.progress("write", 0, 1)
     b.write(a.out)
