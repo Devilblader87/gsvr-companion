@@ -98,6 +98,26 @@
 #     float keys [MK]    key time in s from the anim start (= frame / fps); key k = pose poseFirst + k
 #     int32 event [ME*4] 0 frame (time = frame / fps) 1 event id (1003 fire target, 1004/1008 sound, 2001 body drop,
 #                        monster-specific 1..20 …) 2 optOff 3 optLen (options string, e.g. the sound name)
+#   Chunk "SKL1" = skinned monsters (default; --no-skel writes the old baked MON1 only). The MON1 tables stay (records, key times,
+#   events) but every part mesh has ONE pose (the reference = key 0 of the monster's first record) and a record's poses
+#   poseFirst.. are rows of a float bone texture (tools/studioskel.py: per key and bone a quaternion + origin texel, per controller
+#   slot an axis texel). An old loader sees part meshes with 1 pose != MON1 poses and skips the monsters (placeholders); the new
+#   loader skins them in GoldSrcVR/Model (_SkOn). Payload, int32 / float32:
+#     int32 [16]          version 1, model rows NS, texture W, H, mesh rows NMR, controller rows NC, attachment rows NA, anim rows NR
+#                         (= MON1 anim count), bone masks NBM, vertices NV, skin rows NK, skin uv floats NU, 0 x 4
+#     int32 model [NS*16] kind (0 = MON1 monster), owner (MON1 monster index), bones NB, stride (2 NB + slots), texel of key 0, keys
+#                         (= MON1 poses), ctlFirst, ctlCount, attFirst, attCount, maskFirst, meshFirst, meshCount, animFirst, animCount, slots
+#     float modelF [NS*8] bounds centre xyz, extents xyz (model frame, m), 0, 0
+#     int32 mesh [NMR*4]  GSM1 mesh index, model row, vertFirst, vertCount (= the mesh's vertex count, same order)
+#     int32 ctl [NC*4]    bone, type (XR 8 / YR 16 / ZR 32, | 0x8000 RLOOP), entity controller (0..3, 4 = mouth), slot; float ctlF
+#                         [NC*4] start, end (degrees), 0, 0. Slots are sorted deepest bone first (the order the shader applies them)
+#     int32 att [NA*2]    bone, 0; float attF [NA*4] origin in the bone frame (Unity axes, m), 0
+#     int32 anim [NR*4]   blend-1 pose first (numblends 2 sequences: the second pose set, same key times; -1 none), blend type, 0, 0;
+#                         float animF [NR*4] blend start, end (degrees), 0, 0
+#     int32 mask [NBM]    per bone: bit s = controller slot s moves it (256 = gait leg bone)
+#     int32 vbone [NV]; float vert [NV*6] per vertex of the skinned meshes: bone, position + normal in that bone's frame (Unity axes)
+#     int32 skin [NK*4]   mesh, skin family, uvFirst (float index), vertices; float skinUv [NU] alternate atlas UVs of that family
+#     float tex [W*H*4]   the bone texture (RGBAFloat rows, texel i at (i % W, i / W))
 #   Monster frame = W frame (model space at angles 0, origin = entity origin, GoldSrc +x → Unity +Z): place with
 #   Quaternion.Euler(0, 90 − yaw, 0). Keys are picked like VAN1 (pick_keys, ≤ MON_KEYS per activity, MON_TOL units of
 #   bone-position error); linear-movement sequences play in place (the motion bone's x/y/z is zeroed, mdl10).
@@ -139,6 +159,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mdl10 import Mdl, xform, rotate, mat_mul   # noqa: E402
 import spr                              # noqa: E402
 import hudpack                          # noqa: E402
+import studioskel                       # noqa: E402
 import bsp30                            # noqa: E402
 
 VERSION = "gsm1-2.7"      # 2.1: valve / svencoop VR grips (hand pick, glove clusters, muzzle pick) + GSX1 PGRP chunk; header version stays 2
@@ -163,7 +184,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 3, "valve": 7, "svencoop": 6, "gearbox": 12, "bshift": 6, "ricochet": 4, "dmc": 2}   # ricochet 4: disc.mdl / disc_hard.mdl thrown disc, no v_ rig for the disc (hand holds p_disc); bshift 6: weapons 8..11 + ammo 29/30 back in the pack (RPG was invisible on Blue Shift); valve 7 / gearbox 12 / bshift 5: GSX1 HUD1 chunk (HL client HUD sprites, tools/hudpack.py) + common/wpn_hudon, wpn_moveselect, wpn_hudoff, player/geiger1-4 sounds; bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard)
+PACK_REV = {"cstrike": 4, "valve": 9, "svencoop": 7, "gearbox": 14, "bshift": 8, "ricochet": 4, "dmc": 2}   # fix-of0a0 gearbox 14 / valve 9 / bshift 8: monster_generic models no simulated monster uses (of0a0 mini_osprey / mini_apache / intro_*) join the MON1 studio props; integ12 merge: bshift 7 (both integ11 [6] and t3-studio [6] bumped bshift from 5, the merged pack differs from both). integ11 part ricochet 4: disc.mdl / disc_hard.mdl thrown disc, no v_ rig for the disc (hand holds p_disc); bshift 6: weapons 8..11 + ammo 29/30 back in the pack (RPG was invisible on Blue Shift); valve 7 / gearbox 12 / bshift 5: GSX1 HUD1 chunk (HL client HUD sprites, tools/hudpack.py) + common/wpn_hudon, wpn_moveselect, wpn_hudoff, player/geiger1-4 sounds; bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard) || t3-studio part T3 studiobones +1 cstrike/valve/svencoop/gearbox/bshift: skinned monsters (GSX1 SKL1 bone texture, one-pose part meshes, all keys / blend poses / controller slots / skins); valve 7 / gearbox 12 / bshift 5: GSX1 HUD1 chunk (HL client HUD sprites, tools/hudpack.py) + common/wpn_hudon, wpn_moveselect, wpn_hudoff, player/geiger1-4 sounds; bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard)
 
 
 def version_for_mod(mod):
@@ -174,7 +195,7 @@ def version_for_mod(mod):
 def source_version():
     """Old global converter version (VERSION + sha1 over the converter sources): any edit changes it. Plain `--version`."""
     h = hashlib.sha1()
-    for fn in ("modelpack.py", "mdl10.py", "spr.py"):
+    for fn in ("modelpack.py", "mdl10.py", "spr.py", "studioskel.py"):
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), fn), "rb") as fh:
             h.update(fh.read())
     return f"{VERSION}-{h.hexdigest()[:12]}"
@@ -421,7 +442,7 @@ def map_gib_models(root, mod):
 # pose vertex budget. Only the mods whose profile sets props=True (valve, gearbox) carry them.
 PROP_FIXED = {"cycler_prdroid": "models/prdroid.mdl", "xen_spore_small": "models/fungus(small).mdl",
               "xen_spore_medium": "models/fungus.mdl", "xen_spore_large": "models/fungus(large).mdl", "xen_hair": "models/hair.mdl"}
-PROP_MAX_MODELS = 16           # prop models per pack (most-used first; the runtime has 8 prop rows per map)
+PROP_MAX_MODELS = 24           # prop models per pack (cycler / fixed first, then monster_generic ones, most-used first; the runtime has 8 prop rows per map)
 PROP_POSE_VERTS = 12000        # pose vertex budget per prop model (key caps scale down like the Sven monsters)
 
 
@@ -430,14 +451,16 @@ def map_prop_models(root, mod):
     Entity lumps are parsed as text only; names are sanitised like the gib models."""
     import collections, re
     cnt = collections.Counter()
+    gen = collections.Counter()          # monster_generic models (the runtime simulates only the known monster models; the rest is a studio prop)
     for ents in map_entity_lumps(root, mod):
         seen = set()
+        seen_gen = set()
         for body in re.findall(r"\{([^{}]*)\}", ents):
             m = re.search(r'"classname"\s*"([^"\\]*)"', body)
             if not m:
                 continue
             cls = m.group(1).lower()
-            if cls == "cycler":
+            if cls in ("cycler", "monster_generic"):
                 mo = re.search(r'"model"\s*"([^"\\]*)"', body)
                 name = mo.group(1) if mo else ""
             else:
@@ -446,10 +469,15 @@ def map_prop_models(root, mod):
             if not (name.startswith("models/") and name.endswith(".mdl") and ".." not in name.split("/") and len(name) < 96
                     and re.fullmatch(r"[a-z0-9_./()\-]+", name)) or "/" in name[7:]:
                 continue
-            seen.add(name[7:-4])
+            (seen_gen if cls == "monster_generic" else seen).add(name[7:-4])
         for n in seen:
             cnt[n] += 1
-    return [n for n, _c in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))]
+        for n in seen_gen:
+            gen[n] += 1
+    out = [n for n, _c in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))]
+    # generic-actor models after the cycler / fixed ones: of0a0's mini_osprey / mini_apache / intro_* actors (monster_generic with a model no
+    # simulated monster uses) are drawn as studio props, and must never push a cycler model out of the pack
+    return out + [n for n, _c in sorted(gen.items(), key=lambda kv: (-kv[1], kv[0])) if n not in cnt]
 
 
 # view-model sequences per pose (first existing label wins); unsilenced variants first for USP/M4A1
@@ -502,6 +530,30 @@ SHOOT_SEQS = {
     "mac10": ([3, 4, 5], None), "mp5": ([3, 4, 5], None), "p228": ([1, 2, 3], 4), "p90": ([3, 4, 5], None),
     "scout": ([1, 2], None), "sg550": ([1, 2], None), "sg552": ([3, 4, 5], None), "tmp": ([3, 4, 5], None),
     "ump45": ([3, 4, 5], None), "usp": ([9, 10, 11], 12), "xm1014": ([1, 2], None),
+}
+# HL-family v_ sequences the client weapon code plays besides reload / draw / attack (docs/decomp/hl_client/EvWeapons*.md,
+# Wpn_*.md): (VAN1 anim, sequence index, its label in the HL model, key cap). Anim 3 / 4 = ViewAttack2 / 3 (shoot variants), 5 =
+# ViewAttackLast (the empty-clip shot), 100 + n = sequence n itself (VIEW_SEQ0: idles, fidgets, the double shot). A model whose
+# sequence n has another label (another mod's file) skips the entry.
+VIEW_SEQ0 = 100
+VIEW_SEQ_EXTRA = {
+    "9mmhandgun": ((5, 4, "shoot_empty", 4),),                                        # EV_FireGlock1: 4 on the last round
+    "shotgun": ((VIEW_SEQ0 + 2, 2, "shoot_big", 6),                                    # EV_FireShotGunDouble
+                (VIEW_SEQ0 + 9, 9, "deepidle", 8), (VIEW_SEQ0 + 0, 0, "sm_idle", 4), (VIEW_SEQ0 + 8, 8, "idle4", 4)),   # CShotgun::WeaponIdle
+    "9mmar": ((3, 6, "shoot", 3), (4, 7, "shoot", 3),                                  # EV_FireMP5: 5 + RandomLong(0, 2)
+              (VIEW_SEQ0 + 0, 0, "longidle", 6), (VIEW_SEQ0 + 1, 1, "idle1", 8)),      # CMP5::WeaponIdle: RandomLong(0, 1)
+    "tripmine": ((VIEW_SEQ0 + 0, 0, "idle1", 6), (VIEW_SEQ0 + 1, 1, "idle2", 6), (VIEW_SEQ0 + 4, 4, "fidget", 8)),    # CTripmine::WeaponIdle
+    "357": ((VIEW_SEQ0 + 1, 1, "fidget1", 8), (VIEW_SEQ0 + 6, 6, "idle2", 6), (VIEW_SEQ0 + 7, 7, "idle3", 6)),        # CPython::WeaponIdle
+    "crossbow": ((VIEW_SEQ0 + 0, 0, "idle1", 6), (VIEW_SEQ0 + 1, 1, "idle2", 4), (VIEW_SEQ0 + 2, 2, "fidget1", 8),
+                 (VIEW_SEQ0 + 3, 3, "fidget2", 8)),                                     # CCrossbow::WeaponIdle
+    "egon": ((VIEW_SEQ0 + 7, 7, "fire3", 4), (VIEW_SEQ0 + 8, 8, "fire4", 4)),          # EV_EgonFire: one of fire1..4 (1 and 2 are single frames)
+    # EV_Crowbar: the swing counter cycles 4 / 5 / 7; CCrowbar::Swing on a hit alternates the hit sequences 6 / 8
+    "crowbar": ((VIEW_SEQ0 + 4, 4, "attack1miss", 4), (VIEW_SEQ0 + 5, 5, "attack2", 4), (VIEW_SEQ0 + 7, 7, "attack3", 5),
+                (VIEW_SEQ0 + 6, 6, "attack2hit", 4), (VIEW_SEQ0 + 8, 8, "attack3hit", 5)),
+    # OF EV_PipeWrench: normal miss 6 / 7 / 9, hit 5 / 8 / 10 by the swing counter, big swing 13 miss / 12 hit
+    "pipe_wrench": tuple((VIEW_SEQ0 + s, s, lab, 5) for s, lab in ((5, "attack1hit"), (6, "attack1miss"), (7, "attack2hit"), (8, "attack2miss"),
+                                                                  (9, "attack3hit"), (10, "attack3miss"), (12, "attackbighit"), (13, "attackbigmiss"))),
+    "knife": ((VIEW_SEQ0 + 6, 6, "attack2hit", 5), (VIEW_SEQ0 + 8, 8, "attack3hit", 5)),     # OF CKnife::Swing: a hit alternates 6 / 8
 }
 VAN_TOL = 0.3
 DEATH_FRAMES = 12                # per death sequence: 11 falling frames + the end pose (4 looked like a jump into a sitting pose, maintainer 2026-10-24)
@@ -663,6 +715,7 @@ def loco_keys(sq):
     return MON_KEYS_LOCO if sq["activity"] in (3, 4) else MON_KEYS_LOCO2
 MON_TOL = 0.6
 MON_PART_VERTS = 2500             # source vertices per monster over all kept bodypart models (default body always kept)
+SKEL_PART_VERTS = 12000           # the same budget for skinned monsters (SKL1: one pose per part mesh, so alternatives are cheap)
 # (model, extra activities, extra sequence names, default body, note). Bodyparts are kept per model (every head /
 # gun variant is its own small mesh with the same poses); the body value picks one model per bodypart.
 # scripted_sequence / aiscripted_sequence names (m_iszPlay / m_iszIdle / m_iszEntry) the HL campaign maps c*.bsp use
@@ -881,7 +934,8 @@ OF_MONSTERS = tuple(MONSTERS) + (
 )
 OF_PLAYER_SOUNDS = VALVE_PLAYER_SOUNDS + ["items/smallmedkit1.wav", "ctf/pow_backpack.wav", "ctf/pow_armor_charge.wav", "ctf/pow_health_charge.wav",
                                            "ctf/pow_big_jump.wav", "ctf/itemthrow.wav",       # CTF powerup cues (charge loops, long jump, throw)
-                                           "player/hud_nightvision.wav"]      # night vision toggle (GsvrHlFlashlight, gearbox; items/nightvision1/2.wav are not in the install)
+                                           "player/hud_nightvision.wav",      # night vision toggle (GsvrHlFlashlight, gearbox; items/nightvision1/2.wav are not in the install)
+                                           "weapons/pwrench_miss2.wav"]       # EV_PipeWrench second miss layer (GsvrHlWeapons.OfWrenchSwing)
 PROFILES["gearbox"] = dict(PROFILES["valve"], weapons=OF_WEAPONS, view_seqs=SVEN_VIEW_SEQS, monsters=OF_MONSTERS,
                            player_sounds=OF_PLAYER_SOUNDS, default_players=(),
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
@@ -1202,6 +1256,9 @@ class Builder:
         self.varms = []         # (mesh index, [0/1 per vertex]) for the GSX1 VARM chunk (arm/hand vertices of v_ meshes)
         self.gibs = []          # (model name, [(mesh index or -1, vertex count)]) per packed gib model (GSX1 GIB1)
         self.view_anims = True
+        self.skel = True        # monsters as skinned meshes + bone texture (GSX1 SKL1); False = baked pose meshes (--no-skel)
+        self.skp = studioskel.SkelPack()
+        self.skel_skins = []    # (mesh index, skin family, [texture key or None per vertex]) -> SKL1 alternate UV sets
         self._arm2hand = None   # p_ forearm → wrist offset (rest pose), for p_ models without a hand bone
 
     # ---- files ----
@@ -1484,7 +1541,7 @@ class Builder:
             keys.append(wf)
             keys.sort()
         mi = self.add(make_mesh(2, w["id"], [frames[f] for f in keys],
-                                f"v_{stem} anim {('reload', 'draw', 'attack', 'attack2', 'attack3', 'attack_last', 'silencer_on', 'silencer_off')[anim]} '{sq['label']}' {n} frames -> keys {keys}"))
+                                f"v_{stem} anim {('reload', 'draw', 'attack', 'attack2', 'attack3', 'attack_last', 'silencer_on', 'silencer_off')[anim] if anim < 8 else 'seq%d' % (anim - VIEW_SEQ0)} '{sq['label']}' {n} frames -> keys {keys}"))
         self.vanims.append((w["id"], anim, mi, keys, [f / fps for f in keys]))
         if rig is not None:
             self.add_view_rig(m, w, mi, rig, [(si, f) for f in keys], mirror)
@@ -1905,6 +1962,10 @@ class Builder:
             extra = [(3 + j, si) for j, si in enumerate(shoot[1:3])] + ([(5, shoot_last)] if shoot_last is not None else [])
             for anim, si in extra:
                 self.bake_view_anim(m, w, stem, anim, si, VAN_SHOOT_KEYS, tk, mirror, rig)
+            if self.mod != "cstrike":
+                for anim, si, label, kmax in VIEW_SEQ_EXTRA.get(stem, ()):
+                    if si < len(m.sequences) and m.sequences[si]["label"].lower() == label:
+                        self.bake_view_anim(m, w, stem, anim, si, kmax, tk, mirror, rig)
         # attach / detach silencer (anim 6 / 7): the v_ model's own add_silencer / detach_silencer sequences (CS USP: 7 / 15, M4A1: 6 / 13)
         silseq = []
         if silmz is not None:
@@ -2048,6 +2109,110 @@ class Builder:
                                  hand0=len(self.hands)))
         self.panims.extend(anims)
         self.hands.extend(hands)
+        if self.skel and self.mod != "cstrike":
+            self.player_skel(m, pi, mi, hand)
+
+    def player_skel(self, m, pi, mesh, hand):
+        """Skinned player body (GSX1 SKL1 kind-1 model row; the baked kind-3 mesh above stays for old loaders): the gait sequences
+        (legs), the upper-body sequences of every packed weapon class (aim / shoot, standing / crouched, both pitch blends) and the
+        deaths as bone texture key sets, feet at the origin like the baked poses. Sequence kinds: gait = the A_* of its class_anims
+        entry (A_IDLE / A_WALK / A_RUN / A_CIDLE / A_CWALK), upper = 0 aim, 1 shoot, 2 crouch aim, 3 crouch shoot, death = A_DEATH."""
+        sk = self.skp
+        slots = studioskel.slots_of(m, log)
+        legs = m.gait_bones()
+        att = studioskel.attach_bone(m, legs)
+        if att is None:
+            log(f"player {self.players[pi]['name']}: the upper body does not hang from one gait bone - stays baked")
+            return
+        rows, nkey, seqs, done = [], 0, [], set()
+
+        def add(si, role, kind, cls, feet):
+            nonlocal nkey
+            sq = m.sequences[si]
+            keys, sets = studioskel.sequence_keys(m, si)
+            k0 = nkey
+            for bl in sorted(sets):
+                for vals, world in sets[bl]:
+                    # upper-body sequences relative to the attach bone (the gait layer places them), the others absolute
+                    rows.extend(studioskel.key_rows_rel(m, vals, world, slots, att) if role == 1 else studioskel.key_rows(m, vals, world, slots, feet))
+                    nkey += 1
+            n = max(1, sq["numframes"])
+            fps = sq["fps"] if sq["fps"] > 0 else 30.0
+            t0 = len(sk.ptimes)
+            sk.ptimes.extend(f / fps for f in keys)
+            two = 1 in sets
+            seqs.append(([role, kind, cls, k0, len(keys), t0, k0 + len(keys) if two else -1],
+                         [fps, (n - 1) / fps if n > 1 else 0.0, sq["linear"][0], float(sq["flags"] & 1),
+                          sq["blendstart"][0] if two else 0.0, sq["blendend"][0] if two else 0.0, float(n), 0.0]))
+        for aid, _up, gait, _nf, cr in self.prof["class_anims"]:
+            if aid in (A_SHOOT, A_CSHOOT):
+                continue
+            si = seq_pick(m, (gait,))
+            if si is not None and ("g", aid) not in done:
+                done.add(("g", aid))
+                add(si, 0, aid, -1, FEET_CROUCH if cr else FEET_STAND)
+        for ci, cls in enumerate(self.prof["classes"]):
+            if cls not in self.player_classes:
+                continue
+            for kind, pat, cr in ((0, "ref_aim_%s", False), (1, "ref_shoot_%s", False), (2, "crouch_aim_%s", True), (3, "crouch_shoot_%s", True)):
+                si = seq_pick(m, (pat % cls,))
+                if si is not None:
+                    add(si, 1, kind, ci, FEET_CROUCH if cr else FEET_STAND)
+        seen = set()
+        for aid, names, feet in self.prof["deaths"]:
+            for nm in names:
+                si = seq_pick(m, (nm,))
+                if si is None or (m.sequences[si]["seqgroup"], m.sequences[si]["animindex"]) in seen:
+                    continue
+                seen.add((m.sequences[si]["seqgroup"], m.sequences[si]["animindex"]))
+                add(si, 2, aid, -1, feet)
+        if not seqs:
+            return
+        mo_ = self.meshes[mesh]
+        ref_world = m.pose(0, 0)
+        v0, rad = len(sk.verts_i), 0.0
+        for key in mo_.order:
+            b, lp, ln = studioskel.local_vertex(m, (key[0], 0, key[1], key[2]), ref_world)   # bake(): model 0 of each bodypart
+            sk.verts_i.append(b)
+            sk.verts_f.extend(lp + ln)
+            rad = max(rad, math.sqrt(sum(c * c for c in lp)))
+        row = len(sk.models)
+        sk.meshes.append((mesh, row, v0, len(mo_.order)))
+        key0 = sk.add_texels(rows)
+        nb = len(m.bones)
+        lo, hi = [1e9] * 3, [-1e9] * 3
+        stride = 2 * nb + len(slots)
+        absk = set()
+        for ints, _f in seqs:
+            if ints[0] != 1:
+                absk.update(range(ints[3], ints[3] + (ints[4] * (2 if ints[6] >= 0 else 1))))
+        for k in sorted(absk):
+            for b in range(nb):
+                p = rows[k * stride + 2 * b + 1]
+                for c in range(3):
+                    lo[c] = min(lo[c], p[c])
+                    hi[c] = max(hi[c], p[c])
+        ctl0 = len(sk.ctl_i) // 4
+        for s_, c in enumerate(slots):
+            sk.ctl_i.extend([c["bone"], c["type"], c["index"], s_])
+            sk.ctl_f.extend([c["start"], c["end"], 0.0, 0.0])
+        att0 = len(sk.att_i) // 2
+        for a in m.attachments:
+            sk.att_i.extend([a["bone"], 0])
+            sk.att_f.extend(list(studioskel.to_u(a["org"])) + [0.0])
+        mask0 = len(sk.masks)
+        sk.masks.extend(studioskel.bone_masks(m, slots, legs))
+        seq0 = len(sk.pseq_i) // 8
+        for ints, floats in seqs:
+            sk.pseq_i.extend([row] + ints)
+            sk.pseq_f.extend(floats)
+        sk.prow_i.extend([pi, row, seq0, len(seqs), hand, mesh, att, 0])
+        sk.models.append(dict(kind=1, owner=pi, nb=nb, nslots=len(slots), key0=key0, keys=nkey, ctl0=ctl0, nctl=len(slots), att0=att0,
+                              natt=len(m.attachments), mask0=mask0, mesh0=len(sk.meshes) - 1, nmesh=1, anim0=seq0, nanim=len(seqs),
+                              bounds=[(lo[c] + hi[c]) * 0.5 for c in range(3)] + [(hi[c] - lo[c]) * 0.5 + rad for c in range(3)]))
+        log(f"player {self.players[pi]['name']} (skinned): {len(seqs)} sequences ({sum(1 for i, _f in seqs if i[0] == 0)} gait, "
+            f"{sum(1 for i, _f in seqs if i[0] == 1)} upper, {sum(1 for i, _f in seqs if i[0] == 2)} deaths), {nkey} keys x {stride} texels, "
+            f"{len(slots)} controller slots")
 
     # ---- monsters (GSX1 MON1) ----
     def monster(self, name, extra_acts, extra_names, body, pose_verts=None, tex_cap_key=None):
@@ -2103,13 +2268,15 @@ class Builder:
         parts, used = list(dflt), sum(nverts(p) for p in dflt)
         for bi, bp in enumerate(m.bodyparts):
             for mo in range(len(bp["models"])):
-                budget = self.prof.get("mon_part_verts", MON_PART_VERTS)
+                budget = SKEL_PART_VERTS if self.skel else self.prof.get("mon_part_verts", MON_PART_VERTS)
                 if (bi, mo) not in parts and (nverts((bi, mo)) == 0 or used + nverts((bi, mo)) <= budget):
                     parts.append((bi, mo))
                     used += nverts((bi, mo))
                 elif (bi, mo) not in parts:
                     log(f"monster {name}: bodypart {bp['name']} model {mo} skipped (part vertex budget {budget})")
         parts.sort()
+        if self.skel:
+            return self.monster_skel(m, name, chosen, scripted, parts, tk, body)
         part_poses = {p: [] for p in parts}
         mi_ = len(self.monsters)
         anim0, labels = len(self.manims), []
@@ -2171,6 +2338,123 @@ class Builder:
                                   skin=0, poses=npose))
         log(f"monster {name}: {len(chosen)} anims, {npose} poses, {len(prow)} part meshes "
             f"({', '.join(m.bodyparts[b]['name'] + '.' + str(o) for b, o, _m, _b, _n, _v in prow)}): {' '.join(labels)}")
+
+    def monster_skel(self, m, name, chosen, scripted, parts, tk, body):
+        """Skinned variant of monster() (GSX1 SKL1, tools/studioskel.py): one reference pose per bodypart mesh, the key frames as
+        bone transforms in the bone texture. MON1 keeps its records (activity, weight, key times, events); a record's poses
+        poseFirst.. are key rows of the bone texture, numblends-2 sequences add a second key set (blend 1, SKL1 anim row)."""
+        sk = self.skp
+        mi_ = len(self.monsters)
+        anim0, labels = len(self.manims), []
+        slots = studioskel.slots_of(m, log)
+        rows, npose = [], 0
+        lo, hi = [1e9] * 3, [-1e9] * 3
+        anim_rows = []
+        ref = None
+        for si in chosen:
+            sq = m.sequences[si]
+            n = max(1, sq["numframes"])
+            fps = sq["fps"] if sq["fps"] > 0 else 30.0
+            kmax = studioskel.SKEL_KEYS_MAX // 2 if si in scripted else studioskel.SKEL_KEYS_MAX
+            keys, sets = studioskel.sequence_keys(m, si, kmax)
+            if ref is None:
+                ref = sets[0][0]
+            pose0 = npose
+            for bl in sorted(sets):
+                for vals, world in sets[bl]:
+                    rows.extend(studioskel.key_rows(m, vals, world, slots))
+                    for w in world:
+                        p = studioskel.to_u((w[3], w[7], w[11]))
+                        for c in range(3):
+                            lo[c] = min(lo[c], p[c])
+                            hi[c] = max(hi[c], p[c])
+                    npose += 1
+            b1 = pose0 + len(keys) if 1 in sets else -1
+            anim_rows.append((b1, sq["blendtype"][0] if 1 in sets else 0,
+                              sq["blendstart"][0] if 1 in sets else 0.0, sq["blendend"][0] if 1 in sets else 0.0))
+            lin = math.sqrt(sum(c * c for c in sq["linear"]))
+            ev0 = len(self.mevents)
+            for fr, ev, opt in sq["events"]:
+                self.mevents.append((fr, ev, opt.replace("\\", "/")))
+            self.manims.append(dict(act=sq["activity"], weight=sq["actweight"], name=sq["label"], pose0=pose0,
+                                    keys=len(keys), key0=len(self.mkeys), ev0=ev0, nev=len(self.mevents) - ev0,
+                                    loop=sq["flags"] & 1, frames=n, seq=si, fps=fps,
+                                    seconds=(n - 1) / fps if n > 1 else 0.0,
+                                    speed=lin * fps / (n - 1) if n > 1 else 0.0, dist=lin))
+            self.mkeys.extend(f / fps for f in keys)
+            labels.append(f"{sq['label']}:{sq['activity']}x{len(keys)}{'+b' if 1 in sets else ''}")
+        if npose <= 0 or len(self.manims) == anim0:
+            self.missing.append(f"models/{name}.mdl (no usable sequences)")
+            del self.manims[anim0:]
+            return
+        _ref_vals, ref_world = ref
+        baked = m.bake_parts(chosen[0], 0, world=ref_world)
+        prow, mesh0, rad = [], len(sk.meshes), 0.0
+        for bi, mo in parts:
+            nv = len(m.bodyparts[bi]["models"][mo]["verts"])
+            mesh = -1
+            col = collect(baked[(bi, mo)], tk)
+            if col[0]:
+                mesh = self.add(make_mesh(4, mi_, [col], f"monster {name} part {bi}.{mo} '{m.bodyparts[bi]['models'][mo]['name']}' (skinned)"))
+                mo_ = self.meshes[mesh]
+                v0 = len(sk.verts_i)
+                for key in mo_.order:
+                    b, lp, ln = studioskel.local_vertex(m, key, ref_world)
+                    sk.verts_i.append(b)
+                    sk.verts_f.extend(lp + ln)
+                    rad = max(rad, math.sqrt(sum(c * c for c in lp)))
+                sk.meshes.append((mesh, len(sk.models), v0, len(mo_.order)))
+                self.skin_families(m, mesh, mo_, tk)
+            prow.append((bi, mo, mesh, m.bodyparts[bi]["base"], len(m.bodyparts[bi]["models"]), nv))
+        key0 = sk.add_texels(rows)
+        ctl0 = len(sk.ctl_i) // 4
+        for s_, c in enumerate(slots):
+            sk.ctl_i.extend([c["bone"], c["type"], c["index"], s_])
+            sk.ctl_f.extend([c["start"], c["end"], 0.0, 0.0])
+        att0 = len(sk.att_i) // 2
+        for a in m.attachments:
+            sk.att_i.extend([a["bone"], 0])
+            sk.att_f.extend(list(studioskel.to_u(a["org"])) + [0.0])
+        mask0 = len(sk.masks)
+        sk.masks.extend(studioskel.bone_masks(m, slots))
+        for b1, bt, bs, be in anim_rows:
+            sk.anim_i.extend([b1, bt, 0, 0])
+            sk.anim_f.extend([bs, be, 0.0, 0.0])
+        cen = [(lo[c] + hi[c]) * 0.5 for c in range(3)]
+        ext = [(hi[c] - lo[c]) * 0.5 + rad for c in range(3)]
+        sk.models.append(dict(kind=0, owner=mi_, nb=len(m.bones), nslots=len(slots), key0=key0, keys=npose, ctl0=ctl0, nctl=len(slots),
+                              att0=att0, natt=len(m.attachments), mask0=mask0, mesh0=mesh0, nmesh=len(sk.meshes) - mesh0,
+                              anim0=anim0, nanim=len(self.manims) - anim0, bounds=cen + ext))
+        self.monsters.append(dict(name=name, anim0=anim0, nanim=len(self.manims) - anim0, parts=prow, body=body,
+                                  skin=0, poses=npose))
+        log(f"monster {name} (skinned): {len(chosen)} anims, {npose} keys x {2 * len(m.bones) + len(slots)} texels, "
+            f"{len(slots)} controller slots, {len(m.attachments)} attachments, {len(prow)} part meshes "
+            f"({', '.join(m.bodyparts[b]['name'] + '.' + str(o) for b, o, _m, _b, _n, _v in prow)}): {' '.join(labels)}")
+
+    def skin_families(self, m, mesh, mo_, tkm):
+        """Alternate skin families of a skinned part mesh: per family whose texture differs for any vertex, the texture key per vertex
+        (written as an alternate UV set in SKL1; tex_keys registers every texture of the model, so they are in the atlas)."""
+        if len(m.skins) < 2:
+            return
+        fam0 = m.skins[0]
+        for f in range(1, len(m.skins)):
+            fam = m.skins[f]
+            remap = {}
+            for col, ti in enumerate(fam0):
+                if col < len(fam) and fam[col] != ti:
+                    remap.setdefault(ti, fam[col])
+            if not remap:
+                continue
+            keys, hit = [], False
+            for key in mo_.order:
+                ti = key[6]
+                if ti in remap and remap[ti] in tkm:
+                    keys.append(tkm[remap[ti]])
+                    hit = True
+                else:
+                    keys.append(None)
+            if hit:
+                self.skel_skins.append((mesh, f, keys))
 
     # ---- gib models (GSX1 GIB1) ----
     def gib(self, name, texel_budget=None):
@@ -2391,6 +2675,24 @@ class Builder:
                          for mo in self.monsters for r in mo["parts"] if r[2] >= 0)
             log(f"monsters: {len(self.monsters)} ({len(self.manims)} anims, {len(self.mkeys)} keys, "
                 f"{len(self.mevents)} events, {mverts} pose verts = {mverts * 24 / 1e6:.2f} MB), MON1 {len(body)} bytes")
+        if self.skp.models:
+            # SKL1 (layout in tools/studioskel.py + the file header): skinned monster models, bone texture, alternate skin UVs
+            for mesh, fam, keys in self.skel_skins:
+                mo_ = self.meshes[mesh]
+                uvs = []
+                for tk, k2, (s_, t_) in zip(mo_.texkeys, keys, mo_.st):
+                    k = k2 if k2 is not None else tk
+                    if k is None:
+                        uvs.extend([0.0, 0.0])
+                        continue
+                    x, y, w_, h_ = rects[k]
+                    uvs.extend([(x + s_ * w_) / aw, (y + t_ * h_) / ah])
+                self.skp.skins.append((mesh, fam, uvs))
+            ch = self.skp.chunk()
+            chunks.append(ch)
+            tw, th = self.skp.tex_size()
+            log(f"skinned models: {len(self.skp.models)} ({sum(mo['keys'] for mo in self.skp.models)} keys, {len(self.skp.texels)} bone texels in a "
+                f"{tw}x{th} float texture, {len(self.skp.verts_i)} vertices, {len(self.skp.skins)} alternate skins), SKL1 {len(ch) / 1e6:.2f} MB")
         if self.gibs:
             # GIB1: int32 count N, int32 total pieces P, N x (nameOff, nameLen, pieceFirst, pieceCount), P x (mesh index or -1, vertex count).
             # Meshes are kind 6 (one pose each, model space). Old loaders skip the chunk and keep the cube gibs.
@@ -2548,6 +2850,7 @@ def main(argv=None):
                     help="pack size guard (the companion refuses > 100 MB): the SPR2 effect sprites shrink to what is left under it")
     ap.add_argument("--no-gibs", action="store_true", help="leave out the GSX1 GIB1 gib models (hgibs / agibs / material gibs)")
     ap.add_argument("--no-view-anims", action="store_true", help="leave out the VAN1 smooth v_ anims (reload / draw / attack)")
+    ap.add_argument("--no-skel", action="store_true", help="monsters as baked pose meshes (MON1 only, the pre-SKL1 format) instead of skinned")
     ap.add_argument("out", nargs="?")
     a = ap.parse_args(argv)
     mod_given = a.mod is not None
@@ -2563,6 +2866,7 @@ def main(argv=None):
     t0 = time.time()
     b = Builder(a.game_root, a.mod, a.max_atlas_px or prof.get("atlas_px", 4096 * 2048), a.max_clip_s, not a.no_view)
     b.view_anims = not a.no_view_anims and prof.get("view_anims", True)
+    b.skel = not a.no_skel
     if a.player_classes != "all":
         pc = {c.strip().lower() for c in a.player_classes.split(",") if c.strip()}
         bad = pc - set(prof["classes"])

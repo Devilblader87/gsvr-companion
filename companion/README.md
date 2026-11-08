@@ -42,6 +42,7 @@ One window: a big **Start/Stop** button with a status lamp and a one-line headli
 
 Settings are saved to `%APPDATA%\GSVR\gui.json` (macOS/Linux `~/.config/gsvr/gui.json`), the pack cache is
 `%LOCALAPPDATA%\GSVR\cache`; both live outside the install folder and survive updates.
+The cache folder can be moved to any drive in the Settings tab ("Cache folder" > Change... / Default); the GUI offers to move the existing cache (verified copy, then the old files are deleted), and `--cache-dir` does the same on the command line.
 
 Frozen build layout (one folder, so the updater can swap single files and antivirus heuristics are calmer than
 with a one-file exe):

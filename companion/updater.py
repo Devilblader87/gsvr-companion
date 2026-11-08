@@ -18,7 +18,7 @@ Flow (GUI: automatic check on start + "Install" button; CLI: `gsvr-cli --update-
             the OLD manifest but not in the new one are renamed away too. Any error → everything rolled back.
             Source installs only ever touch companion/ and tools/ and refuse to run inside a git checkout.
  5. restart the GUI relaunches itself (new exe / new gui.py) and exits; the next start deletes *.gsvr-old.
-User settings (%APPDATA%\\GSVR\\gui.json) and the pack cache (%LOCALAPPDATA%\\GSVR\\cache) live outside the
+User settings (%APPDATA%\\GSVR\\gui.json) and the pack cache (default %LOCALAPPDATA%\\GSVR\\cache, user-selectable) live outside the
 install folder and are never touched.
 
 Auth: requests go out anonymously first; if the server answers 401/403/404 and a read token is configured, the

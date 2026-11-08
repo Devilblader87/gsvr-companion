@@ -8,6 +8,7 @@
 #                         bone controllers, hitboxes, sequences, sequence groups, textures (+ data offset), skins
 #                         (numskinref, numskinfamilies, offset), bodyparts, attachments, sounds, transitions
 #   bone (112 B)          name[32], parent, flags, controller[6], value[6] (default pos xyz + euler xyz), scale[6]
+#   bone controller (24 B) bone, type, start, end, rest, index (0..3 entity controller, 4 mouth)
 #   sequence (176 B)      label[32], fps, flags, activity, actweight, events, numframes, pivots, motiontype,
 #                         motionbone, linearmovement, …, numblends, animindex, blend info, seqgroup, …
 #   seqgroup (104 B)      label[32], name[64] (file of external groups "<model>NN.mdl"), 2 unused ints
@@ -138,6 +139,9 @@ class Mdl:
             fps, sflags, act, actw, nev, evi, nframes, npiv, pivi, mtype, mbone = struct.unpack_from("<f10i", d, o + 32)
             lin = struct.unpack_from("<3f", d, o + 76)
             nblends, animidx = struct.unpack_from("<2i", d, o + 120)
+            btype = struct.unpack_from("<2i", d, o + 128)
+            bstart = struct.unpack_from("<2f", d, o + 136)
+            bend = struct.unpack_from("<2f", d, o + 144)
             seqgroup = struct.unpack_from("<i", d, o + 156)[0]
             events = []
             for e in range(nev):
@@ -146,7 +150,14 @@ class Mdl:
                 events.append((fr, ev, _cstr(d[eo + 12:eo + 76])))
             self.sequences.append(dict(label=label, fps=fps, flags=sflags, activity=act, actweight=actw, numframes=nframes,
                                        motiontype=mtype, motionbone=mbone, linear=lin, numblends=nblends,
-                                       animindex=animidx, seqgroup=seqgroup, events=events))
+                                       animindex=animidx, seqgroup=seqgroup, events=events,
+                                       blendtype=btype, blendstart=bstart, blendend=bend))
+        # bone controllers (24 B): bone, type (STUDIO_X/Y/Z 1/2/4 translation, XR/YR/ZR 8/16/32 rotation, 0x8000 RLOOP), start, end,
+        # rest, index (0..3 = entity controller, 4 = mouth)
+        self.controllers = []
+        for i in range(nctl):
+            bone, typ, cstart, cend, rest, index = struct.unpack_from("<2i2f2i", d, ctlidx + i * 24)
+            self.controllers.append(dict(bone=bone, type=typ, start=cstart, end=cend, rest=rest, index=index))
         self.attachments = []
         for i in range(natt):
             o = attidx + i * 88
@@ -333,16 +344,34 @@ class Mdl:
                 out.add(i)
         return out
 
-    def pose(self, seq_index=0, frame=0, blend=0, gait=None):
+    CTL_AXIS = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5}      # controller type bit -> local value slot (tx ty tz rx ry rz)
+
+    def pose(self, seq_index=0, frame=0, blend=0, gait=None, ctl=None):
         """→ list of bone world matrices (3x4) for a sequence frame (clamped; fractional frames interpolate).
         gait = (seq_index, frame): the leg bones (gait_bones()) take that sequence instead — CS player models play
-        an upper-body sequence (aim/shoot per weapon class) over a gait sequence (idle1/walk/run/crouch...)."""
+        an upper-body sequence (aim/shoot per weapon class) over a gait sequence (idle1/walk/run/crouch...).
+        ctl = per bone-controller record (self.controllers order) an adjustment added to that bone's local value
+        (radians for XR/YR/ZR, units for X/Y/Z) — the reference for the runtime's model-space controller rotations."""
+        return self.world_of(self.pose_locals(seq_index, frame, blend, gait, ctl))
+
+    def pose_locals(self, seq_index=0, frame=0, blend=0, gait=None, ctl=None):
+        """The per-bone local values [tx, ty, tz, rx, ry, rz] pose() builds its matrices from."""
         nb = len(self.bones)
         vals = self._locals(seq_index, frame, blend)
         if gait is not None and self.sequences:
             gv = self._locals(gait[0], gait[1], 0)
             for i in self.gait_bones():
                 vals[i] = gv[i]
+        if ctl:
+            for c, adj in zip(self.controllers, ctl):
+                j = self.CTL_AXIS.get(c["type"] & 0x3F)
+                if j is not None and 0 <= c["bone"] < nb and adj:
+                    vals[c["bone"]][j] += adj
+        return vals
+
+    def world_of(self, vals):
+        """Local values per bone → world matrices (parent before child, the file's bone order)."""
+        nb = len(self.bones)
         world = [None] * nb
         for i, b in enumerate(self.bones):
             v = vals[i]

@@ -21,7 +21,7 @@ import collections, json, os, queue, shutil, socket, subprocess, sys, threading,
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                            # -I drops the script dir from sys.path
-import companion, games, runtime, steam, updater                                  # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+import cachedir, companion, games, runtime, steam, updater                                  # noqa: E402  (PORT_CANDIDATES, APP, default cache)
 from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION                    # noqa: E402
 
 REPO = os.path.dirname(HERE)                                        # source checkout root (test data in work/)
@@ -30,7 +30,8 @@ NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0          # CREATE_NO_WI
 DEFAULT_SETTINGS = {"worlds": DEFAULT_WORLDS, "extra": "", "war3_root": "", "war3_maps": "", "hl_root": "",
                     "relay_url": "https://w3relay.heimserver.me", "map_autodownload": "on",
                     "update_base": DEFAULT_UPDATE_BASE, "update_token": "",
-                    "auto_update_check": True, "prereleases": True, "auto_start": True}
+                    "auto_update_check": True, "prereleases": True, "auto_start": True,
+                    "cache_dir": ""}                                # "" = default cache folder
 
 
 def settings_path():
@@ -39,8 +40,9 @@ def settings_path():
     return os.path.expanduser("~/.config/gsvr/gui.json")
 
 
-def cache_dir():
-    return companion.default_cache_dir()                            # same default as the CLI
+def cache_dir(setting=""):
+    """The cache folder: the user's choice (settings "cache_dir"; a bare drive root becomes <root>GSVR\\cache) or the CLI default."""
+    return cachedir.resolve(setting, companion.default_cache_dir())
 
 
 def ports_from_args(args):
@@ -153,6 +155,8 @@ class Controller:
             mode = self.settings.get("map_autodownload", "on")
             if mode in ("on", "ask", "off"):
                 a += ["--map-autodownload", mode]
+        if self.settings.get("cache_dir", "").strip():
+            a += ["--cache-dir", self.cache_dir()]                  # before "extra": an explicit --cache-dir there still wins
         extra = self.settings.get("extra", "").strip()
         if extra:
             a += extra.split()
@@ -329,8 +333,45 @@ class Controller:
         except OSError:
             return False
 
-    def clear_cache(self):
-        d = cache_dir()
+    def cache_dir(self):
+        return cache_dir(self.settings.get("cache_dir", ""))
+
+    def game_roots(self):
+        try:
+            return [g.get("root", "") for g in self.games_view(None)[0]]
+        except Exception:                                           # noqa: BLE001
+            return []
+
+    def check_cache_choice(self, picked):
+        """picked = folder from the dialog ("" = default) -> (final_dir, errors, warnings)."""
+        final = cache_dir(picked)
+        errs, warns = cachedir.validate(final, self.game_roots())
+        return final, errs, warns
+
+    def change_cache_dir(self, picked, move, progress=None, cancel=None):
+        """Switch to `picked` ("" = default). move=True: copy the existing cache over first (verified, then the old files
+        are deleted). The companion is stopped for that and restarted afterwards. -> (ok, old_dir, new_dir)."""
+        old, new = self.cache_dir(), cache_dir(picked)
+        was_running = self.running()
+        if was_running:
+            self.stop()
+        ok = True
+        if move and os.path.normcase(os.path.abspath(old)) != os.path.normcase(os.path.abspath(new)):
+            self.log("[cache] moving %s -> %s" % (old, new))
+            ok = cachedir.move_cache(old, new, progress=progress, cancel=cancel, log=self.log)[0]
+        if ok:
+            self.settings["cache_dir"] = picked
+            try:
+                self.save_settings()
+            except OSError as e:
+                self.log("[gui] could not save settings: %s" % e)
+            self.log("[cache] cache folder is now %s" % self.cache_dir())
+        if was_running:
+            self.start()
+        return ok, old, new
+
+    def clear_cache(self, d=None):
+        d = d or self.cache_dir()
         n = 0
         if os.path.isdir(d):
             for f in os.listdir(d):
@@ -709,18 +750,27 @@ def run_gui():
         r += 2
     ttk.Checkbutton(se, text="Check for updates when the app starts", variable=auto_var).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Checkbutton(se, text="Include pre-releases (all v0.x releases are pre-releases)", variable=pre_var).grid(row=r + 1, column=0, columnspan=3, sticky="w")
+    ttk.Label(se, text="Cache folder (converted packs, map downloads; pick any drive):").grid(row=r + 2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+    cf = ttk.Frame(se)
+    cf.grid(row=r + 3, column=0, columnspan=3, sticky="we")
+    cache_lbl = ttk.Label(cf, text="", anchor="w")
+    cache_lbl.pack(side="left", fill="x", expand=True)
+    btn_cdef = ttk.Button(cf, text="Default")
+    btn_cdef.pack(side="right", padx=(6, 0))
+    btn_cchg = ttk.Button(cf, text="Change…")
+    btn_cchg.pack(side="right")
     sb = ttk.Frame(se)
-    sb.grid(row=r + 2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+    sb.grid(row=r + 4, column=0, columnspan=3, sticky="w", pady=(10, 0))
     btn_check = ttk.Button(sb, text="Check for updates now")
     btn_cache = ttk.Button(sb, text="Open cache folder")
     btn_clear = ttk.Button(sb, text="Clear cache")
     for b in (btn_check, btn_cache, btn_clear):
         b.pack(side="left", padx=(0, 6))
     upd_lbl = ttk.Label(se, text="", foreground="#555", wraplength=640, justify="left")
-    upd_lbl.grid(row=r + 3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    upd_lbl.grid(row=r + 5, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Label(se, text="Version %s · %s install (%s) · %s" % (VERSION, runtime.install_kind(), updater.platform_key(),
                                                               runtime.install_root()),
-              foreground="#555").grid(row=r + 4, column=0, columnspan=3, sticky="w", pady=(12, 0))
+              foreground="#555").grid(row=r + 6, column=0, columnspan=3, sticky="w", pady=(12, 0))
     se.columnconfigure(0, weight=1)
 
     def remember():
@@ -750,7 +800,7 @@ def run_gui():
 
     def refresh_buttons():
         run = c.running()
-        btn_toggle.configure(state="disabled" if installing.is_set() else "normal", text="Stop" if run else "Start",
+        btn_toggle.configure(state="disabled" if installing.is_set() or cache_busy.is_set() else "normal", text="Stop" if run else "Start",
                              fg="#a00000" if run else "#006000")
 
     def check_now(quiet=False):
@@ -778,8 +828,69 @@ def run_gui():
         bg(lambda: ui_q.put(("installed", c.install_update(progress=prog))))
     btn_install.configure(command=install)
 
+    cache_busy = threading.Event()
+
+    def show_cache_path():
+        d = c.cache_dir()
+        cache_lbl.configure(text="%s   (%s free)" % (d, cachedir.fmt_bytes(cachedir.free_bytes(d))))
+
+    def switch_cache(picked):
+        """picked = chosen folder ("" = default). Validate, ask about moving the existing cache, run it in the background."""
+        final, errs, warns = c.check_cache_choice(picked)
+        if errs:
+            messagebox.showerror("Cache folder", "\n".join(errs))
+            return
+        old = c.cache_dir()
+        if os.path.normcase(os.path.abspath(final)) == os.path.normcase(os.path.abspath(old)):
+            return
+        if warns and not messagebox.askyesno("Cache folder", "\n".join(warns) + "\n\nUse this folder anyway?"):
+            return
+        n = cachedir.cache_size(old)
+        move = False
+        if n > 0:
+            ans = messagebox.askyesnocancel("Cache folder", "Move the existing cache (%s) to the new folder?\n\n"
+                                            "Yes = move it (the companion is stopped meanwhile and restarted afterwards)\n"
+                                            "No = start empty in the new folder, the old cache stays in\n%s" % (cachedir.fmt_bytes(n), old))
+            if ans is None:
+                return
+            move = ans
+        cache_busy.set()
+        btn_cchg.configure(state="disabled")
+        btn_cdef.configure(state="disabled")
+        btn_toggle.configure(state="disabled")
+        last = [-1]
+
+        def prog(done, total):
+            pct = int(done * 100 / total) if total else 100
+            if pct // 5 != last[0]:
+                last[0] = pct // 5
+                c.log("[cache] moving … %d %% (%s of %s)" % (pct, cachedir.fmt_bytes(done), cachedir.fmt_bytes(total)))
+        bg(lambda: ui_q.put(("cache_done", (c.change_cache_dir(picked, move, progress=prog), move, n))))
+
+    def pick_cache():
+        d = filedialog.askdirectory(initialdir=c.cache_dir() if os.path.isdir(c.cache_dir()) else None, title="Cache folder")
+        if d:
+            switch_cache(d)
+    btn_cchg.configure(command=pick_cache)
+    btn_cdef.configure(command=lambda: switch_cache(""))
+
+    def cache_done(val):
+        (ok, old, new), move, n = val
+        cache_busy.clear()
+        btn_cchg.configure(state="normal")
+        btn_cdef.configure(state="normal")
+        refresh_buttons()
+        show_cache_path()
+        if not ok:
+            messagebox.showwarning("Cache folder", "The cache could not be moved. The old cache is untouched in\n%s\n"
+                                   "and is still used. See the Log tab." % old)
+        elif not move and os.path.isdir(old) and cachedir.cache_size(old) > 0:
+            if messagebox.askyesno("Cache folder", "The old cache (%s) is still in\n%s\n\nDelete it now? (Packs are rebuilt on demand.)"
+                                   % (cachedir.fmt_bytes(cachedir.cache_size(old)), old)):
+                c.clear_cache(old)
+
     def open_cache():
-        d = cache_dir()
+        d = c.cache_dir()
         os.makedirs(d, exist_ok=True)
         if sys.platform == "win32":
             os.startfile(d)                                             # noqa: S606 (local folder)
@@ -881,6 +992,8 @@ def run_gui():
                     banner_lbl.configure(text="Update failed: %s" % (c.update_error or "see the Log tab"))
                     btn_install.configure(state="normal")
                     refresh_buttons()
+                elif kind == "cache_done":
+                    cache_done(val)
                 elif kind == "refresh":
                     refresh_buttons()
                 elif kind == "hl_found":
@@ -904,6 +1017,7 @@ def run_gui():
                                                             runtime.install_root()))
     show_rows(status_rows(None))
     refresh_buttons()
+    show_cache_path()
     pump_logs()
     poll_status()
     pump_ui()
