@@ -1,35 +1,26 @@
-# Code signing policy
+# Code signing and how to verify a download
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
+The Windows binaries of the GSVR Companion (`GSVR-Setup.exe`, and `GSVR.exe` / `gsvr-cli.exe` inside
+`gsvr-companion-windows-x64.zip`, published on the [Releases](https://github.com/Devilblader87/gsvr-companion/releases)
+page) are **not code-signed**. There is no code-signing certificate for this project.
 
-This policy applies to the Windows binaries of the GSVR Companion published on the
-[Releases](https://github.com/Devilblader87/gsvr-companion/releases) page of this repository:
-`GSVR-Setup.exe` and the executables `GSVR.exe` / `gsvr-cli.exe` inside `gsvr-companion-windows-x64.zip`.
+## What to expect from Windows
 
-## What is signed
+Because the app is unsigned and new, Windows SmartScreen may show "Windows protected your PC" when you start the installer
+or the app. This is expected. If you trust the download (see below), click **More info** and then **Run anyway**.
+Some antivirus programs may also warn about unsigned, newly built programs.
 
-* Only binaries built from the source in this repository by the GitHub Actions workflow
-  [`.github/workflows/build.yml`](.github/workflows/build.yml) on a GitHub-hosted runner, from a version tag
-  (`v*`). The signing request is submitted by that workflow and SignPath verifies the origin (repository, commit,
-  workflow run) of the uploaded artifact.
-* The signed files are `GSVR.exe`, `gsvr-cli.exe` and the installer `GSVR-Setup.exe`
-  (configurations: [`.signpath/initial.xml`](.signpath/initial.xml), [`.signpath/installer.xml`](.signpath/installer.xml)).
-* Third-party files bundled by PyInstaller (the Python runtime, Tcl/Tk, Pillow) keep their own signatures or are unsigned;
-  they are not re-signed with our certificate.
-* Every release asset has a `.sha256` file; the companion's self-updater refuses archives without a matching checksum.
+## How to verify a download
 
-## Roles
-
-| Role | Member (GitHub user) |
-| --- | --- |
-| Author (writes the code) | [Devilblader87](https://github.com/Devilblader87) |
-| Committer (commits to the main branch and creates release tags) | [Devilblader87](https://github.com/Devilblader87) |
-| Reviewer (reviews changes before they are released) | [Devilblader87](https://github.com/Devilblader87) |
-| Approver (approves each signing request) | [Devilblader87](https://github.com/Devilblader87) |
-
-Signing requests are approved manually by the approver in SignPath; nothing is signed automatically. This is a one-person
-project; if more people join, this table is updated first.
+* **SHA-256 checksum.** Every release file has a matching `.sha256` file (for example `GSVR-Setup.exe.sha256`) attached to
+  the release. Compare it with the hash of your download, for example in PowerShell:
+  `Get-FileHash .\GSVR-Setup.exe -Algorithm SHA256`. The two hashes must be identical. The companion's self-updater
+  refuses archives without a matching checksum.
+* **Built from public source.** The binaries are built by the GitHub Actions workflow
+  [`.github/workflows/build.yml`](.github/workflows/build.yml) on a GitHub-hosted runner from the tagged public source of
+  this repository; the build log is public.
+* **Build it yourself.** The full source is in this repository. Build instructions and the build command are in
+  `companion/packaging/` (`build_windows.bat`); you can build the app yourself and use that instead of the download.
 
 ## Privacy policy
 
@@ -56,5 +47,4 @@ The companion reads game files only from game installations on your PC and conve
 
 ## Reporting problems
 
-Please open an issue on this repository. If you believe a signed binary is malicious or was signed by mistake, report it
-there as well and write to the SignPath Foundation (<https://signpath.org/>).
+Please open an issue on this repository.

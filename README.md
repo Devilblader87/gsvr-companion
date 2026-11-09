@@ -15,7 +15,7 @@ Fan project, not affiliated with Valve, Blizzard Entertainment or VRChat. Counte
 
 ## License, code signing and privacy
 
-GSVR Companion is free software under the [GNU GPL v3](LICENSE). The Windows binaries are built by GitHub Actions from this source and signed with a certificate from the SignPath Foundation (free code signing by [SignPath.io](https://about.signpath.io/)). See the [code signing policy and privacy statement](CODE_SIGNING_POLICY.md). The source of the converter and companion is in `companion/` and `tools/`; build instructions: `companion/packaging/` (`build_windows.bat`, `.github/workflows/build.yml`).
+GSVR Companion is free software under the [GNU GPL v3](LICENSE). The Windows binaries are built by GitHub Actions from this source and are **not code-signed**, so Windows SmartScreen may warn on first start (More info -> Run anyway). Verify a download with the SHA-256 file attached to each release or build it yourself; see [code signing and download verification, and the privacy statement](CODE_SIGNING_POLICY.md). The source of the converter and companion is in `companion/` and `tools/`; build instructions: `companion/packaging/` (`build_windows.bat`, `.github/workflows/build.yml`).
 
     GSVR Companion - copyright (C) 2026 the GSVR Companion contributors.
     This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public

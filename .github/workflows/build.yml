@@ -1,13 +1,9 @@
 name: build
 
-# Windows release build of the GSVR companion: PyInstaller one-folder build + Inno Setup installer, optionally
-# signed by SignPath (Foundation, free for OSS). Runs on version tags and by hand. Nothing here publishes a
-# release unless the repository variable GSVR_CI_RELEASE is 'true' (releases are currently made from the Wine
-# container with companion/packaging/BUILD_WINE.md + `gh release`).
-#
-# Signing is skipped silently while the secret SIGNPATH_API_TOKEN does not exist. When it exists, set the variable
-# SIGNPATH_ORGANIZATION_ID as well. SignPath project slug: gsvr-companion, signing policy: release-signing,
-# artifact configurations: initial (.signpath/initial.xml) and installer (.signpath/installer.xml).
+# Windows release build of the GSVR companion: PyInstaller one-folder build + Inno Setup installer. The binaries
+# are NOT code-signed; every release file gets a .sha256 checksum instead. Runs on version tags and by hand.
+# Nothing here publishes a release unless the repository variable GSVR_CI_RELEASE is 'true' (releases are
+# currently made from the Wine container with companion/packaging/BUILD_WINE.md + `gh release`).
 
 on:
   push:
@@ -27,10 +23,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      actions: read          # SignPath reads the uploaded artifact through the GitHub API (origin verification)
     env:
-      # secrets cannot be tested in `if:` directly; a job-level env value can
-      HAVE_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
       PYTHONIOENCODING: utf-8
       BUILD: companion/build
     steps:
@@ -73,47 +66,6 @@ jobs:
           & "$d/gsvr-cli.exe" --run-converter "$d/_internal/tools/modelpack.py" --version; if ($LASTEXITCODE) { throw "converter" }
           & "$d/gsvr-cli.exe" --selftest; if ($LASTEXITCODE) { throw "selftest" }
 
-      # ---- signing step 1: the two executables --------------------------------------------------------------
-      - name: Collect unsigned executables
-        if: env.HAVE_SIGNPATH == 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force unsigned-exe | Out-Null
-          Copy-Item "$env:BUILD/dist/GSVR/GSVR.exe", "$env:BUILD/dist/GSVR/gsvr-cli.exe" unsigned-exe/
-
-      - name: Upload unsigned executables
-        if: env.HAVE_SIGNPATH == 'true'
-        id: upload-exe
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-exe
-          path: unsigned-exe/*
-          if-no-files-found: error
-
-      - name: Sign executables (SignPath)
-        if: env.HAVE_SIGNPATH == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: gsvr-companion
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: initial
-          github-artifact-id: ${{ steps.upload-exe.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed-exe
-
-      - name: Put the signed executables into the dist folder
-        if: env.HAVE_SIGNPATH == 'true'
-        shell: pwsh
-        run: |
-          Copy-Item signed-exe/GSVR.exe, signed-exe/gsvr-cli.exe "$env:BUILD/dist/GSVR/" -Force
-          foreach ($f in "GSVR.exe", "gsvr-cli.exe") {
-            $s = Get-AuthenticodeSignature "$env:BUILD/dist/GSVR/$f"
-            "$f : $($s.Status)"
-            if ($s.Status -ne "Valid" -and $s.Status -ne "UnknownError") { throw "$f is not signed ($($s.Status))" }
-          }
-
       # ---- archives, installer ------------------------------------------------------------------------------
       - name: Archives and checksums (exactly the names the self-updater expects)
         shell: pwsh
@@ -134,34 +86,6 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $iscc /Q "/DAppVersion=$ver" "/DDistDir=$PWD\$env:BUILD\dist\GSVR" "/DOutDir=$PWD\$env:BUILD\release" companion\packaging\gsvr_setup.iss
           if ($LASTEXITCODE) { throw "ISCC" }
-
-      # ---- signing step 2: the installer --------------------------------------------------------------------
-      - name: Upload unsigned installer
-        if: env.HAVE_SIGNPATH == 'true'
-        id: upload-setup
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-installer
-          path: companion/build/release/GSVR-Setup.exe
-          if-no-files-found: error
-
-      - name: Sign installer (SignPath)
-        if: env.HAVE_SIGNPATH == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: gsvr-companion
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: installer
-          github-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed-installer
-
-      - name: Replace the installer by the signed one
-        if: env.HAVE_SIGNPATH == 'true'
-        shell: pwsh
-        run: Copy-Item signed-installer/GSVR-Setup.exe "$env:BUILD/release/GSVR-Setup.exe" -Force
 
       - name: Installer checksum
         shell: pwsh
