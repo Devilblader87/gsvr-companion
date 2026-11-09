@@ -106,3 +106,66 @@ class LogTailer:
                 except OSError:
                     self.path = None
             stop.wait(self.poll)
+
+
+class MultiTailer:
+    """Tests only (--follow-all-logs, two VRChat clients on one machine): tails EVERY output log that is written to after the
+    start, each from its own position (files present at the start: from their end, newer ones: from their start). No rotation
+    marker - the other session is still running; each file's last 'Joining wrld_' line at the start is replayed once."""
+
+    def __init__(self, log_dir, poll=0.5):
+        self.dir, self.poll = log_dir, poll
+        self.files = {}          # path -> [pos, buf]
+        self.skip = set()        # logs already stale at the start (not polled)
+
+    def _scan(self, first, out):
+        for f in glob.glob(os.path.join(self.dir, "output_log_*.txt")):
+            if f in self.files or f in self.skip:
+                continue
+            try:
+                size, mt = os.path.getsize(f), os.path.getmtime(f)
+            except OSError:
+                continue
+            if first and time.time() - mt > 6 * 3600:
+                self.skip.add(f)
+                continue
+            if first:
+                self.files[f] = [size, b""]
+                w = last_world_line(f, size)
+                if w:
+                    out.append(w)
+            else:
+                self.files[f] = [0, b""]
+                out.append(f"__OPENED__ {f}")
+
+    def lines(self, stop):
+        first, last_scan = True, 0.0
+        while not stop.is_set():
+            now = time.monotonic()
+            pending = []
+            if first or now - last_scan > 2.0:
+                self._scan(first, pending)
+                first, last_scan = False, now
+            for f, st in list(self.files.items()):
+                try:
+                    size = os.path.getsize(f)
+                except OSError:
+                    del self.files[f]
+                    continue
+                if size < st[0]:
+                    st[0], st[1] = 0, b""
+                if size > st[0]:
+                    try:
+                        with open(f, "rb") as fh:
+                            fh.seek(st[0])
+                            chunk = fh.read(size - st[0])
+                    except OSError:
+                        continue
+                    st[0] += len(chunk)
+                    st[1] += chunk
+                    *done, st[1] = st[1].split(b"\n")
+                    pending.extend(raw.decode("utf-8", "replace").rstrip("\r") for raw in done)
+            if pending:
+                yield from pending
+                continue
+            stop.wait(self.poll)

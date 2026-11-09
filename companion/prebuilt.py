@@ -75,7 +75,7 @@ class Prebuilt:
         self.template = "(prebuilt packs, no converter)"
         self.version = "prebuilt"
 
-    def build(self, cache_dir, mod, mapname, bsp, game_root, mod_dir, log=print):
+    def build(self, cache_dir, mod, mapname, bsp, game_root, mod_dir, log=print, extra=()):
         t0 = time.monotonic()
         size = builder.validate_pack(bsp)            # raises RuntimeError with the reason
         h = hashlib.sha1()

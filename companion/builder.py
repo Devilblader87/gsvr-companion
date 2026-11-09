@@ -51,7 +51,7 @@ def validate_pack(path):
             raise RuntimeError(f"{ver} pack truncated: header needs {need} bytes, file has {size}")
         if ver == "GSV3":
             wv, wi, dir_off = struct.unpack_from("<3i", head, 52)
-            if not (0 < wv <= v and 0 < wi <= i and wi % 3 == 0) or dir_off % 4 or dir_off < need or dir_off + 4 > size:
+            if not (0 <= wv <= v and 0 <= wi <= i and wi % 3 == 0) or dir_off % 4 or dir_off < need or dir_off + 4 > size:
                 raise RuntimeError("GSV3 header world counts / directory offset out of range")
             with open(path, "rb") as fh:
                 fh.seek(dir_off)
@@ -191,8 +191,10 @@ class Converter:
             out[1:1] = ["-X", "utf8"]
         return out
 
-    def build(self, cache_dir, mod, mapname, bsp, game_root, mod_dir, log=print):
-        """-> dict(path, size, sha1, key, cached, seconds). Raises RuntimeError on failure."""
+    def build(self, cache_dir, mod, mapname, bsp, game_root, mod_dir, log=print, extra=()):
+        """-> dict(path, size, sha1, key, cached, seconds). Raises RuntimeError on failure.
+        extra = more converter arguments appended to the command (the tram pack: --only-model); the caller then also
+        passes a distinct mapname, which is part of the cache key."""
         import time
         t0 = time.monotonic()
         os.makedirs(cache_dir, exist_ok=True)
@@ -210,6 +212,7 @@ class Converter:
                         seconds=round(time.monotonic() - t0, 3))
         tmp = os.path.join(cache_dir, key + ".tmp")
         argv = self.argv(bsp=bsp, out=tmp, mod=mod, map=mapname, game_root=game_root, mod_dir=mod_dir)
+        argv += list(extra)
         log("build: " + " ".join(shlex.quote(a) for a in argv))
         try:
             with buildprog.TRACKER.job("war3" if mod == "war3" else "map", mod, mapname) as job:

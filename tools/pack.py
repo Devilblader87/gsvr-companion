@@ -2,6 +2,7 @@
 # usage: python3 -I pack.py --synthetic out.bin            (no Valve data: procedural terrain + checker texture)
 #        python3 -I pack.py --bsp <map.bsp> --game-root input/Half-Life --mod <valve|cstrike|…> out.bin
 #        optional: --max-tex 256 (cap texture edge before atlasing), --no-entities-brushes (world model only),
+#                  --only-model NAME|*N (empty world + that one brush model, e.g. train on c0a0; for the tram pack),
 #                  --format 2 (old single-mesh GSV2 layout; the loader reads both)
 #
 # ── GSV2 layout ── little endian; every section starts 4-byte aligned (all section sizes are multiples of 4)
@@ -1086,12 +1087,21 @@ def clip_floors(b, log=None):
     return tris_v, tris_i
 
 
-def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
+def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
     from bsp30 import Bsp
     from wad3 import is_skipped
     b = Bsp(path)
     b.entities = with_map_cfg(b.entities, path, game_root, mod, log)
     ents = b.entity_list()
+    if only_model:
+        # --only-model: an EMPTY world plus this one brush model (targetname or "*N"); the entity text shrinks to a bare
+        # worldspawn and that entity (the companion's c0a0 tram pack: the original intro tram as the load cabin)
+        hit = [e for e in ents if e.get("model", "").startswith("*")
+               and (e["model"] == only_model or e.get("targetname", "") == only_model)]
+        if len(hit) != 1 or not hit[0]["model"][1:].isdigit():
+            raise SystemExit(f"--only-model {only_model}: {len(hit)} brush entities match (want exactly 1)")
+        ents = [{"classname": "worldspawn"}, hit[0]]
+        b.entities = "".join("{\n" + "".join(f'"{k}" "{v}"\n' for k, v in e.items()) + "}\n" for e in ents)
     ent_tab, kv_tab = entity_table(b.entities)
     assert len(ent_tab) == len(ents), (len(ent_tab), len(ents))
     rendered = render_targets(ents)
@@ -1108,9 +1118,11 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
         return [f for f in allf if not is_skipped(b.textures[b.texinfo[f[4]][2]][0])]
 
     # records: (bsp model, entity index, group, flags, origin)
-    recs = [(0, 0 if ents else -1, "W", F_RENDER | F_COLLIDE, (0.0, 0.0, 0.0))]
+    recs = [(0, 0 if ents else -1, "W", 0 if only_model else F_RENDER | F_COLLIDE, (0.0, 0.0, 0.0))]
     if brushes:
         for ei, e in enumerate(ents):
+            if only_model and ei == 0:
+                continue
             m = e.get("model", "")
             if not m.startswith("*"):
                 continue
@@ -1141,7 +1153,7 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
     # face lists per record, in emission order: world A (solid) then B; models B, A, C
     rec_faces = []
     for mi, ei, grp, flags, o in recs:
-        fl = faces_of(mi) if grp is not None else []
+        fl = faces_of(mi) if grp is not None and not (only_model and grp == "W") else []
         if grp == "W":
             cls_of = {}
             rec_faces.append([("A", f) for f in fl])
@@ -1240,8 +1252,27 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
     for r in out_recs:
         h = r["head"]
         r["head"] = (c0(h[0]) if h[0] < 0 else h[0], c1(h[1]), c1(h[2]), c1(h[3]))
+    if only_model:
+        # the empty world has no tree; keep only the nodes (and planes) the one model's four hulls reach, in old order
+        out_recs[0]["head"] = (-1, -1, -1, -1)
+        keep, todo = set(), [h for r in out_recs for h in r["head"] if h >= 0]
+        while todo:
+            n = todo.pop()
+            if n not in keep:
+                keep.add(n)
+                todo += [c for c in hnod[3 * n + 1:3 * n + 3] if c >= 0]
+        order = sorted(keep)
+        nn = {o: i for i, o in enumerate(order)}
+        pl_used = sorted({hnod[3 * o] for o in order})
+        pn = {o: i for i, o in enumerate(pl_used)}
+        hnod = [v for o in order for v in (pn[hnod[3 * o]], *(nn[c] if c >= 0 else c for c in hnod[3 * o + 1:3 * o + 3]))]
+        for r in out_recs:
+            r["head"] = tuple(nn[h] if h >= 0 else h for h in r["head"])
+        planes = [b.planes[o] for o in pl_used]
+    else:
+        planes = b.planes
     plan = []
-    for nx, ny, nz, d, _t in b.planes:
+    for nx, ny, nz, d, _t in planes:
         plan += [nx, ny, nz, d]
     ents_out = []
     rec_of_ent = {r["ent"]: k for k, r in enumerate(out_recs) if k > 0}
@@ -1274,7 +1305,7 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log):
     stats = dict(faces=len(all_faces), records=len(out_recs), tex_src=src, has_light=has_light,
                  merge=sum(1 for r in out_recs if r["flags"] & F_MERGE), volumes=sum(1 for r in out_recs if r["flags"] & F_VOLUME),
                  planes=len(b.planes), hull0_nodes=H0, clipnodes=len(b.clipnodes), entities=len(ent_tab), kvs=len(kv_tab))
-    cv, ct = clip_floors(b, log)
+    cv, ct = ([], []) if only_model else clip_floors(b, log)
     clip = None
     if ct:
         # Unity space, metres; triangles wound so the up-facing side is the front face (a MeshCollider ignores back faces)
@@ -1571,6 +1602,7 @@ if __name__ == "__main__":
     ap.add_argument("--mod", default="valve")
     ap.add_argument("--max-tex", type=int, default=512, help="cap texture edge length before atlasing")
     ap.add_argument("--no-entities-brushes", action="store_true", help="world model only")
+    ap.add_argument("--only-model", help="empty world + this one brush model (entity targetname or *N), no nav/nodes/sky/sounds/ceil")
     ap.add_argument("--format", type=int, choices=(2, 3), default=3, help="pack version (default 3)")
     ap.add_argument("--nav", help="bot navigation mesh (.nav); default: auto-detect next to the BSP / <mod>/maps / czero/maps")
     ap.add_argument("--no-nav", action="store_true")
@@ -1610,7 +1642,12 @@ if __name__ == "__main__":
                 bprog.progress("convert", k, 4)
     bprog.progress("convert", 0, 4)
     conv = from_bsp_v3 if a.format == 3 else from_bsp
-    data = synthetic() if a.synthetic else conv(a.bsp, a.game_root, a.mod, a.max_tex, not a.no_entities_brushes, log)
+    if a.only_model:
+        if a.format != 3 or not a.bsp:
+            ap.error("--only-model needs --bsp and --format 3")
+        a.no_nav = a.no_nodes = a.no_sky = a.no_sounds = a.no_titles = a.no_sentences = a.no_ceil = True
+    data = synthetic() if a.synthetic else conv(a.bsp, a.game_root, a.mod, a.max_tex, not a.no_entities_brushes, log,
+                                                *([a.only_model] if a.only_model else []))
     bprog.progress("convert", 4, 4)
     if a.format == 3 and a.bsp and not a.no_ceil:
         import ceilclass
@@ -1696,7 +1733,7 @@ if __name__ == "__main__":
     while a.format == 3 and a.bsp and os.path.getsize(a.out) > a.max_bytes and mt > 64:
         mt //= 2
         print(f"pack {os.path.getsize(a.out) / 1e6:.1f} MB > {a.max_bytes / 1e6:.0f} MB: rebuilding with --max-tex {mt}")
-        small = conv(a.bsp, a.game_root, a.mod, mt, not a.no_entities_brushes, log)
+        small = conv(a.bsp, a.game_root, a.mod, mt, not a.no_entities_brushes, log, *([a.only_model] if a.only_model else []))
         for k in ("nav", "nodg", "sky", "snds", "titl", "sent", "ceil"):
             if data.get(k):
                 small[k] = data[k]

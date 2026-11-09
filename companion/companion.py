@@ -20,6 +20,8 @@ Fixed URL set (VRCUrls can't be built at runtime, so the world bakes these in, p
                           For war3/__glue the trailer also carries "index_json" (= /index.json as a string).
   GET /pack/next.bin      pack for the last `next=` (prefetch) request
   GET /pack/models.bin    weapon model + sound pack (GSM1) for the last `models=` request (companion/models.py)
+  GET /pack/tram.bin      the original c0a0 intro tram brush model alone (empty-world GSV3, ~0.9 MB, built on first use from the
+                          player's valve install; 404 when valve/c0a0 is not installed / not allowed)
   GET /pack/hologram.bin  mod hub map-hologram bundle (GSPV) for the last `holo=` request (companion/holo.py)
 status.json "build": [{kind: map|models|hologram|war3, mod, name, pct 0-100, eta_s (-1 unknown), state}] = the converter runs in progress
 (empty list when idle; companion/buildprog.py parses the converters' "@progress" stdout lines; old worlds ignore the field).
@@ -101,6 +103,7 @@ def fetch_world_list(url, timeout=5):
 
 MAP_WATCH_S = 10                # the player's map folders are checked this often for new / changed maps
 RESCAN_ON_MISS_S = 30           # a requested map that is not in the index triggers a rescan at most this often
+TRAM_ARGS = ("--only-model", "train", "--max-tex", "256")   # /pack/tram.bin: c0a0's intro tram (func_tracktrain "train", *12) only
 WORLD_LIST_REFETCH_S = 30       # an unknown world re-reads --world-list at most this often (new official worlds)
 
 
@@ -144,6 +147,8 @@ class State:
         self.prewarm = []                       # mods whose model pack is built in the background (models_worker)
         self.prewarm_done = False
         self.neighbors = []                     # (mod, map) levels next to the current map, pre-converted when idle
+        self.conv = None                        # the map converter (set by main; tram_slot builds the tram pack with it)
+        self.tram_lock = threading.Lock()       # one tram pack build at a time
         self.w3conv = None                      # Warcraft III converter (tools/w3pack.py), set by main
         self.preview_lock = threading.Lock()    # one preview atlas build at a time
         self.last_miss_rescan = 0.0             # resolve(): rescan when a requested map is missing (throttled)
@@ -319,6 +324,24 @@ class State:
             self.slots[slot].update(kw)
             self.seq += 1
             self.changed.notify_all()
+
+    def tram_slot(self):
+        """/pack/tram.bin: the original c0a0 intro tram (brush model "train", empty world) from the player's OWN valve install,
+        built on first use (about a second) and cached. -> {state: ready|missing|failed, path, key}; missing = valve/c0a0 not
+        installed / mod not allowed (the route answers 404). In --prebuilt-dir mode it is the pack valve__c0a0_tram.bin."""
+        with self.lock:
+            e = self.index.get("valve")
+            m = e["maps"].get("c0a0_tram" if self.args.prebuilt_dir else "c0a0") if e else None
+        if not m or self.conv is None:
+            return {"state": "missing", "path": None, "key": None}
+        try:
+            with self.tram_lock:
+                r = self.conv.build(self.args.cache_dir, "valve", "c0a0_tram", m["path"], e["game_root"],
+                                    os.path.join(e["game_root"], m["dir"]), log=log, extra=TRAM_ARGS)
+        except RuntimeError as ex:
+            log(f"tram pack failed: {ex}")
+            return {"state": "failed", "path": None, "key": None}
+        return {"state": "ready", "path": r["path"], "key": r["key"]}
 
     def wait_current(self, max_s=None):
         """/pack/wait.bin: block (this request's thread only) until the current slot has an answer for the world's
@@ -663,7 +686,11 @@ class State:
             log("WARNING: no VRChat log dir (use --vrchat-log-dir); map requests from the world disabled")
             return
         log(f"watching VRChat logs in {d}")
-        for line in logwatch.LogTailer(d).lines(stop):
+        tailer = logwatch.MultiTailer(d) if getattr(self.args, "follow_all_logs", False) else logwatch.LogTailer(d)
+        for line in tailer.lines(stop):
+            if line.startswith("__OPENED__"):
+                log("following another log → " + line.split(" ", 1)[1])
+                continue
             if line.startswith("__ROTATED__"):
                 log("log rotated → " + line.split(" ", 1)[1])
                 with self.lock:                             # new VRChat session: forget world
@@ -734,8 +761,13 @@ def make_handler(state):
                 if self.command != "HEAD":
                     self.wfile.write(data)
                 return
-            if path in ("/pack/current.bin", "/pack/next.bin", "/pack/models.bin", "/pack/previews.bin", "/pack/hologram.bin"):
+            if path in ("/pack/current.bin", "/pack/next.bin", "/pack/models.bin", "/pack/previews.bin", "/pack/hologram.bin",
+                        "/pack/tram.bin"):
                 s = None
+                if path == "/pack/tram.bin":                  # built outside the lock; 404 when valve/c0a0 is not installed
+                    s = state.tram_slot()
+                    if s["state"] == "missing":
+                        return self._send(404, "no c0a0 tram (Half-Life not installed or not allowed)\n")
                 if path == "/pack/previews.bin":              # the WC3 lobby's map previews (built on first use,
                     with state.lock:                          # outside the lock: ~3 s for 150 maps)
                         ent = state.index.get(war3.MOD)
@@ -942,6 +974,7 @@ def main(argv=None):
     ap.add_argument("--mods", help="with --game-root: comma list of mods to allow (default: all present)")
     ap.add_argument("--steam-root", help="Steam install dir (default: auto-detect)")
     ap.add_argument("--vrchat-log-dir", default=logwatch.default_log_dir())
+    ap.add_argument("--follow-all-logs", action="store_true", help=argparse.SUPPRESS)  # tests only: two VRChat clients, follow every log
     ap.add_argument("--port", default="auto",
                     help="'auto' (default): first free of " + ",".join(map(str, PORT_CANDIDATES)) + "; or a fixed port")
     ap.add_argument("--port-candidates", help=argparse.SUPPRESS)       # tests only: replaces PORT_CANDIDATES
@@ -1007,6 +1040,7 @@ def main(argv=None):
     log(f"cache:     {a.cache_dir}")
     st = State(a)
     st.port = port
+    st.conv = conv
     st.mconv = (models.PrebuiltModels(a.prebuilt_dir) if a.prebuilt_dir
                 else models.ModelBuilder(a.model_converter, a.models_cmd, timeout=a.build_timeout))
     log(f"models:    {st.mconv.converter} version={st.mconv.version}")
