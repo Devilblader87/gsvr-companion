@@ -188,7 +188,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 18, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
+PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 19, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
 
 
 def version_for_mod(mod):
@@ -377,6 +377,36 @@ FX_TEXELS = 1024 * 1536          # SPR2 atlas budget (texels at level 0; 5.25 by
 # (map_gib_models) up to GIB_MAX_MODELS.
 GIB_MODELS = ("hgibs", "agibs", "germangibs", "glassgibs", "woodgibs", "metalplategibs", "cindergibs", "ceilinggibs",
               "computergibs", "fleshgibs", "rockgibs")
+
+# Stand-ins for models the game code names but a normal install may lack or that cannot be read (maintainer decision 2026-11-10:
+# a stand-in from the player's OWN install, no foreign files, no in-game hint). The original file always wins; only when
+# load_mdl() finds no readable file does the stand-in step in: name -> (stand-in model, uniform scale, where).
+#   where "pack":    the stand-in .mdl is baked under the ORIGINAL name (scaled), so the runtime finds the name as usual.
+#   where "runtime": the stand-in is a row of the pack anyway at scale 1; nothing is duplicated, the runtime falls back to it by name
+#                    (GsvrHlMonsters.PackMonsterOf, GsvrHlGibs.ModelOf, the item world mesh id).
+# pit_worm.mdl (COFPitWorm, monster_pitworm): Steam Opposing Force ships only pit_worm_up.mdl (the 578 u stationary boss, no walk /
+#   run activities); CBigMomma's big_mom.mdl has the same 32 x 64 spawn hull and the walk / run / melee activities the schedules use.
+# baby_voltigore.mdl: the original is voltigore.mdl at exactly 1/3 (vertex extents 60 x 42 x 32.8 vs 180 x 127 x 98.5, same 16 sequences).
+# cine3-scientist.mdl (CCine3Scientist): no Steam install ships any cine3-scientist; the scientist carries the same body.
+# vgibs.mdl (COFVoltigore / CGib, 9 pieces): the alien gibs (4 pieces, bodies past 3 wrap at run time).
+# spore_ammo.mdl (CSporeAmmo, ammo_spore): spore.mdl, the spore model of the spore launcher's CSpore.
+MODEL_STANDINS = {
+    "pit_worm": ("big_mom", 1.0, "runtime"),
+    "baby_voltigore": ("voltigore", 1.0 / 3.0, "pack"),
+    "cine3-scientist": ("scientist", 1.0, "runtime"),
+    "vgibs": ("agibs", 1.0, "runtime"),
+    "spore_ammo": ("spore", 1.0, "pack"),
+}
+
+
+def standin_of(name):
+    """-> (stand-in model name, scale, where) for a model name (with or without models/ and .mdl), None when it has none."""
+    n = name.lower()
+    if n.startswith("models/"):
+        n = n[7:]
+    if n.endswith(".mdl"):
+        n = n[:-4]
+    return MODEL_STANDINS.get(n)
 GIB_MATERIAL = GIB_MODELS[3:]   # the CBreakable material models only (the cstrike pack: no monsters, so no human / alien gibs)
 GIB_OPTIONAL = ("germangibs",)
 GIB_MAX_MODELS = 40
@@ -774,6 +804,7 @@ MONSTERS = (
     ("cine-scientist", (), ("*",), 0),
     ("cine2-scientist", (), ("*",), 0),
     ("cine2_slave", (), ("*",), 0),
+    ("cine3-scientist", (), ("*",), 0),       # CCine3Scientist; no Steam install ships it: MODEL_STANDINS, the runtime draws the scientist
     # bloater: registered in this build (custom Sven maps), idle / move / death from MON_ACTS
     ("floater", (), (), 0),
     ("roach", (), (), 0),                                      # CRoach (monster_cockroach): idle / walk / eat activities
@@ -917,7 +948,10 @@ PROFILES["svencoop"] = dict(PROFILES["valve"], weapons=SVEN_WEAPONS, view_seqs=S
 # v_ / p_ / w_penguin.mdl rows are not in OF_WEAPONS yet (sound names unverified) - add (60, "penguin", ...) when packing them.
 # Sounds: the OF files under gearbox/sound/weapons (names listed by tools/modelpack.py's author from the install; which one is fire / fire2 /
 # special is [inf], as for Sven).
-OF_WEAPONS = list(VALVE_WEAPONS) + [r for r in SVEN_WEAPONS if r[0] in (32, 35, 39, 40, 42, 43, 44, 48, 50, 52)] + [
+OF_WEAPONS = list(VALVE_WEAPONS) + [r for r in SVEN_WEAPONS if r[0] in (32, 35, 39, 40, 42, 43, 44, 48, 50)] + [
+    # 52 = ammo_spore (CSporeAmmo::Precache models/spore_ammo.mdl): the resting pose of CSporeAmmo::Spawn / Idling is sequence 5
+    # (idle1, after spawndn) with body 1 (the spore sack shown); spore.mdl stands in when the file is missing (MODEL_STANDINS)
+    (52, "spore", "item", {"fire": W + "spore_ammo.wav"}, {"w": "spore_ammo.mdl", "w_pose": (5, {1: 1})}),
     (34, "bgrap", "gun", {"fire": W + "bgrapple_fire.wav", "fire2": W + "bgrapple_pull.wav", "special1": W + "bgrapple_impact.wav",
                           "special2": W + "bgrapple_release.wav", "special3": W + "bgrapple_wait.wav"}, {}),
     (59, "knife", "knife", {"fire": W + "knife1.wav", "fire2": W + "knife2.wav", "special1": W + "knife_hit_flesh1.wav",
@@ -945,7 +979,7 @@ OF_MONSTERS = tuple(MONSTERS) + (
     ("baby_voltigore", (65,), (), 0, 12000),
     ("geneworm", (), (), 0, 30000),
     ("pit_worm_up", (), (), 0, 30000),
-    ("pit_worm", (), (), 0, 30000),           # not in every install (this one lacks it): the runtime then keeps its Big Momma stand-in
+    ("pit_worm", (), (), 0, 30000),           # not in the Steam install: MODEL_STANDINS, the runtime then draws big_mom
     ("loader", (), (), 0, 20000),
     ("skeleton", (), (), 0),
     ("blkop_apache", (), (), 0, 30000),
@@ -958,6 +992,8 @@ OF_PLAYER_SOUNDS = VALVE_PLAYER_SOUNDS + ["items/smallmedkit1.wav", "ctf/pow_bac
                                            "weapons/pwrench_miss2.wav"]       # EV_PipeWrench second miss layer (GsvrHlWeapons.OfWrenchSwing)
 PROFILES["gearbox"] = dict(PROFILES["valve"], script_seqs=SCRIPT_SEQS, weapons=OF_WEAPONS, view_seqs=SVEN_VIEW_SEQS, monsters=OF_MONSTERS,
                            player_sounds=OF_PLAYER_SOUNDS, default_players=(),
+                           # + vgibs (COFVoltigore::GibMonster / CGib: models/vgibs.mdl, 9 pieces) after the CGib models
+                           gib_models=GIB_MODELS[:3] + ("vgibs",) + GIB_MODELS[3:],
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
                            mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
                            # studio-prop skins at most 128 px: the pack sits at the 99 MB guard (the props push the tail sprite fexplo1 out)
@@ -1453,9 +1489,18 @@ class Builder:
             self.missing.append(f"models/{name['p']}")
         # W — world model
         m = self.load_mdl(name["w"]) if name["w"] else None
+        wseq, wbody = files.get("w_pose", (0, None))     # the original's resting pose (sequence, {bodypart: model}); stand-ins use 0
+        if m is None and name["w"] and standin_of(name["w"]):
+            st, sc, _where = standin_of(name["w"])
+            m = self.load_mdl(st + ".mdl")
+            if m is not None:
+                m.scale_uniform(sc)
+                wseq, wbody = 0, None
+                log(f"{name['w']}: not in the install, stand-in {st}.mdl")
         if m is not None:
             tk = self.tex_keys(m, False)
-            w["meshW"] = self.add(make_mesh(1, wid, [collect(m.bake(0, 0), tk)], name["w"][:-4]))
+            w["meshW"] = self.add(make_mesh(1, wid, [collect(m.bake(min(wseq, len(m.sequences) - 1), 0, bodygroups=wbody), tk)],
+                                            name["w"][:-4]))
         elif name["w"]:
             self.missing.append(f"models/{name['w']}")
         # V — view model, 4 key poses + sound events
@@ -2289,6 +2334,15 @@ class Builder:
         kept sequence (MON_ACTS + the extras, ≤ MON_PER_ACT per activity, plus named ones), adaptive like VAN1 but on
         bone positions. Records: activity, weight, speed, key times, events (see the MON1 layout in the header)."""
         m = self.load_mdl(name + ".mdl")
+        if (m is None or not m.sequences) and standin_of(name):
+            st, sc, where = standin_of(name)
+            if where == "runtime":
+                log(f"monster {name}: not in the install, the runtime draws its stand-in {st}")
+                return
+            m = self.load_mdl(st + ".mdl")
+            if m is not None:
+                m.scale_uniform(sc)
+                log(f"monster {name}: not in the install, stand-in {st}.mdl x {sc:.3f}")
         if m is None or not m.sequences:
             self.missing.append(f"models/{name}.mdl")
             return
@@ -2511,7 +2565,9 @@ class Builder:
             return 0
         m = self.load_mdl(name + ".mdl")
         if m is None or not m.sequences or not m.bodyparts or not m.bodyparts[0]["models"]:
-            if name not in GIB_OPTIONAL:
+            if standin_of(name):
+                log(f"gib model {name}: not in the install, the runtime uses its stand-in {standin_of(name)[0]}")
+            elif name not in GIB_OPTIONAL:
                 self.missing.append(f"models/{name}.mdl")
             return 0
         if texel_budget is not None:

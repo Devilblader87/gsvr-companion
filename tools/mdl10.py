@@ -203,6 +203,32 @@ class Mdl:
             self.skins.append(list(struct.unpack_from(f"<{tnskinref}h", tsrc, tskinidx + f * tnskinref * 2)))
         self._groupdata = {}
 
+    def scale_uniform(self, s):
+        """Scales the whole model by s in place (tools/modelpack.py MODEL_STANDINS: a stand-in drawn at another monster's size).
+        Bone translations (rest value + anim scale of the x/y/z channels), vertices, sequence linear movement, attachment offsets,
+        translation bone controllers and the header boxes scale; rotations / normals / uvs stay. Every pose = the original pose
+        scaled about the model origin, so baked meshes, key times, anim speed and distance all follow."""
+        if s == 1.0:
+            return self
+        for b in self.bones:
+            b["value"] = tuple(v * s if j < 3 else v for j, v in enumerate(b["value"]))
+            b["scale"] = tuple(v * s if j < 3 else v for j, v in enumerate(b["scale"]))
+        for bp in self.bodyparts:
+            for mo in bp["models"]:
+                mo["verts"] = [(x * s, y * s, z * s) for x, y, z in mo["verts"]]
+        for sq in self.sequences:
+            sq["linear"] = tuple(c * s for c in sq["linear"])
+        for a in self.attachments:
+            a["org"] = tuple(c * s for c in a["org"])
+        for c in self.controllers:
+            if c["type"] & 7:                       # STUDIO_X / Y / Z: a translation range in units
+                c["start"] *= s
+                c["end"] *= s
+        self.eye = tuple(c * s for c in self.eye)
+        self.hullmin, self.hullmax = tuple(c * s for c in self.hullmin), tuple(c * s for c in self.hullmax)
+        self.bbmin, self.bbmax = tuple(c * s for c in self.bbmin), tuple(c * s for c in self.bbmax)
+        return self
+
     def _read_model(self, mo):
         d = self.data
         name = _cstr(d[mo:mo + 64])
