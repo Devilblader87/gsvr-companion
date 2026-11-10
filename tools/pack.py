@@ -28,7 +28,8 @@
 #   float32 uv0 [V*2]   texture space in *tiles*: (s/texW, t/texH) — unbounded, the shader takes frac()
 #   float32 uv1 [V*2]   lightmap atlas UV in [0,1] (u = column / LW, v = row / LH, row 0 = first row in the data)
 #   float32 rect[V*4]   atlas rect of the face's texture (x, y, w, h) normalised to [0,1]; final diffuse UV =
-#                       rect.xy + frac(uv0) * rect.zw.  Each texture has an 8-px wrapped gutter (1 px at mip 3)
+#                       rect.xy + frac(uv0) * rect.zw. GSV3: rect.z < 0 (|z| = width) flags a SURF_CONVEYOR face (texture
+#                       "scroll*") of a brush entity; the shader scrolls it by the entity's _GsScroll (func_conveyor).  Each texture has an 8-px wrapped gutter (1 px at mip 3)
 #   int32   idx [I]
 #   uint8   atlas RGBA32, mip levels 0..M-1 concatenated (= Unity's raw layout for Texture2D(AW,AH,RGBA32,M,…))
 #                       row 0 of each level is v = 0. Alpha 0 = cut-out ('{' textures, palette index 255)
@@ -270,6 +271,13 @@ def load_textures(bsp, used, game_root, mod, log):
         src[kind] += 1
         out[mi] = tex
     return out, src
+
+
+def scroll_face(name):
+    """GoldSrc engine SURF_CONVEYOR: a texture whose name starts with "scroll" (case-insensitive) scrolls with the
+    owning entity's conveyor speed. Brush-entity faces of such textures carry rect.z < 0 in the GSV3 rect stream
+    (readers that ignore it just see a non-scrolling texture only if they abs() the width; GsvrWorld* shaders do)."""
+    return name[:6].lower() == "scroll"
 
 
 def build_atlas(texs, max_tex, log):
@@ -1191,6 +1199,8 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
             s_, t_, miptex, _ = b.texinfo[f[4]]
             _n, tw, th, _e = b.textures[miptex]
             r = rects[miptex]
+            if grp != "W" and scroll_face(_n):
+                r = [r[0], r[1], -r[2], r[3]]            # SURF_CONVEYOR face of a brush entity: negative rect.z (shader scroll)
             base = len(pos) // 3 - first_v
             poly = b.face_polygon(f)
             for x, y, z in poly:

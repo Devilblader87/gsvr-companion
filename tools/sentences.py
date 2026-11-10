@@ -49,7 +49,10 @@ TALK_PREFIX = {
     "monster_barney": "BA", "monster_otis": "OT", "monster_human_grunt": "HG",
     "monster_drillsergeant": "DR",
     "monster_human_grunt_ally": "FG", "monster_human_medic_ally": "FG", "monster_human_torch_ally": "FG",
+    # the OF repel points drop an ally / medic / torch (CHGruntAllyRepel, COFMedicAllyRepel, COFTorchAllyRepel::RepelUse)
+    "monster_grunt_ally_repel": "FG", "monster_medic_ally_repel": "FG", "monster_torch_ally_repel": "FG",
 }
+MEDIC_CLASSES = ("monster_human_medic_ally", "monster_medic_ally_repel")
 GRUNTS = ("HG", "FG")
 SLAVE_CLASSES = ("monster_alien_slave",)     # CISlave::AlertSound / IdleSound: SLV_ALERT (pri 2), SLV_IDLE (pri 3)
 TALK2 = ("OK", "WAIT", "STOP", "POK", "HELLO", "SCARED")
@@ -58,6 +61,15 @@ GRUNT2 = ("ALERT", "MONST", "GREN", "COVER")
 TALK3 = ("IDLE", "QUESTION", "ANSWER", "STARE", "SMELL", "WOUND", "MORTAL", "FEAR", "PLFEAR", "SCREAM", "HEAL",
          "PHELLO", "PIDLE", "PQUEST")
 GRUNT3 = ("THROW", "CHARGE", "TAUNT", "CHECK", "QUEST", "IDLE", "CLEAR", "ANSWER")
+# The OF allies (COFAllyMonster hierarchy: grunt ally, medic, torch) also speak the talk-monster follow / chatter groups of their
+# TalkInit slots [obs CHGruntAlly::TalkInit m_szGrp: FG_ANSWER/QUESTION/IDLE/STARE/OK/WAIT/STOP/SCARED/HELLO/PQUEST/SMELL/WOUND/MORTAL,
+# !FG_CUREA-C] and the Barney-style combat reactions (FG_SHOT / MAD / KILL / ATTACK, CTalkMonster::TakeDamage and the dead-enemy line).
+# Groups that sentences.txt does not define (FG_STARE, FG_SMELL, FG_FEAR ...) simply select nothing. The medic's own heal lines are the
+# literal sentences MG_HEAL / MG_NOTHEAL [obs COFMedicAlly::HealerUse]; its pMedicSentences table (pending index 3 / 5) is the FG_ table
+# of the grunt ally (FG_GREN / ALERT / MONSTER / COVER / THROW / CHARGE / TAUNT, read from opfor.so .data).
+ALLY2 = ("OK", "WAIT", "STOP", "POK", "HELLO", "SCARED", "SHOT", "MAD", "KILL", "ATTACK")
+ALLY3 = ("QUESTION", "STARE", "SMELL", "WOUND", "MORTAL", "PQUEST", "CURE")
+MEDIC_LINES = ("MG_HEAL", "MG_NOTHEAL")
 
 
 def stem(name):
@@ -214,16 +226,25 @@ def wanted(ents):
         if p in GRUNTS:
             for g in GRUNT2:
                 add(f"{p}_{g}", 2)
+            if p == "FG":
+                for g in ALLY2:
+                    add(f"{p}_{g}", 2)
         else:
             for g in TALK2:
                 add(f"{p}_{g}", 2)
             if p in ("BA", "OT", "DR"):               # CDrillSergeant::TalkInit shares Barney's SHOT / MAD / KILL / ATTACK
                 for g in BARNEY2:
                     add(f"{p}_{g}", 2)
+    if any(c in MEDIC_CLASSES for c in classes):
+        for g in MEDIC_LINES:
+            add(g, 2)
     for p in prefixes:
         if p in GRUNTS:
             for g in GRUNT3:
                 add(f"{p}_{g}", 3)
+            if p == "FG":
+                for g in ALLY3:
+                    add(f"{p}_{g}", 3)
         else:
             for g in TALK3:
                 add(f"{p}_{g}", 3)

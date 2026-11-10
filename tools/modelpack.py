@@ -98,6 +98,10 @@
 #     float keys [MK]    key time in s from the anim start (= frame / fps); key k = pose poseFirst + k
 #     int32 event [ME*4] 0 frame (time = frame / fps) 1 event id (1003 fire target, 1004/1008 sound, 2001 body drop,
 #                        monster-specific 1..20 …) 2 optOff 3 optLen (options string, e.g. the sound name)
+#   Chunk "MLM1" (right after MON1; scriptanim2) = int32 MA (must equal MON1's animCount), float32 [MA*3] per MON1 anim record: the sequence's
+#     linearmovement vector (x, y, z, GoldSrc units per cycle, model frame; anim2[3] is its length). The loader uses it for the post-script
+#     root move (CBaseMonster::CineCleanup moves the actor to bone 0 at the end of the play: the vector rotated by the actor's yaw);
+#     a pack without MLM1 (older, PACK_REV below cstrike 5 / valve 11 / svencoop 8 / gearbox 15 / bshift 9) falls back to anim2[3] along the yaw.
 #   Chunk "SKL1" = skinned monsters (default; --no-skel writes the old baked MON1 only). The MON1 tables stay (records, key times,
 #   events) but every part mesh has ONE pose (the reference = key 0 of the monster's first record) and a record's poses
 #   poseFirst.. are rows of a float bone texture (tools/studioskel.py: per key and bone a quaternion + origin texel, per controller
@@ -184,7 +188,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 4, "valve": 9, "svencoop": 7, "gearbox": 14, "bshift": 8, "ricochet": 4, "dmc": 2}   # fix-of0a0 gearbox 14 / valve 9 / bshift 8: monster_generic models no simulated monster uses (of0a0 mini_osprey / mini_apache / intro_*) join the MON1 studio props; integ12 merge: bshift 7 (both integ11 [6] and t3-studio [6] bumped bshift from 5, the merged pack differs from both). integ11 part ricochet 4: disc.mdl / disc_hard.mdl thrown disc, no v_ rig for the disc (hand holds p_disc); bshift 6: weapons 8..11 + ammo 29/30 back in the pack (RPG was invisible on Blue Shift); valve 7 / gearbox 12 / bshift 5: GSX1 HUD1 chunk (HL client HUD sprites, tools/hudpack.py) + common/wpn_hudon, wpn_moveselect, wpn_hudoff, player/geiger1-4 sounds; bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard) || t3-studio part T3 studiobones +1 cstrike/valve/svencoop/gearbox/bshift: skinned monsters (GSX1 SKL1 bone texture, one-pose part meshes, all keys / blend poses / controller slots / skins); valve 7 / gearbox 12 / bshift 5: GSX1 HUD1 chunk (HL client HUD sprites, tools/hudpack.py) + common/wpn_hudon, wpn_moveselect, wpn_hudoff, player/geiger1-4 sounds; bshift 4: entity lump read through bsp30.lump_dir (Blue Shift maps store entities/planes swapped, map scans saw nothing); gearbox 10: fexplo stored at half size (FX_HALF) so the 4 OF sprites fit the SPR2 budget; gate-hl2 merge: +1 valve/svencoop/gearbox/bshift (HL sound list additions: squeek, fvox, bodysplat). 0.9.25 dmview chrome UVs bumped every mod; gearbox 5: +player/hud_nightvision.wav (OF night vision); valve/svencoop/gearbox: +1 flashlight1.wav (T3 flashlight); svencoop/gearbox base 2 = node-graph victory anims; valve/gearbox +1 MON1 studio props (map_prop_models); valve/bshift/gearbox +1 FX_SPRITES_MOD (bigspit, mommaspit, gargeye1, tinyspit, exit1, tongue; gearbox disp_ring / spore_exp_* are over the 99 MB guard)
+PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 18, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
 
 
 def version_for_mod(mod):
@@ -554,7 +558,13 @@ VIEW_SEQ_EXTRA = {
     "pipe_wrench": tuple((VIEW_SEQ0 + s, s, lab, 5) for s, lab in ((5, "attack1hit"), (6, "attack1miss"), (7, "attack2hit"), (8, "attack2miss"),
                                                                   (9, "attack3hit"), (10, "attack3miss"), (12, "attackbighit"), (13, "attackbigmiss"))),
     "knife": ((VIEW_SEQ0 + 6, 6, "attack2hit", 5), (VIEW_SEQ0 + 8, 8, "attack3hit", 5)),     # OF CKnife::Swing: a hit alternates 6 / 8
+    # OF M40A1: EV_FireSniper plays 2 (fire) / 3 (firelastround, first int param 0); CSniperRifle::Reload anim 4 (empty, = the generic reload slot) /
+    # 6 (reload3, partial clip); WeaponIdle sends 5 (reload2) 2.324 s after an empty-clip reload started
+    "m40a1": ((5, 3, "firelastround", 4), (VIEW_SEQ0 + 5, 5, "reload2", 8), (VIEW_SEQ0 + 6, 6, "reload3", 12)),
 }
+# View anims (besides reload / draw / attack = 0 / 1 / 2) whose v_ sound events (model event 5004) are baked into the event table under that
+# anim id: the M40A1 bolt2 on the last-round shot (5) and the second reload stage (100 + 5). Runtime: GsvrHlWeapons.ScheduleViewEvents.
+VIEW_SEQ_EVENTS = {"m40a1": (5, VIEW_SEQ0 + 5)}
 VAN_TOL = 0.3
 DEATH_FRAMES = 12                # per death sequence: 11 falling frames + the end pose (4 looked like a jump into a sitting pose, maintainer 2026-10-24)
 FEET_STAND, FEET_CROUCH = 36.0, 18.0   # player origin above the feet (hull −36..36 standing, −18..18 ducked)
@@ -733,6 +743,13 @@ SCRIPT_SEQS = {
     "scientist": ('beatdoor', 'buysoda', 'c1a0_catwalk', 'c1a0_catwalkidle', 'c1a4_dying_speech', 'c1a4_wounded_idle', 'ceiling_dangle', 'checktie', 'coffee', 'console', 'converse1', 'converse2', 'cowering_in_corner', 'cprscientist', 'cprscientistrevive', 'crouch', 'deskidle', 'divewindow', 'fall_elevator', 'flinch', 'franticbutton', 'gluonshow', 'handrail', 'hanging_idle', 'haulscientist', 'headcrabbed', 'ickyjump_sci', 'idle1', 'no', 'onguard', 'panic1', 'pause', 'pondering', 'pondering2', 'pondering3', 'portal', 'pulldoor', 'push_button', 'quicklook', 'retina', 'rocketcrawl', 'seeya', 'sitidle', 'sitlookleft', 'sitlookright', 'sitscared', 'sitting2', 'sitting3', 'sitstand', 'studycart', 'tentacle_grab', 'tieshoe', 'ventpull1', 'ventpull2', 'ventpullidle1', 'ventpullidle2', 'wave', 'writeboard', 'yes'),
     "zombie": ('attack1', 'attack2', 'bust_window', 'eatbody', 'eatbodystand', 'eatbodytable', 'freak', 'freakdie', 'haulzombie', 'idle1', 'kick_punch_wall', 'pause', 'ripdoor', 'slideidle', 'slidewall', 'soda', 'vent_c1a3', 'vent_zidle', 'ventclimb', 'ventclimbidle'),
 }
+# valve-only additions found by tools/scriptaudit.py (every scripted_sequence / aiscripted_sequence of the valve c*.bsp maps whose
+# m_iszPlay / m_iszIdle exists in the actor's .mdl but was not packed; docs/scriptaudit_c1a0.md). Kept out of SCRIPT_SEQS so the
+# bshift / gearbox packs (which share the table and sit near their size limits) do not change.
+#   c1a1 'cut' (the two Barneys at the laser): laser_top / laser_bottom with the idle laseridle (m_fMoveTo 4, SF 8)
+SCRIPT_SEQS_VALVE = {"barney": ("laser_top", "laser_bottom", "laseridle")}
+SCRIPT_SEQS_VALVE_ALL = {k: SCRIPT_SEQS.get(k, ()) + tuple(n for n in SCRIPT_SEQS_VALVE.get(k, ()) if n not in SCRIPT_SEQS.get(k, ()))
+                         for k in set(SCRIPT_SEQS) | set(SCRIPT_SEQS_VALVE)}
 MONSTERS = (
     # scientist: body −1 → RandomLong(0,3) = one of 4 heads; body 2 → skin 1 [obs CScientist::Spawn 0x110980];
     # heal: ACT_ARM (pull_needle, event 2 → body%4 + 4 = needle) / MELEE1 give_shot / DISARM [obs §2.2]
@@ -744,7 +761,8 @@ MONSTERS = (
     ("houndeye", (47, 18, 19, 8, 7), (), 0),
     ("islave", (), (), 0),
     # hgrunt: RANGE_ATTACK1 = named standing_mp5 / crouching_mp5 (SetActivity by weapon bit [obs 0xc5690])
-    ("hgrunt", (47, 62, 21, 22, 23, 32, 17, 48, 49, 60, 51, 10, 40, 41, 42, 43), ("standing_mp5", "crouching_mp5"), 0),
+    # + 65 victorydance (slGruntVictoryDance PLAY_SEQUENCE ACT_VICTORY_DANCE) and 5 repel_shoot (slGruntRepelAttack ACT_FLY), gruntsched
+    ("hgrunt", (47, 62, 21, 22, 23, 32, 17, 48, 49, 60, 51, 10, 40, 41, 42, 43, 65, 5), ("standing_mp5", "crouching_mp5"), 0),
     ("bullsquid", (59, 35, 45, 54, 7), (), 0),
     # barnacle: the grab is sequence "attack1" by name [obs CBarnacle BarnacleThink], idle tongue = bone controller 0
     ("barnacle", (35,), ("attack1",), 0),
@@ -789,7 +807,7 @@ PROFILES = {
                   classes=VALVE_PLAYER_CLASSES, anim_ext=VALVE_ANIM_EXT, class_anims=VALVE_CLASS_ANIMS,
                   deaths=VALVE_DEATHS, death_alias=((A_CDEATH, A_DEATH),), player_models=VALVE_PLAYER_MODELS,
                   default_players=VALVE_DEFAULT_PLAYERS, player_sounds=VALVE_PLAYER_SOUNDS, sprites=(),
-                  monsters=MONSTERS, script_seqs=SCRIPT_SEQS, props=True,
+                  monsters=MONSTERS, script_seqs=SCRIPT_SEQS_VALVE_ALL, props=True,
                   # arms / hands of the v_ models: HL HEV glove set, Sven soldier_arm / soldier_hand, medkit ld_hev_*,
                   # displacer hand.BMP / skin.BMP; hand_tex = the hand proper (glove, not sleeve) for the grip fallback
                   arm_tex=("glove", "sleeve", "knuckle", "handpak", "forearm", "soldier_arm", "soldier_hand", "hev_arm",
@@ -895,8 +913,8 @@ PROFILES["svencoop"] = dict(PROFILES["valve"], weapons=SVEN_WEAPONS, view_seqs=S
 # fallback find() uses for files OF does not repeat: zombie, houndeye, bullsquid, hgrunt ...) plus the OF weapons and monsters.
 # Weapon ids = the runtime's (GsvrHlWeaponDb): HL 1..15 + items 16..29, the Sven block that OF shares (32 pipe wrench, 35 desert
 # eagle, 39 M249 = "saw", 40 sniper = "m40a1", 42 displacer, 43 spore launcher, 44 shock rifle, items 48 / 50 / 52), 34 barnacle
-# grapple and 59 knife (Knife = 59). The penguin thrower is id 26 in the runtime, which in the HL table is the .357 ammo box: the
-# box keeps the id (OF maps place ammo_357 too), the penguin (v_ / p_ / w_penguin.mdl) stays unpacked until its id moves.
+# grapple and 59 knife (Knife = 59). The penguin thrower is id 60 in the runtime (it was 26, the .357 ammo box model id, until 2026-11-10); its
+# v_ / p_ / w_penguin.mdl rows are not in OF_WEAPONS yet (sound names unverified) - add (60, "penguin", ...) when packing them.
 # Sounds: the OF files under gearbox/sound/weapons (names listed by tools/modelpack.py's author from the install; which one is fire / fire2 /
 # special is [inf], as for Sven).
 OF_WEAPONS = list(VALVE_WEAPONS) + [r for r in SVEN_WEAPONS if r[0] in (32, 35, 39, 40, 42, 43, 44, 48, 50, 52)] + [
@@ -907,9 +925,11 @@ OF_WEAPONS = list(VALVE_WEAPONS) + [r for r in SVEN_WEAPONS if r[0] in (32, 35, 
 ]
 OF_MONSTERS = tuple(MONSTERS) + (
     # OF grunt family: the Sven-shared rows (SVEN_MONSTERS) plus the torch ally and the cleansuit scientist; sequence names as in Sven's table
-    ("hgrunt_opfor", (47, 32, 48, 49), ("crouching_saw", "deadstomach", "deadside", "deadsitting", "dead_on_back"), 0),
-    ("hgrunt_medic", (47, 33, 34, 48, 49), ("deadstomach", "deadside", "deadsitting"), 0),
-    ("hgrunt_torch", (47, 32, 48, 49), ("deadstomach", "deadside", "deadsitting"), 0),
+    # + allysched: 65 victorydance (slGruntAlly / MedicAlly / TorchAllyVictoryDance), 51 repel_repel (ACT_GLIDE) and 10 repel_land (ACT_LAND) of the
+    # three repel schedules, 21 advance_signal / 22 flank_signal (slGruntAllyFoundEnemy ACT_SIGNAL1, slGruntAllySignalSuppress ACT_SIGNAL2)
+    ("hgrunt_opfor", (47, 32, 48, 49, 65, 51, 10, 21, 22), ("crouching_saw", "deadstomach", "deadside", "deadsitting", "dead_on_back"), 0),
+    ("hgrunt_medic", (47, 33, 34, 48, 49, 65, 51, 10, 21, 22), ("deadstomach", "deadside", "deadsitting"), 0),
+    ("hgrunt_torch", (47, 32, 48, 49, 65, 51, 10, 21, 22), ("deadstomach", "deadside", "deadsitting"), 0),
     ("otis", (32, 33, 34), ("lying_on_back", "lying_on_side", "lying_on_stomach"), 0),
     ("gonome", (65,), ("attack2",), 0),                              # 65 = slGonomeVictoryDance's ACT_VICTORY_DANCE
     ("zombie_barney", (), (), 0),
@@ -936,7 +956,7 @@ OF_PLAYER_SOUNDS = VALVE_PLAYER_SOUNDS + ["items/smallmedkit1.wav", "ctf/pow_bac
                                            "ctf/pow_big_jump.wav", "ctf/itemthrow.wav",       # CTF powerup cues (charge loops, long jump, throw)
                                            "player/hud_nightvision.wav",      # night vision toggle (GsvrHlFlashlight, gearbox; items/nightvision1/2.wav are not in the install)
                                            "weapons/pwrench_miss2.wav"]       # EV_PipeWrench second miss layer (GsvrHlWeapons.OfWrenchSwing)
-PROFILES["gearbox"] = dict(PROFILES["valve"], weapons=OF_WEAPONS, view_seqs=SVEN_VIEW_SEQS, monsters=OF_MONSTERS,
+PROFILES["gearbox"] = dict(PROFILES["valve"], script_seqs=SCRIPT_SEQS, weapons=OF_WEAPONS, view_seqs=SVEN_VIEW_SEQS, monsters=OF_MONSTERS,
                            player_sounds=OF_PLAYER_SOUNDS, default_players=(),
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
                            mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
@@ -953,7 +973,7 @@ PROFILES["gearbox"] = dict(PROFILES["valve"], weapons=OF_WEAPONS, view_seqs=SVEN
 # non-CS mods (the unrestricted set would be over the 100 MB pack limit).
 BS_WEAPONS = list(VALVE_WEAPONS)
 BS_MONSTERS = tuple(MONSTERS) + tuple(r for r in OF_MONSTERS if r[0] == "otis")
-PROFILES["bshift"] = dict(PROFILES["valve"], weapons=BS_WEAPONS, monsters=BS_MONSTERS, default_players=(),
+PROFILES["bshift"] = dict(PROFILES["valve"], script_seqs=SCRIPT_SEQS, weapons=BS_WEAPONS, monsters=BS_MONSTERS, default_players=(),
                           mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
                           prop_tex_max=128)
 
@@ -1187,6 +1207,44 @@ def seq_pick(mdl, names):
         if n in low:
             return low.index(n)
     return None
+
+
+def monster_seq_plan(m, extra_acts, extra_names, script_names=()):
+    """The MON1 sequence choice of Builder.monster for one model (pure, also used by tools/scriptaudit.py): MON_ACTS + extra_acts
+    (≤ MON_PER_ACT per activity, heaviest first), then extra_names + script_names by label (case-insensitive like the
+    original's LookupSequence). -> (chosen sequence indices in pack order, scripted indices (MON_KEYS_SCRIPT keys), names not
+    in the model). A sequence whose anim data another chosen one already uses is skipped (houndeye ships "run" three times
+    with one anim), so its label is not in the pack."""
+    chosen, data_seen = [], set()
+
+    def take(i):
+        sq = m.sequences[i]
+        src = (sq["seqgroup"], sq["animindex"])
+        if i in chosen or src in data_seen:
+            return
+        chosen.append(i)
+        data_seen.add(src)
+    scripted, missing = set(), []
+    # legacy cine props select their pose by the original .mdl sequence index (the map's `impulse` key), so keep
+    # every sequence; the MON1 anim record carries that index (GetMonsterAnimSequence).
+    if len(extra_names) == 1 and extra_names[0] == "*":
+        for i in range(len(m.sequences)):
+            take(i)
+        return chosen, scripted, missing
+    for act in list(MON_ACTS) + [a for a in extra_acts if a not in MON_ACTS]:
+        cand = [i for i, s in enumerate(m.sequences) if s["activity"] == act]
+        cand.sort(key=lambda i: -m.sequences[i]["actweight"])     # stable: file order on equal weights
+        for i in cand[:MON_PER_ACT]:
+            take(i)
+    for nm in tuple(extra_names) + tuple(script_names):
+        i = seq_pick(m, (nm,))
+        if i is not None and i not in chosen and nm not in extra_names:
+            scripted.add(i)
+        if i is None:
+            missing.append(nm)
+        else:
+            take(i)
+    return chosen, scripted, missing
 
 
 def pick_keys(P, n, kmax, tol):
@@ -2000,6 +2058,17 @@ class Builder:
                     if _a == 1:
                         w["sounds"][K["draw"]] = s
                         break
+        # extra view anims with their own sound events (VIEW_SEQ_EVENTS), only when the sequence was baked above
+        if self.view_anims and self.mod != "cstrike":
+            for anim, si, label, _kmax in VIEW_SEQ_EXTRA.get(stem, ()):
+                if anim not in VIEW_SEQ_EVENTS.get(stem, ()) or si >= len(m.sequences) or m.sequences[si]["label"].lower() != label:
+                    continue
+                sq = m.sequences[si]
+                fps = sq["fps"] if sq["fps"] > 0 else 30.0
+                for fr, opt in sound_events(sq):
+                    s = self.sound(opt)
+                    if s >= 0:
+                        self.events.append((anim, int(round(fr / fps * 1000)), s, fr))
 
     # ---- player models (v2) ----
     def player(self, name, team):
@@ -2223,40 +2292,13 @@ class Builder:
         if m is None or not m.sequences:
             self.missing.append(f"models/{name}.mdl")
             return
-        chosen, data_seen = [], set()
-
-        def take(i):
-            sq = m.sequences[i]
-            src = (sq["seqgroup"], sq["animindex"])              # houndeye ships "run" three times with one anim
-            if i in chosen or src in data_seen:
-                return
-            chosen.append(i)
-            data_seen.add(src)
-        # legacy cine props select their pose by the original .mdl sequence index (the map's `impulse` key), so keep
-        # every sequence; the MON1 anim record carries that index (GetMonsterAnimSequence).
-        all_seqs = len(extra_names) == 1 and extra_names[0] == "*"
-        scripted = set()
-        if all_seqs:
-            for i in range(len(m.sequences)):
-                take(i)
-        else:
-            for act in list(MON_ACTS) + [a for a in extra_acts if a not in MON_ACTS]:
-                cand = [i for i, s in enumerate(m.sequences) if s["activity"] == act]
-                cand.sort(key=lambda i: -m.sequences[i]["actweight"])     # stable: file order on equal weights
-                for i in cand[:MON_PER_ACT]:
-                    take(i)
-            for nm in tuple(extra_names) + tuple(self.prof.get("script_seqs", {}).get(name, ())):
-                i = seq_pick(m, (nm,))
-                if i is not None and i not in chosen and nm not in extra_names:
-                    scripted.add(i)
-                if i is None:
-                    self.missing.append(f"models/{name}.mdl sequence '{nm}'")
-                else:
-                    take(i)
+        chosen, scripted, missing = monster_seq_plan(m, extra_acts, extra_names, self.prof.get("script_seqs", {}).get(name, ()))
+        for nm in missing:
+            self.missing.append(f"models/{name}.mdl sequence '{nm}'")
         if not chosen:
             # no sequence matched an activity / name (floater.mdl: one sequence "idle1", activity 0): the game then plays
             # sequence 0 (SetActivity falls back to it). A monster with 0 anims / 0 poses fails the loader's MON1 check.
-            take(0)
+            chosen.append(0)
             log(f"monster {name}: no activity matched, keeping sequence 0 '{m.sequences[0]['label']}'")
         # monster skins may be halved under the atlas budget (like v_ textures); studio props: the profile's prop_tex_max side
         tk = self.tex_keys(m, True, tex_cap_key) if tex_cap_key else self.tex_keys(m, True)
@@ -2316,7 +2358,7 @@ class Builder:
                                     keys=len(keys), key0=len(self.mkeys), ev0=ev0, nev=len(self.mevents) - ev0,
                                     loop=sq["flags"] & 1, frames=n, seq=si, fps=fps,
                                     seconds=(n - 1) / fps if n > 1 else 0.0,
-                                    speed=lin * fps / (n - 1) if n > 1 else 0.0, dist=lin))
+                                    speed=lin * fps / (n - 1) if n > 1 else 0.0, dist=lin, linvec=tuple(sq["linear"])))
             self.mkeys.extend(f / fps for f in keys)
             npose += len(keys)
             labels.append(f"{sq['label']}:{sq['activity']}x{len(keys)}")
@@ -2380,7 +2422,7 @@ class Builder:
                                     keys=len(keys), key0=len(self.mkeys), ev0=ev0, nev=len(self.mevents) - ev0,
                                     loop=sq["flags"] & 1, frames=n, seq=si, fps=fps,
                                     seconds=(n - 1) / fps if n > 1 else 0.0,
-                                    speed=lin * fps / (n - 1) if n > 1 else 0.0, dist=lin))
+                                    speed=lin * fps / (n - 1) if n > 1 else 0.0, dist=lin, linvec=tuple(sq["linear"])))
             self.mkeys.extend(f / fps for f in keys)
             labels.append(f"{sq['label']}:{sq['activity']}x{len(keys)}{'+b' if 1 in sets else ''}")
         if npose <= 0 or len(self.manims) == anim0:
@@ -2671,6 +2713,15 @@ class Builder:
             body = struct.pack("<8i", len(self.monsters), len(self.manims), len(self.mevents), len(pt) // 6,
                                len(self.mkeys), 0, 0, 0) + b"".join(t.tobytes() for t in tabs)
             chunks.append(b"MON1" + struct.pack("<i", len(body)) + body)
+            # MLM1 (after MON1): per MON1 anim record the sequence's linearmovement vector (x, y, z in GoldSrc units per cycle, model frame):
+            # the post-script root move (CineCleanup: bone 0 at the end of the play). int32 MA, float32 [MA*3]. Older loaders skip the chunk.
+            lm = array.array("f")
+            for a in self.manims:
+                lm.extend(a["linvec"])
+            if sys.byteorder != "little":
+                lm.byteswap()
+            lbody = struct.pack("<i", len(self.manims)) + lm.tobytes()
+            chunks.append(b"MLM1" + struct.pack("<i", len(lbody)) + lbody)
             mverts = sum(len(self.meshes[r[2]].texkeys) * len(self.meshes[r[2]].poses)
                          for mo in self.monsters for r in mo["parts"] if r[2] >= 0)
             log(f"monsters: {len(self.monsters)} ({len(self.manims)} anims, {len(self.mkeys)} keys, "

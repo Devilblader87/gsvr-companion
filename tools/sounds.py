@@ -146,6 +146,21 @@ MAKER_KEYS = {"monstermaker": "monstertype", "squadmaker": "monstertype", "env_x
 # CBaseMonster generic animation events (body drop 2001 / 2002, claw miss 2010) of every monster class.
 MONSTER_COMMON = ("common/bodydrop3.wav", "common/bodydrop4.wav", "zombie/claw_miss2.wav")
 MAX_RATE = 22050
+# Model animation events that carry a sound name in their options string: CBaseMonster::HandleAnimEvent 1004 (EMIT_SOUND_DYN
+# CHAN_BODY, vol 1, attn 2.0, pitch 100) and 1008 (CHAN_VOICE, same) [obs CBaseMonster::HandleAnimEvent 0xd8af0], plus the
+# Opposing Force 1011..1013 channel events. The wavs sit in the model's sequences (scripted sequences, npc steps, bust sounds), so
+# the map pack reads them from the monster's .mdl at pack time (model_event_sounds); the MON1 event records already carry the names.
+MODEL_SOUND_EVENTS = (1004, 1008, 1011, 1012, 1013)
+# class → default studio model (basename in models/) of the monsters whose sequences carry sound events; monster_generic and
+# every other class that names its model uses the entity's `model` key instead.
+MONSTER_MODEL = {
+    "monster_scientist": "scientist", "monster_sitting_scientist": "scientist", "monster_barney": "barney",
+    "monster_human_grunt": "hgrunt", "monster_hwgrunt": "hgrunt", "monster_alien_grunt": "agrunt", "monster_bullchicken": "bullsquid",
+    "monster_gargantua": "garg", "monster_alien_slave": "islave", "monster_zombie": "zombie", "monster_gman": "gman",
+    "monster_headcrab": "headcrab", "monster_houndeye": "houndeye", "monster_alien_controller": "controller",
+    "monster_bigmomma": "big_mom", "monster_nihilanth": "nihilanth", "monster_barnacle": "barnacle", "monster_tentacle": "tentacle",
+    "monster_ichthyosaur": "icky", "monster_leech": "leech", "monster_apache": "apache",
+}
 
 
 def button_sound(v):
@@ -163,16 +178,65 @@ def _int(v):
 
 def norm(rel):
     """Engine-style sound name → our key: lower case, '/' separators, no leading '/' or 'sound/'."""
-    r = (rel or "").strip().replace("\\", "/").lstrip("/").lower()
+    r = (rel or "").strip().replace("\\", "/").lstrip("/*").lower()      # a leading '*' marks a streamed wav; the engine drops it
     if r.startswith("sound/"):
         r = r[6:]
     return r
 
 
-def wanted(ents, mod=None):
-    """[(name, priority)] in first-use order; priority 0 ambient_generic / env_message, 1 movers, 2 the rest.
+def model_event_sounds(path, ids=MODEL_SOUND_EVENTS):
+    """Wav names in the sound events (ids) of a studio model's sequences, in file order, normalised (norm). [] when the
+    file is missing / not an IDST v10 model. Layout as tools/mdl10.py: header nseq / seqidx at 164 / 168, 176-byte sequence
+    records (events count / index at +48 / +52), 76-byte events (frame, event, type, options[64])."""
+    try:
+        with open(path, "rb") as fh:
+            d = fh.read()
+        if d[:4] != b"IDST" or struct.unpack_from("<i", d, 4)[0] != 10:
+            return []
+        nseq, seqidx = struct.unpack_from("<2i", d, 164)
+        out = []
+        for i in range(nseq):
+            nev, evi = struct.unpack_from("<2i", d, seqidx + i * 176 + 48)
+            for e in range(nev):
+                eo = evi + e * 76
+                _fr, ev, _ty = struct.unpack_from("<3i", d, eo)
+                if ev not in ids:
+                    continue
+                opt = d[eo + 12:eo + 76].split(b"\0", 1)[0].decode("ascii", "replace")
+                n = norm(opt)
+                if n.endswith(".wav") and n not in out:
+                    out.append(n)
+        return out
+    except (OSError, struct.error):
+        return []
+
+
+def find_model(game_root, mod, name):
+    """<content folder>/models/<name>.mdl in gamedirs order (case-insensitive file name), else None."""
+    from gamedirs import content_dirs
+    base = norm(name)
+    if base.startswith("models/"):
+        base = base[7:]
+    if not base.endswith(".mdl"):
+        base += ".mdl"
+    for root in content_dirs(game_root, mod):
+        d = os.path.join(root, "models")
+        p = os.path.join(d, *base.split("/"))
+        if os.path.isfile(p):
+            return p
+        if os.path.isdir(d) and "/" not in base:
+            for f in os.listdir(d):
+                if f.lower() == base:
+                    return os.path.join(d, f)
+    return None
+
+
+def wanted(ents, mod=None, game_root=None):
+    """[(name, priority)] in first-use order; priority 0 ambient_generic / env_message, 1 movers, 2 the rest, 3 monsters.
+    game_root: also the sound events (1004 / 1008 / OF 1011..1013) of every monster model on the map, read from its .mdl.
     mod "dmc": trigger_teleport without spawnflag 2 hums ambience/hum1.wav (CTriggerTeleport::Spawn, DMC only)."""
     out = {}
+    seen_models = set()
 
     def add(n, pri):
         n = norm(n)
@@ -224,6 +288,14 @@ def wanted(ents, mod=None):
             spawned = (e.get(MAKER_KEYS[c], "") or "").strip().lower()
         for n in MONSTER_VOICES.get(spawned, ()):
             add(n, 3)
+        if game_root and (c.startswith("monster_") or c in MAKER_KEYS):
+            mdl = (e.get("model") or "").strip() if c.startswith("monster_") else ""
+            mdl = mdl if mdl.lower().endswith(".mdl") else MONSTER_MODEL.get(spawned, "")
+            if mdl and mdl not in seen_models:
+                seen_models.add(mdl)
+                p = find_model(game_root, mod, mdl)
+                for n in (model_event_sounds(p) if p else ()):
+                    add(n, 3)
         if c == "func_breakable" and _int(e.get("explodemagnitude")) > 0:
             for n in FIXED["env_explosion"]:
                 add(n, 2)
@@ -312,7 +384,7 @@ def load(ents, game_root, mod, max_bytes=24 * 1024 * 1024, max_seconds=60.0, log
     if not game_root:
         return []
     clips, used, missing, skipped = [], 0, [], []
-    for name, _pri in wanted(ents, mod):
+    for name, _pri in wanted(ents, mod, game_root):
         p = find(game_root, mod, name)
         if not p:
             missing.append(name)
