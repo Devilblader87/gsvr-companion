@@ -11,11 +11,21 @@ import re
 ENTRIES = ["pack.py", "modelpack.py", "w3pack.py", "previewpack.py",       # what --run-converter starts (builder.py)
            "w3info.py", "war3fs.py", "w3mapfolders.py"]                      # imported by companion/war3.py (lobby map info)
 _IMPORT = re.compile(r'^\s*(?:import|from)\s+([A-Za-z_]\w*)(?:\s+as\s+\w+)?', re.M)
+_IMPORT_LIST = re.compile(r'^\s*import\s+([A-Za-z_][\w ,.]*?)\s*(?:#.*)?$', re.M)      # "import navgen, nodegraph": every name of the list
 
 
 def _imports(path):
+    """module names a script imports (also each name of a comma list: pack.py's `import navgen, nodegraph` bundled
+    navgen only, so the frozen companion 0.9.31 failed every map with ModuleNotFoundError 'nodegraph')."""
     with open(path, encoding="utf-8") as fh:
-        return set(_IMPORT.findall(fh.read()))
+        text = fh.read()
+    out = set(_IMPORT.findall(text))
+    for line in _IMPORT_LIST.findall(text):
+        for part in line.split(","):
+            name = part.split(" as ")[0].strip().split(".")[0]
+            if name.isidentifier():
+                out.add(name)
+    return out
 
 
 def missing_imports(tools, files):
