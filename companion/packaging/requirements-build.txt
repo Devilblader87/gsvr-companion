@@ -2,3 +2,9 @@
 # (tools/w3pack.py: BLP textures are JPEG inside). Pinned for reproducible builds.
 pyinstaller==6.11.1
 pillow==13.0.0
+# CD music (tools/music.py): the mp3 decoder of the HL / OF / BS music clips. miniaudio is dr_mp3 + a resampler in one 0.3 MB wheel (cp312 win_amd64,
+# macOS, Linux wheels; Python >= 3.11); its only runtime dependency is cffi's _cffi_backend, listed here because build_windows.bat installs with --no-deps.
+# Frozen size: _miniaudio.pyd 0.63 MB + _cffi_backend 0.18 MB + miniaudio.py (~0.85 MB on disk, ~0.3 MB compressed). Without it the converter falls back to
+# an ffmpeg binary, and without that the maps simply get no music (gsvr.spec refuses to build without it so a release cannot lose the music by accident).
+miniaudio==1.73
+cffi==2.1.1

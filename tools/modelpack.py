@@ -188,7 +188,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 19, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
+PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 20, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
 
 
 def version_for_mod(mod):
@@ -586,11 +586,17 @@ VIEW_SEQ_EXTRA = {
                 (VIEW_SEQ0 + 6, 6, "attack2hit", 4), (VIEW_SEQ0 + 8, 8, "attack3hit", 5)),
     # OF EV_PipeWrench: normal miss 6 / 7 / 9, hit 5 / 8 / 10 by the swing counter, big swing 13 miss / 12 hit
     "pipe_wrench": tuple((VIEW_SEQ0 + s, s, lab, 5) for s, lab in ((5, "attack1hit"), (6, "attack1miss"), (7, "attack2hit"), (8, "attack2miss"),
-                                                                  (9, "attack3hit"), (10, "attack3miss"), (12, "attackbighit"), (13, "attackbigmiss"))),
+                                                                  (9, "attack3hit"), (10, "attack3miss"), (12, "attackbighit"), (13, "attackbigmiss"),
+                                                                  # T3 B11: CPipewrench::Holster (4), SecondaryAttack charge start (11), WeaponIdle (0 / 1 / 2)
+                                                                  (4, "holster"), (11, "attackbigwind"), (0, "idle1"), (1, "idle2"), (2, "idle3"))),
     "knife": ((VIEW_SEQ0 + 6, 6, "attack2hit", 5), (VIEW_SEQ0 + 8, 8, "attack3hit", 5)),     # OF CKnife::Swing: a hit alternates 6 / 8
     # OF M40A1: EV_FireSniper plays 2 (fire) / 3 (firelastround, first int param 0); CSniperRifle::Reload anim 4 (empty, = the generic reload slot) /
     # 6 (reload3, partial clip); WeaponIdle sends 5 (reload2) 2.324 s after an empty-clip reload started
-    "m40a1": ((5, 3, "firelastround", 4), (VIEW_SEQ0 + 5, 5, "reload2", 8), (VIEW_SEQ0 + 6, 6, "reload3", 12)),
+    "m40a1": ((5, 3, "firelastround", 4), (VIEW_SEQ0 + 5, 5, "reload2", 8), (VIEW_SEQ0 + 6, 6, "reload3", 12),
+              (VIEW_SEQ0 + 8, 8, "holster", 6)),                                    # T3 B10: CSniperRifle::Holster sends weapon animation 8
+    # OF M249 (weapon id 39 "saw"): CM249::Holster sequence 4, WeaponIdle 0 (95 %) / 1, the reload-end sequence 3 at 1.33 s
+    "saw": ((VIEW_SEQ0 + 4, 4, "holster", 6), (VIEW_SEQ0 + 0, 0, "slowidle", 6), (VIEW_SEQ0 + 1, 1, "idle2", 6),
+            (VIEW_SEQ0 + 3, 3, "reload1", 12)),
 }
 # View anims (besides reload / draw / attack = 0 / 1 / 2) whose v_ sound events (model event 5004) are baked into the event table under that
 # anim id: the M40A1 bolt2 on the last-round shot (5) and the second reload stage (100 + 5). Runtime: GsvrHlWeapons.ScheduleViewEvents.

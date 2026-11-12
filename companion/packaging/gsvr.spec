@@ -30,6 +30,13 @@ COMPANION_MODULES = ["companion", "gui", "updater", "runtime", "version", "build
 # w3pack.py decodes BLP (JPEG inside) with Pillow; the tools run via runpy, so PyInstaller must be told
 PILLOW_MODULES = ["PIL", "PIL.Image", "PIL.ImageChops", "PIL.JpegImagePlugin", "PIL.BlpImagePlugin",
                   "PIL.ImageFont", "PIL.ImageDraw", "PIL.TgaImagePlugin", "PIL.PngImagePlugin"]   # HUD / menu fonts, previews
+# tools/music.py decodes the CD music mp3s with the `miniaudio` wheel (dr_mp3, cffi extension). _cffi_backend is imported by the extension's C code only,
+# so PyInstaller cannot see it. Without the package the frozen converter would silently build maps with no music: refuse (requirements-build.txt).
+try:
+    import miniaudio                                     # noqa: F401
+except ImportError:
+    raise SystemExit("gsvr.spec: the miniaudio package is not installed in the build venv (pip install -r companion/packaging/requirements-build.txt)")
+MUSIC_MODULES = ["miniaudio", "_miniaudio", "_cffi_backend"]
 ICON = os.path.join(SPEC_DIR, "gsvr.ico")                # optional: drop a gsvr.ico here
 icon = ICON if os.path.isfile(ICON) else None
 
@@ -42,7 +49,7 @@ a = Analysis(
           + [(os.path.join(COMP, "README.md"), ".")],
     hiddenimports=COMPANION_MODULES + [os.path.splitext(f)[0] for f in TOOL_FILES]
                   + ["jvm"] + ["jvm." + os.path.splitext(f)[0] for f in JVM_FILES if f != "__init__.py"] + ["tkinter", "tkinter.ttk",
-                                                                                    "tkinter.messagebox"] + PILLOW_MODULES,
+                                                                                    "tkinter.messagebox"] + PILLOW_MODULES + MUSIC_MODULES,
     hookspath=[],
     runtime_hooks=[],
     excludes=["unittest", "pydoc_data", "test", "lib2to3", "idlelib", "ensurepip", "distutils", "setuptools", "pip"],

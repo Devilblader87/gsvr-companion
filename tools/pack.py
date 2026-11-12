@@ -110,6 +110,8 @@
 #     engine (so mode 2 without renderamt is invisible). Record 0 (world) = 0, 0. docs/goldsrc_base_layer.md §1.
 #   optional entity sounds (tools/sounds.py; older loaders skip it): "SNDS" count = clips, the wavs the map's
 #     ambient_generic / env_message / movers / chargers can play, mono float32 with cue loop points
+#     CD music (tools/music.py, --no-music): the start of each cd track the map plays (worldspawn `sounds`, trigger_cdaudio /
+#     target_cdaudio `health`) rides in SNDS as extra clips "media/<file>.mp3", mono 11025 Hz, loop 0..end; appended last
 #   optional env_message texts (tools/titles.py): "TITL" count = messages, the titles.txt entries the map names
 #   optional speech sentences (tools/sentences.py; valve / svencoop only): "SENT" count = sentences, the
 #     sentences.txt lines the map's scripted_sentence / "!NAME" ambients / talk monsters can say as word records
@@ -1631,6 +1633,10 @@ if __name__ == "__main__":
     ap.add_argument("--no-sky", action="store_true", help="leave out the SKY6 skybox faces")
     ap.add_argument("--no-sounds", action="store_true", help="leave out the SNDS entity sounds (ambient_generic, movers …)")
     ap.add_argument("--sound-mb", type=float, default=24.0, help="SNDS budget in MB of float32 samples (ambient first)")
+    ap.add_argument("--no-music", action="store_true", help="leave out the CD music clips (tools/music.py) in SNDS")
+    ap.add_argument("--music-mb", type=float, default=8.0, help="music budget in MB of float32 samples (tools/music.py)")
+    ap.add_argument("--music-sec", type=float, default=60.0, help="seconds kept from the start of each music track")
+    ap.add_argument("--music-rate", type=int, default=11025, help="sample rate of the music clips (Hz)")
     ap.add_argument("--no-titles", action="store_true", help="leave out the TITL env_message texts (titles.txt)")
     ap.add_argument("--no-sentences", action="store_true", help="leave out the SENT speech sentences (and their word wavs)")
     ap.add_argument("--sentence-mb", type=float, default=8.0,
@@ -1728,6 +1734,15 @@ if __name__ == "__main__":
                         data["sent"] = sent
                 except Exception as e:               # noqa: BLE001 — a broken sentences.txt must not cost the map
                     log(f"sentences: skipped ({e})")
+        if not a.no_sounds and not a.no_music:
+            import music
+            try:
+                mus = music.load(ent_list, a.game_root, a.mod, max_bytes=int(a.music_mb * 1024 * 1024), seconds=a.music_sec,
+                                 rate=a.music_rate, log=log, have=[c[0] for c in data.get("snds") or []])
+                if mus:
+                    data["snds"] = (data.get("snds") or []) + mus
+            except Exception as e:                   # noqa: BLE001 — a broken mp3 must not cost the map
+                log(f"music: skipped ({e})")
         if not a.no_titles:
             import titles
             try:
