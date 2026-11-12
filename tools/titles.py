@@ -76,7 +76,14 @@ def wanted(ents):
             n = e["message"].strip().upper()
             if n not in names:
                 names.append(n)
+        elif e.get("classname") == "worldspawn" and _atoi(e.get("gametitle", "")) != 0 and "GAMETITLE" not in names:
+            names.append("GAMETITLE")      # CWorld::KeyValue gametitle -> the one-shot GameTitle splash the client shows from titles.txt
     return names
+
+
+def _atoi(v):
+    m = re.match(r"\s*[-+]?\d+", v or "")
+    return int(m.group(0)) if m else 0
 
 
 def load(ents, game_root, mod, log=print):
