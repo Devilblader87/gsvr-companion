@@ -7,6 +7,9 @@
     <exe> --run-converter <tools/pack.py|tools/modelpack.py> [args]
                                      run a bundled converter in-process (what `python -X utf8 -I tools/pack.py` is
                                      for a source install); only those two scripts from the bundled tools/ dir
+    <exe> --run-rose-build NAME INSTALL OUT
+                                     build one ROSE pack in this process (the companion's build child, rosebuild.py:
+                                     @progress / @result / @error lines on stdout)
     <exe> --selftest                 headless GUI-controller self-test (gui.py --selftest)
     <exe> --update-check             print the update check result (no install)
     <exe> --version                  print the version
@@ -75,7 +78,41 @@ def rose_smoke():
     except Exception as e:                               # noqa: BLE001
         print("  FAIL rose_conv import: %r" % (e,))
         ok = False
+    ok &= rose_child_smoke()
     return bool(ok)
+
+
+def rose_child_smoke(timeout=90):
+    """One stub ROSE build in a CHILD process (`gsvr-cli --run-rose-build`, as the companion runs the real ones): the
+    child entry point starts, reports progress + its result, and the pack lands. Returns True when ok."""
+    import shutil, tempfile
+    work = tempfile.mkdtemp(prefix="gsvr-rosechild")
+    try:
+        import rose_conv_stub, rosebuild
+        rdir, inst = os.path.join(work, "rose"), os.path.join(work, "inst")
+        os.makedirs(rdir)
+        os.makedirs(inst)
+        with open(os.path.join(inst, "data.idx"), "wb") as fh:
+            fh.write(b"idx")
+        ups, logs = [], []
+        m = rosebuild.Manager(rdir, conv=rose_conv_stub, isolate=True, log=logs.append,
+                              on_update=lambda n, f: ups.append(dict(f)), child_env={"GSVR_ROSE_STUB_STEP_S": "0.01"})
+        try:
+            m.set_install(inst, prebuild=False)
+            m.request("birthisland")
+            idle = m.wait_idle(timeout)
+        finally:
+            m.stop()
+        good = idle and m.pack_state("birthisland") == "fresh" and bool(ups) and ups[-1].get("state") == "ready" \
+            and any(u.get("state") == "building" and u.get("progress", 0) > 0 for u in ups)
+        print("  %s ROSE stub build in a child process (%s)" % ("ok  " if good else "FAIL",
+                                                                 "ready" if good else "; ".join(logs[-3:]) or "no result"))
+        return bool(good)
+    except Exception as e:                               # noqa: BLE001
+        print("  FAIL ROSE child build: %r" % (e,))
+        return False
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def main(argv=None):
@@ -87,6 +124,9 @@ def main(argv=None):
             print("usage: --run-converter <script> [args]", file=sys.stderr)
             return 2
         return run_converter(argv[1], argv[2:])
+    if argv[:1] == ["--run-rose-build"]:                 # one ROSE pack build in this child process (rosebuild.py)
+        import rosebuild
+        return rosebuild.child_main(argv[1:])
     if argv[:1] == ["--version"]:
         print(VERSION)
         return 0

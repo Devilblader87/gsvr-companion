@@ -306,7 +306,7 @@ class State:
             return out
 
     def status_json(self):
-        rb = self.rosebuild.state()                       # outside self.lock (own lock; per pack state cached 2 s)
+        rb = self.rosebuild.state(cached=True)            # outside self.lock; no disk IO (rows refreshed off the request path)
         with self.lock:
             d = self._status_locked()
         d["rose"].update(rose_summary(d["rose"], rb))
@@ -760,9 +760,13 @@ def make_handler(state):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
+            try:
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+            except CONN_DROPPED:                    # the client gave up (GUI poll timeout, world left): no traceback
+                self.close_connection = True
+                conn_dropped(self.path)
 
         def _route(self):
             ua = self.headers.get("User-Agent", "-")
@@ -784,7 +788,8 @@ def make_handler(state):
             if path == "/rose/state":                         # GUI only: full build state incl. the install path (CSRF: custom header)
                 if self.headers.get("X-GSVR-Rose") != "1":
                     return self._send(403, "forbidden\n")
-                return self._send(200, json.dumps(state.rosebuild.state(), separators=(",", ":")), "application/json")
+                return self._send(200, json.dumps(state.rosebuild.state(cached=True), separators=(",", ":")),
+                                  "application/json")
             if path not in ("/status.json", "/pack/wait.bin") and not state.world_ok:  # --world-allow: only serve data inside allowed worlds
                 return self._send(403, "world not allowed\n")
             if path == "/status.json":
@@ -932,7 +937,7 @@ def make_handler(state):
                 body = {"ok": bool(ok), "reason": why}
             else:
                 body = {"ok": True, "queued": state.rosebuild.build_all(force=(qs.get("force") or ["0"])[0] == "1")}
-            body["rose_build"] = state.rosebuild.state()
+            body["rose_build"] = state.rosebuild.state(cached=True)
             return self._send(200, json.dumps(body, separators=(",", ":")), "application/json")
 
         do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _reject
@@ -950,6 +955,30 @@ class Server(http.server.ThreadingHTTPServer):
         if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
+
+    def handle_error(self, request, client_address):
+        """a client that hung up mid-answer (pack streams, the final flush) -> one short line, not socketserver's traceback"""
+        if isinstance(sys.exc_info()[1], CONN_DROPPED):
+            conn_dropped("-")
+            return
+        super().handle_error(request, client_address)
+
+
+# ConnectionAbortedError = WinError 10053 (the client closed: the GUI's poll timed out), reset, broken pipe
+CONN_DROPPED = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
+_drops = {"n": 0, "t": None}
+_drops_lock = threading.Lock()
+
+
+def conn_dropped(path):
+    """count a dropped client connection; at most one short log line per 60 s (never a traceback)"""
+    now = time.monotonic()
+    with _drops_lock:
+        _drops["n"] += 1
+        if _drops["t"] is not None and now - _drops["t"] < 60.0:
+            return
+        n, _drops["n"], _drops["t"] = _drops["n"], 0, now
+    log(f"HTTP client closed the connection early ({path}; {n} since the last note)")
 
 
 class _NoHandler(http.server.BaseHTTPRequestHandler):      # placeholder until the state exists

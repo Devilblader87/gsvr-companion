@@ -9,7 +9,14 @@ Cache:  <rose dir>/rose__<name>.rpg1  +  rose__<name>.rpg1.json  {"conv": VERSIO
 Per pack (with a usable install):  missing = no .rpg1;  stale = no sidecar / other conv VERSION / other fingerprint;  fresh = else.
 Without a usable install (or without rose_conv) every file in the folder is served as is (hand-dropped dev / test packs).
 
-Builds: one at a time in one worker thread (zone builds use 1-3 GB). On-demand (request) first; the latest on-demand request wins
+Builds: one at a time, run by one worker thread (zone builds use 1-3 GB). The companion runs each build in a CHILD PROCESS
+(isolate=True, the default for an auto-loaded converter): rose_conv is pure Python CPU work, and in a thread it held the GIL so
+long that the HTTP server starved (status.json 2+ s, the GUI flipped to "Starting", the world's polls slowed; maintainer
+2026-11-14). The child is `gsvr-cli --run-rose-build NAME INSTALL OUT` (frozen) / `python -I gsvr_main.py --run-rose-build ...`
+(source), below normal priority (Windows BELOW_NORMAL_PRIORITY_CLASS + CREATE_NO_WINDOW, POSIX nice +5), and prints
+`@progress <frac> <stage>` lines and one final `@result {json}` / `@error {json}` line on stdout (child_main / parse_child_line).
+Cancel / pre-emption = terminate the child (+ the .part cleanup). The child exits when its stdin closes (the companion died).
+A Manager given an explicit converter module (tests) builds in-process in the worker thread unless isolate=True. On-demand (request) first; the latest on-demand request wins
 and pre-empts a background build or an on-demand build below PREEMPT_KEEP_FRAC (cancel -> requeued at the front of the background
 queue); an on-demand build past it is finished first and the new request runs next. Background prebuild of the other PACKS starts
 after the first successful on-demand build, or when an install becomes known (set_install). A second request for the pack that is
@@ -18,13 +25,16 @@ install fingerprint changed or "Build all" was pressed. The HTTP server never wa
 disk and the queue, and no disk IO runs with the manager lock held.
 
 Hooks (module level, after init()):  set_install(path), state(), build_all(force=False), request(name), cancel(), stop().
-status.json carries public_state(state()) (no user folder names); the full state is GUI only (GET /rose/state).
+status.json carries public_state(state(cached=True)) (no user folder names); the full state is GUI only (GET /rose/state).
+state(cached=True) never touches the disk: the per pack rows come from a cache that a "rosestate" thread refreshes off the
+request path (the real converter's install_extra() walks the Sound folder, far too slow for every status poll).
 Log lines:  [rose] build <name> started / NN% <stage> / done in N s / failed: ... / cancelled
 Converter selection: `import rose_conv`; GSVR_ROSE_CONV=stub selects companion/rose_conv_stub.py (tests / dev only).
 """
-import datetime, glob, hashlib, json, os, re, threading, time
+import collections, datetime, glob, hashlib, json, os, re, subprocess, sys, threading, time
 
 import rose
+import runtime
 
 NO_INSTALL = "ROSE install not found: set the ROSE folder in the companion"
 NO_CONV = "ROSE converter not bundled with this companion"
@@ -32,6 +42,10 @@ NOTIFY_MIN_S = 1.0          # building progress pushed to the slot at least this
 STATE_CACHE_S = 2.0         # state(): per pack fresh/stale/missing re-checked at most this often (status.json polls)
 FAIL_RETRY_S = 300.0        # a failed pack is built again after this long (or after the install changed / Build all)
 PREEMPT_KEEP_FRAC = 0.5     # a running on-demand build past this progress is finished before the next on-demand pack
+CHILD_FLAG = "--run-rose-build"   # gsvr_main.py: run one pack build in this (child) process
+CHILD_NICE = 5              # POSIX: the child lowers its own priority by this much
+CREATE_NO_WINDOW = 0x08000000
+KILL_WAIT_S = 5.0           # terminate() -> kill() after this long
 
 
 def load_conv(log=None):
@@ -48,6 +62,132 @@ def load_conv(log=None):
         if log:
             log(f"[rose] converter failed to load: {e}")
         return None
+
+
+def conv_env_value(conv):
+    """GSVR_ROSE_CONV for a child build that must load the same converter as this process ("stub" / None = rose_conv)."""
+    return "stub" if getattr(conv, "__name__", "") == "rose_conv_stub" else None
+
+
+def child_argv(name, install, out):
+    """argv of the child process that builds one pack (frozen: gsvr-cli, source: python -I gsvr_main.py)."""
+    if runtime.FROZEN:
+        return [runtime.cli_exe(), CHILD_FLAG, name, install, out]
+    return [runtime.console_python(), "-X", "utf8", "-I", "-u", os.path.join(runtime.HERE, "gsvr_main.py"), CHILD_FLAG,
+            name, install, out]
+
+
+def child_popen_kwargs():
+    """below normal priority + no console window (Windows); POSIX: the child calls os.nice itself (no preexec_fn: the
+    companion has threads)."""
+    if sys.platform == "win32":
+        return {"creationflags": runtime.BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW}
+    return {}
+
+
+def parse_child_line(line):
+    """one stdout line of the child -> ("progress", frac, stage) | ("result", dict) | ("error", dict) | None (other output)."""
+    if isinstance(line, bytes):
+        line = line.decode("utf-8", "replace")
+    line = line.rstrip("\r\n")
+    if line.startswith("@progress "):
+        parts = line.split(" ", 2)
+        try:
+            frac = float(parts[1])
+        except (IndexError, ValueError):
+            return None
+        if frac != frac:                                 # NaN
+            return None
+        return ("progress", max(0.0, min(1.0, frac)), parts[2] if len(parts) > 2 else "")
+    for tag in ("result", "error"):
+        if line.startswith("@%s " % tag):
+            try:
+                d = json.loads(line[len(tag) + 2:])
+            except ValueError:
+                return None
+            return (tag, d) if isinstance(d, dict) else None
+    return None
+
+
+def _watch_stdin():
+    """child: the companion holds our stdin open; EOF = it died (or was killed) -> stop building at once."""
+    try:
+        while sys.stdin.buffer.read(4096):
+            pass
+    except (OSError, ValueError, AttributeError):
+        pass
+    os._exit(3)
+
+
+def child_main(argv):
+    """`<exe> --run-rose-build NAME INSTALL OUT`: build one pack with the converter (GSVR_ROSE_CONV=stub: the stub) in this
+    process and report on stdout: `@progress <frac> <stage>` lines, then `@result {"conv", "result"}` (exit 0) or
+    `@error {"error", "cancelled"}` (exit 1). Converter output goes to stderr. -> exit code."""
+    if len(argv) != 3:
+        print("usage: %s NAME INSTALL OUT" % CHILD_FLAG, file=sys.stderr)
+        return 2
+    name, install, out = argv
+    if sys.platform != "win32":
+        try:
+            os.nice(CHILD_NICE)
+        except (AttributeError, OSError):
+            pass
+    proto = sys.stdout
+    sys.stdout = sys.stderr                              # stray prints never mix into the protocol
+    lock = threading.Lock()
+
+    def emit(tag, text):
+        with lock:
+            try:
+                proto.write("@%s %s\n" % (tag, text))
+                proto.flush()
+            except (OSError, ValueError):
+                os._exit(3)                              # the companion is gone
+    if os.environ.get("GSVR_ROSE_CHILD_STDIN_WATCH", "1") != "1":
+        return _child_build(name, install, out, emit, lock)
+    threading.Thread(target=_watch_stdin, name="rose-stdin", daemon=True).start()
+    rc = _child_build(name, install, out, emit, lock)
+    for s in (proto, sys.stderr):                        # the stdin reader blocks in read(): a normal interpreter shutdown
+        try:                                             # would abort on its buffer lock -> leave at once
+            s.flush()
+        except (OSError, ValueError):
+            pass
+    os._exit(rc)
+
+
+def _child_build(name, install, out, emit, lock):
+    conv = load_conv(lambda m: print(m, file=sys.stderr))
+    if conv is None:
+        emit("error", json.dumps({"error": NO_CONV, "cancelled": False}))
+        return 1
+    last = {"f": -1.0, "stage": None, "t": 0.0}
+
+    def progress(stage, frac):
+        try:
+            f = max(0.0, min(1.0, float(frac)))
+        except (TypeError, ValueError):
+            return
+        stage = " ".join(str(stage).split())[:40]
+        now = time.monotonic()
+        with lock:
+            if stage == last["stage"] and f - last["f"] < 0.002 and now - last["t"] < 0.25:
+                return
+            last.update(f=f, stage=stage, t=now)
+        emit("progress", "%.4f %s" % (f, stage))
+    try:
+        res = conv.build(name, install, out, progress=progress, cancel=None)
+    except (Exception, SystemExit) as e:                 # noqa: BLE001 - reported to the companion
+        canc = getattr(conv, "Cancelled", None)
+        emit("error", json.dumps({"error": str(e) or type(e).__name__,
+                                  "cancelled": isinstance(canc, type) and isinstance(e, canc)}))
+        return 1
+    emit("result", json.dumps({"conv": getattr(conv, "VERSION", None), "result": res if isinstance(res, dict) else None},
+                              default=str))
+    return 0
+
+
+class ChildCancelled(Exception):
+    pass
 
 
 def pack_path(rose_dir, name):
@@ -142,10 +282,15 @@ def public_state(st):
 
 
 class Manager:
-    def __init__(self, rose_dir, conv=None, log=print, on_update=None, autoload=True):
+    def __init__(self, rose_dir, conv=None, log=print, on_update=None, autoload=True, isolate=None, child_env=None):
         self.rose_dir = rose_dir
         self.log = log or (lambda m: None)
         self.conv = conv if conv is not None else (load_conv(self.log) if autoload else None)
+        # builds in a child process: the default for the companion (auto-loaded converter); GSVR_ROSE_INPROC=1 = in-process
+        if isolate is None:
+            isolate = conv is None and os.environ.get("GSVR_ROSE_INPROC", "") != "1"
+        self.isolate = bool(isolate)
+        self.child_env = dict(child_env or {})          # extra environment of the child (tests: stub knobs)
         self.on_update = on_update              # on_update(name, slot_fields): called WITHOUT the manager lock held
         self.cv = threading.Condition()
         self.install, self.install_ok, self.install_reason = None, False, "not set"
@@ -162,6 +307,8 @@ class Manager:
         self.thread = None
         self._state_cache = (0.0, None)
         self._state_rev = 0                     # bumped by _invalidate(): a state() computed outside the lock is cached only when unchanged
+        self._refresh = threading.Event()       # wakes the "rosestate" thread (state(cached=True) found the rows old / invalid)
+        self._refresher = None
         self.clean_parts()
 
     # ---- helpers -----------------------------------------------------------------------------
@@ -173,9 +320,12 @@ class Manager:
         return self.conv is not None and self.install_ok and self.install is not None and bool(self.rose_dir)
 
     def _invalidate(self):
-        """caller holds the lock: the per pack view is recomputed on the next state()"""
-        self._state_cache = (0.0, None)
+        """caller holds the lock: the per pack view is recomputed on the next state() (the cached view keeps the old rows
+        until the refresher has new ones)"""
+        self._state_cache = (0.0, self._state_cache[1])
         self._state_rev += 1
+        if self._refresher is not None:
+            self._refresh.set()
 
     def clean_parts(self):
         """Leftovers of a crash / kill: rose__*.rpg1.part and sidecar .tmp files."""
@@ -417,6 +567,7 @@ class Manager:
                 self.cur["requeue"] = False
                 self.cur["cancel"].set()
             self.cv.notify_all()
+        self._refresh.set()
 
     def wait_idle(self, timeout=None):
         """tests / CLI: wait until nothing runs or is queued -> True when idle"""
@@ -444,15 +595,52 @@ class Manager:
             packs[n] = {"state": self.pack_state(n, fp), "bytes": size, "built": sc.get("built"), "label": label or n}
         return packs
 
-    def state(self):
+    def _refresh_loop(self):
+        """"rosestate" thread: recomputes the per pack rows (disk IO) whenever state(cached=True) found them old / invalid."""
+        while True:
+            self._refresh.wait()
+            self._refresh.clear()
+            with self.cv:
+                if self.stopped:
+                    return
+                rev = self._state_rev
+            t = time.monotonic()
+            try:
+                packs = self._pack_rows()
+            except Exception as e:                       # noqa: BLE001 - keep the old rows
+                self.log(f"[rose] state refresh failed: {e}")
+                time.sleep(STATE_CACHE_S)
+                continue
+            with self.cv:
+                if rev == self._state_rev:
+                    self._state_cache = (t, packs)
+                else:                                    # changed meanwhile: keep these rows, scan again
+                    self._state_cache = (0.0, packs)
+                    self._refresh.set()
+            time.sleep(0.05)                             # at most ~20 scans/s even when invalidated all the time
+
+    def _kick_refresh(self):
+        """caller holds the lock: (start and) wake the refresher"""
+        if self._refresher is None or not self._refresher.is_alive():
+            self._refresher = threading.Thread(target=self._refresh_loop, name="rosestate", daemon=True)
+            self._refresher.start()
+        self._refresh.set()
+
+    def state(self, cached=False):
         """GUI view: {install, install_ok, install_reason, conv, current: {name, kind, stage, progress, eta_s, elapsed_s} | None,
         queue: [names], packs: {name: {state: fresh|stale|missing, bytes, built, error}}}. JSON-safe; cheap (cached 2 s).
+        cached=True (the HTTP request path): no disk IO at all; the per pack rows come from the cache, which the "rosestate"
+        thread refreshes when they are older than STATE_CACHE_S or invalidated ({} until its first scan).
         Full detail incl. the install path: GUI only (GET /rose/state); status.json carries public_state() of it."""
         now = time.monotonic()
         with self.cv:
             at, packs = self._state_cache
             rev = self._state_rev
-        if packs is None or now - at > STATE_CACHE_S:
+            if cached and (packs is None or now - at > STATE_CACHE_S) and not self.stopped:
+                self._kick_refresh()
+        if cached:
+            packs = packs or {}
+        elif packs is None or now - at > STATE_CACHE_S:
             packs = self._pack_rows()
             with self.cv:
                 if rev == self._state_rev:
@@ -530,14 +718,101 @@ class Manager:
                 self._notify(name, fields)
             self._build_one(cur, install, fp, gen)
 
+    def _child_env(self):
+        env = dict(os.environ)
+        v = conv_env_value(self.conv)
+        if v:
+            env["GSVR_ROSE_CONV"] = v
+        else:
+            env.pop("GSVR_ROSE_CONV", None)
+        env["PYTHONUTF8"] = "1"
+        env.update(self.child_env)
+        return env
+
+    @staticmethod
+    def _kill(proc):
+        try:
+            proc.terminate()
+            proc.wait(KILL_WAIT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(KILL_WAIT_S)
+        except OSError:
+            pass
+
+    def _build_child(self, cur, install, out):
+        """one pack build in a child process (module doc). -> the converter's result dict. Raises ChildCancelled
+        (cur["cancel"] was set: the child was terminated) or RuntimeError (the build failed)."""
+        name = cur["name"]
+        try:
+            proc = subprocess.Popen(child_argv(name, install, out), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, env=self._child_env(), cwd=self.rose_dir, **child_popen_kwargs())
+        except OSError as e:
+            raise RuntimeError(f"could not start the ROSE build process: {e}")
+        cur["pid"] = proc.pid
+        got = {"result": None, "error": None}
+        tail = collections.deque(maxlen=20)
+
+        def reader():
+            try:
+                for raw in iter(proc.stdout.readline, b""):
+                    p = parse_child_line(raw)
+                    if p is None:
+                        txt = raw.decode("utf-8", "replace").rstrip()
+                        if txt:
+                            tail.append(txt)
+                    elif p[0] == "progress":
+                        self._progress(cur, p[2], p[1])
+                    else:
+                        got[p[0]] = p[1]
+            except (OSError, ValueError):
+                pass
+        rt = threading.Thread(target=reader, name="rosebuild-out", daemon=True)
+        rt.start()
+        killed = False
+        try:
+            while proc.poll() is None:
+                if cur["cancel"].wait(0.1):
+                    killed = True
+                    self._kill(proc)
+                    break
+        finally:
+            if proc.poll() is None:                     # an exception in this thread: never leave the child running
+                killed = True
+                self._kill(proc)
+            rt.join(10)
+            for fh in (proc.stdin, proc.stdout):
+                try:
+                    fh.close()
+                except (OSError, ValueError):
+                    pass
+        rc = proc.returncode
+        if (killed or cur["cancel"].is_set()) and not (rc == 0 and got["result"] is not None):
+            raise ChildCancelled(name)            # a child that already finished the pack keeps its result (0.9.40 audit)
+        if got["error"] is not None:
+            if got["error"].get("cancelled"):
+                raise ChildCancelled(name)
+            raise RuntimeError(str(got["error"].get("error") or "unknown error"))
+        if rc != 0 or got["result"] is None:
+            more = (": " + " | ".join(list(tail)[-3:])) if tail else ""
+            raise RuntimeError(f"ROSE build process exited with code {rc}{more}"[:500])
+        want = getattr(self.conv, "VERSION", None)
+        if got["result"].get("conv") != want:
+            raise RuntimeError(f"ROSE converter version mismatch (build process {got['result'].get('conv')}, companion "
+                               f"{want}): restart the companion")
+        return got["result"].get("result") or {}
+
     def _build_one(self, cur, install, fp, gen):
         name = cur["name"]
         out = pack_path(self.rose_dir, name)
         result, err, cancelled = None, None, False
         try:
             os.makedirs(self.rose_dir, exist_ok=True)
-            res = self.conv.build(name, install, out, progress=lambda s, f: self._progress(cur, s, f),
-                                  cancel=cur["cancel"].is_set)
+            if self.isolate:
+                res = self._build_child(cur, install, out)
+            else:
+                res = self.conv.build(name, install, out, progress=lambda s, f: self._progress(cur, s, f),
+                                      cancel=cur["cancel"].is_set)
             size = rose.validate(out)
             secs = round(time.monotonic() - cur["t0"], 1)
             write_sidecar(self.rose_dir, name, {"conv": getattr(self.conv, "VERSION", None), "install": fp, "bytes": size,
@@ -548,7 +823,8 @@ class Manager:
             result = secs
         except Exception as e:                             # noqa: BLE001 - incl. rose_conv.Cancelled / BuildError
             canc_cls = getattr(self.conv, "Cancelled", None)
-            if cur["cancel"].is_set() or (isinstance(canc_cls, type) and isinstance(e, canc_cls)):
+            if cur["cancel"].is_set() or isinstance(e, ChildCancelled) or \
+                    (isinstance(canc_cls, type) and isinstance(e, canc_cls)):
                 cancelled = True
             else:
                 err = str(e) or type(e).__name__
@@ -619,8 +895,8 @@ def set_install(path, prebuild=True):
     return _m().set_install(path, prebuild=prebuild)
 
 
-def state():
-    return _m().state()
+def state(cached=False):
+    return _m().state(cached=cached)
 
 
 def build_all(force=False):

@@ -7,13 +7,16 @@ writes are synthetic RPG1 files (valid 32 byte header + filler) that pass rose.v
 Knobs for the tests (module globals): STEP_S (sleep per stage step), FAIL (names whose build raises BuildError), HOLD
 (threading.Event or None: each step waits for it, so a test can keep a build running), CALLS (names, in build order),
 NO_PART_CLEANUP (True: leave the .part behind on cancel, to test the manager's own cleanup), HOLD_FROM (HOLD only blocks from this step
-on: a build can be held past 50 %). Env (live tests): GSVR_ROSE_STUB_STEP_S, GSVR_ROSE_STUB_FAIL (comma list of names that fail at once).
+on: a build can be held past 50 %), BURN (each step busy-loops STEP_S in pure Python instead of sleeping: the real converter's
+GIL load). Env (live / child tests): GSVR_ROSE_STUB_STEP_S, GSVR_ROSE_STUB_FAIL (comma list of names that fail at once),
+GSVR_ROSE_STUB_BURN=1.
 """
 import os, struct, threading, time
 
 VERSION = "rv-stub-1"
 STAGES = (("vfs", 2), ("terrain", 4), ("objects", 3), ("write", 1))
 STEP_S = float(os.environ.get("GSVR_ROSE_STUB_STEP_S", "0.01"))   # live tests slow it down to watch "building"
+BURN = os.environ.get("GSVR_ROSE_STUB_BURN", "") == "1"           # each step busy-loops (pure Python, holds the GIL) like rose_conv
 FAIL = set(n for n in os.environ.get("GSVR_ROSE_STUB_FAIL", "").split(",") if n)
 FAIL_AT_ONCE = bool(FAIL)               # env failures raise before the first step (a converter that fails instantly)
 HOLD = None
@@ -65,6 +68,19 @@ def install_extra(path):
     return ["Sound %d %d" % (len(names), sum(os.path.getsize(os.path.join(snd, n)) for n in names))]
 
 
+def _step():
+    """one build step: sleep STEP_S, or with BURN busy-loop that long in pure Python (the real converter's GIL load)"""
+    if not BURN:
+        time.sleep(STEP_S)
+        return
+    end = time.perf_counter() + STEP_S
+    x = 0
+    while time.perf_counter() < end:
+        for i in range(2000):
+            x = (x * 31 + i) & 0xFFFFFFFF
+    return x
+
+
 def _pack_bytes(name, total=4096):
     head = b"RPG1" + struct.pack("<7I", (1 << 16) | 1, 32, total, 0, total, 0, 0)
     seed = sum(name.encode()) & 255
@@ -96,7 +112,7 @@ def build(name, install_dir, out_path, progress=None, cancel=None):
                     while not HOLD.wait(0.02):
                         if cancel and cancel():
                             raise Cancelled(name)
-                time.sleep(STEP_S)
+                _step()
                 done += 1
                 if progress:
                     progress(stage, done / total)

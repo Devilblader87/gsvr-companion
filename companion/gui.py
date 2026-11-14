@@ -27,6 +27,8 @@ from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION         
 REPO = os.path.dirname(HERE)                                        # source checkout root (test data in work/)
 DEFAULT_WORLDS = "wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb"
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0          # CREATE_NO_WINDOW
+STATUS_TIMEOUT_S = 3.0      # status.json poll timeout (was 1 s: a busy companion flipped the headline to "Starting")
+STATUS_MISSES_MAX = 3       # this many failed polls in a row before the last good status is dropped ("Starting")
 DEFAULT_SETTINGS = {"worlds": DEFAULT_WORLDS, "extra": "", "war3_root": "", "war3_maps": "", "hl_root": "",
                     "relay_url": "https://w3relay.heimserver.me", "map_autodownload": "on",
                     "update_base": DEFAULT_UPDATE_BASE, "update_token": "",
@@ -96,6 +98,7 @@ class Controller:
         self.settings = dict(DEFAULT_SETTINGS)
         self.active_port = None          # port where the GSVR companion answered last
         self.foreign = set()             # candidate ports where ANOTHER program answers (not app=gsvr-companion)
+        self._last_status, self._status_misses = None, 0    # status(): one slow poll keeps the last good status
         self.fatal = None                # companion's startup error (exit code 3), shown in red in the Status tab
         self.update_info = None          # last updater.check_for_update() result
         self.update_error = None
@@ -299,8 +302,9 @@ class Controller:
         return ports_from_args(self.argv()[1:])
 
     @staticmethod
-    def fetch_status(port, timeout=1.0):
-        """→ ("gsvr", dict) | ("foreign", None) | (None, None) = nothing listening."""
+    def fetch_status(port, timeout=STATUS_TIMEOUT_S):
+        """→ ("gsvr", dict) | ("foreign", None) | ("slow", None) = the port answers but status.json timed out |
+        (None, None) = nothing listening."""
         try:            # connect first (Windows needs ~2 s to report "refused" on loopback): no listener → None
             socket.create_connection(("127.0.0.1", port), timeout=2.5).close()
         except OSError:
@@ -310,6 +314,12 @@ class Controller:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 d = json.loads(r.read(1 << 20).decode("utf-8"))
         except urllib.error.HTTPError:
+            return "foreign", None
+        except socket.timeout:
+            return "slow", None
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), socket.timeout):
+                return "slow", None
             return "foreign", None
         except (OSError, ValueError):
             return "foreign", None
@@ -324,17 +334,30 @@ class Controller:
         if self.active_port in ports:
             ports.remove(self.active_port)
             ports.insert(0, self.active_port)
+        slow = False
         for p in ports:
             kind, d = self.fetch_status(p)
             if kind == "gsvr":
                 self.active_port = p
                 self.foreign.discard(p)
+                self._last_status, self._status_misses = d, 0
                 return d
-            if kind == "foreign":
+            if kind == "slow" and p == self.active_port:
+                slow = True                  # our companion is busy: not "another program", no other port to try
+                break
+            if kind in ("foreign", "slow"):
                 self.foreign.add(p)
             else:
                 self.foreign.discard(p)
+        # one slow / missed poll keeps the last good status (the headline stays "Running"); STATUS_MISSES_MAX in a row -> None
+        last = self._last_status
+        self._status_misses += 1
+        if last is not None and self._status_misses < STATUS_MISSES_MAX and (slow or self.running()):
+            self.log("[gui] status poll %s (%d in a row), keeping the last status" % ("slow" if slow else "missed",
+                                                                                     self._status_misses))
+            return dict(last, _stale=self._status_misses)
         self.active_port = None
+        self._last_status = None
         return None
 
     def answer_ask(self, key, yes):
@@ -504,6 +527,47 @@ def game_rows(gs):
     return rows
 
 
+def rose_status_text(st):
+    """Status tab "ROSE Online" line: folder found / not found + build progress or "all zones ready" (status.json "rose" +
+    "rose_build"; the GUI's own GET /rose/state copy "_rose_state" for the real folder path). "" = companion without ROSE."""
+    rb = (st or {}).get("rose_build")
+    if not isinstance(rb, dict):
+        return ""
+    full = (st or {}).get("_rose_state")
+    full = full if isinstance(full, dict) else {}
+    slot = (st or {}).get("rose") if isinstance((st or {}).get("rose"), dict) else {}
+    install = full.get("install") or rb.get("install")
+    if not rb.get("conv"):
+        where = "converter not bundled (ready packs only)"
+    elif not install:
+        where = "folder not found - set it in the Spiele tab"
+    elif not rb.get("install_ok"):
+        where = "folder not usable: %s (%s)" % (install, rb.get("install_reason") or "?")
+    else:
+        where = "found: %s" % install
+    cur = rb.get("current") if isinstance(rb.get("current"), dict) else None
+    packs = rb.get("packs") if isinstance(rb.get("packs"), dict) else {}
+    if slot.get("state") == "building":
+        prog = "building %s %d%%" % (slot.get("name") or "?", int(round(100 * float(slot.get("progress") or 0))))
+        eta = fmt_eta(slot.get("eta_s") if isinstance(slot.get("eta_s"), (int, float)) else None)
+        prog += ("  " + eta) if eta else ""
+    elif cur:
+        prog = "building %s %d%% (background)" % (cur.get("name") or "?", int(round(100 * float(cur.get("progress") or 0))))
+        eta = fmt_eta(cur.get("eta_s") if isinstance(cur.get("eta_s"), (int, float)) else None)
+        prog += ("  " + eta) if eta else ""
+    elif slot.get("all_ready"):
+        prog = "all zones ready"
+    elif packs and rb.get("install_ok"):
+        prog = "%d/%d zones ready" % (sum(1 for p in packs.values() if isinstance(p, dict) and p.get("state") == "fresh"),
+                                      len(packs))
+    else:
+        prog = ""
+    queued = len(rb.get("queue") or ())
+    if prog.startswith("building") and queued:
+        prog += ", %d queued" % queued
+    return where + (" — " + prog if prog else "")
+
+
 def status_rows(st, foreign=()):
     """status.json → [(label, value)] for the Status tab (foreign = candidate ports used by other programs)."""
     notes = [("Note", "Port %d: used by another program (not the GSVR companion) — skipped" % p) for p in sorted(foreign)]
@@ -522,6 +586,9 @@ def status_rows(st, foreign=()):
             ("Prefetch", _slot(st.get("next"))),
             ("Weapon models", _slot(st.get("models"), "mod")),
             ("Map holograms", _slot(st.get("holo"), "mod"))]
+    rose_txt = rose_status_text(st)
+    if rose_txt:
+        rows.insert(3, ("ROSE Online", rose_txt))
     if st.get("log") is False:
         rows.append(("Note", "no VRChat log folder found — map requests from the world can't arrive"))
     return rows + notes
@@ -547,6 +614,65 @@ def run_gui():
 
     def bg(fn):                          # run blocking actions off the UI thread
         threading.Thread(target=fn, daemon=True).start()
+
+    def scrollable(tab_title, padding):
+        """Add a scrollable tab to the notebook: Canvas + vertical Scrollbar + inner Frame (width follows the canvas).
+        Mouse wheel (Windows/macOS <MouseWheel>, Linux <Button-4/5>) only while the pointer is over this tab. -> inner frame"""
+        outer = ttk.Frame(nb)
+        nb.add(outer, text=tab_title)
+        cv = tk.Canvas(outer, highlightthickness=0, borderwidth=0,
+                       background=ttk.Style().lookup("TFrame", "background") or root.cget("background"))
+        vs = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+        cv.configure(yscrollcommand=vs.set)
+        cv.grid(row=0, column=0, sticky="nsew")
+        vs.grid(row=0, column=1, sticky="ns")
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+        inner = ttk.Frame(cv, padding=padding)
+        win = cv.create_window(0, 0, window=inner, anchor="nw")
+
+        def fit(_e=None):
+            cv.itemconfigure(win, width=cv.winfo_width(), height=max(inner.winfo_reqheight(), cv.winfo_height()))
+            cv.configure(scrollregion=(0, 0, cv.winfo_width(), max(inner.winfo_reqheight(), cv.winfo_height())))
+        cv.bind("<Configure>", fit)
+        inner.bind("<Configure>", fit)
+
+        def wheel(e):
+            if inner.winfo_reqheight() <= cv.winfo_height():
+                return
+            if getattr(e, "num", 0) == 4:
+                d = -1
+            elif getattr(e, "num", 0) == 5:
+                d = 1
+            elif sys.platform == "darwin":
+                d = -int(e.delta) or 0               # macOS: small deltas (1..N), no /120
+            else:
+                d = -int(e.delta / 120)
+            if d:
+                cv.yview_scroll(d, "units")
+
+        def over(_e=None):
+            root.bind_all("<MouseWheel>", wheel)
+            root.bind_all("<Button-4>", wheel)
+            root.bind_all("<Button-5>", wheel)
+
+        def leave(e=None):
+            try:
+                w = outer.winfo_containing(*outer.winfo_pointerxy())
+            except Exception:                        # noqa: BLE001
+                w = None
+            while w is not None and w is not outer:
+                w = w.master
+            if w is None:                            # really left the tab (not just entered a child)
+                root.unbind_all("<MouseWheel>")
+                root.unbind_all("<Button-4>")
+                root.unbind_all("<Button-5>")
+        outer.bind("<Enter>", over)
+        outer.bind("<Leave>", leave)
+        inner.scroll_canvas = cv
+        inner.scroll_bar = vs
+        inner.tab = outer          # the notebook child: select / hide by this, not by the inner frame (0.9.40 audit)
+        return inner
 
     # ---- top: big Start/Stop + headline ----
     top = ttk.Frame(root, padding=(10, 10, 10, 4))
@@ -602,8 +728,7 @@ def run_gui():
             prog_frame.pack_forget()
 
     # ---- Status tab ----
-    st_tab = ttk.Frame(nb, padding=10)
-    nb.add(st_tab, text="Status")
+    st_tab = scrollable("Status", 10)
     fatal_lbl = tk.Label(st_tab, text="", fg="#c00000", justify="left", anchor="w", font=("Consolas", 9, "bold"))
     fatal_lbl.grid(row=0, column=0, columnspan=2, sticky="we")
     rows_frame = ttk.Frame(st_tab)
@@ -636,8 +761,9 @@ def run_gui():
                 v.configure(text="")
 
     # ---- Spiele tab (GAME-FOLDERS): game | folder | source | Aendern... / Zuruecksetzen ----
-    gm_tab = ttk.Frame(nb, padding=8)
-    nb.add(gm_tab, text="Spiele")                                     # 2nd tab (Status first); insert(1, …) needs an existing tab 1
+    gm_tab = scrollable("Spiele", 8)
+    gm_tab_scroll = gm_tab.scroll_bar
+    #                                   # 2nd tab (Status first); insert(1, …) needs an existing tab 1
     gm_frame = ttk.Frame(gm_tab)
     gm_frame.grid(row=0, column=0, sticky="nsew")
     gm_note = ttk.Label(gm_tab, text="", foreground="#555", wraplength=700, justify="left")
@@ -646,7 +772,35 @@ def run_gui():
               "Ein manueller Half-Life-Ordner gilt f\u00fcr alle GoldSrc-Spiele (Half-Life, Counter-Strike, Sven Co-op ...).",
               foreground="#555", wraplength=700, justify="left").grid(row=2, column=0, sticky="w", pady=(4, 0))
     gm_tab.columnconfigure(0, weight=1)
-    gm_state = {"rows": None}
+    gm_state = {"rows": None, "val": None}
+    ROSE_HOW_DE = {"registry": "Registry", "steam": "Steam", "common folder": "Ordner-Suche", "drive scan": "Ordner-Suche",
+                   "configured": "manuell"}
+    ROSE_MISSING = "nicht gefunden - ROSE Online installieren oder mit 'Ändern...' den Ordner mit data.idx wählen"
+
+    def rose_row():
+        """-> ("rose", "ROSE Online", folder, source, found) for the Spiele table (detection runs off the Tk thread)."""
+        if rose_found["path"]:
+            return ("rose", "ROSE Online", rose_found["path"], ROSE_HOW_DE.get(rose_found["how"], rose_found["how"] or "-"), True)
+        if rose_found["busy"]:
+            return ("rose", "ROSE Online", "Suche l\u00e4uft ...", "-", True)
+        typed = rose_var.get().strip()
+        if typed:
+            return ("rose", "ROSE Online", "%s - ung\u00fcltig (data.idx nicht gefunden)" % typed, "manuell", False)
+        return ("rose", "ROSE Online", ROSE_MISSING, "-", False)
+
+    def rose_change():
+        d = filedialog.askdirectory(initialdir=rose_var.get() or None, title="ROSE-Online-Ordner w\u00e4hlen (mit data.idx)")
+        if not d:
+            return
+
+        def work():
+            ok, why = rosefind.check(d)
+            ui_q.put(("rose_picked", (d, ok, why)))
+        bg(work)
+
+    def rose_reset():
+        rose_set("")
+        rose_detect()
 
     def game_changed(gid, path):
         key = c.set_game_folder(gid, path)
@@ -663,8 +817,9 @@ def run_gui():
             game_changed(gid, d)
 
     def show_games(val):
+        gm_state["val"] = val
         gs, live = val
-        rows = game_rows(gs)
+        rows = game_rows(gs) + [rose_row()]
         if rows == gm_state["rows"]:
             return
         gm_state["rows"] = rows
@@ -679,8 +834,10 @@ def run_gui():
             ttk.Label(gm_frame, text=src).grid(row=i, column=2, sticky="nw", padx=(0, 10), pady=2)
             bf = ttk.Frame(gm_frame)
             bf.grid(row=i, column=3, sticky="ne", pady=2)
-            ttk.Button(bf, text="\u00c4ndern\u2026", command=lambda g=gid: game_change(g)).pack(side="left")
-            ttk.Button(bf, text="Zur\u00fccksetzen (automatisch)", command=lambda g=gid: game_changed(g, "")).pack(side="left", padx=(4, 0))
+            chg, rst = ((rose_change, rose_reset) if gid == "rose" else
+                        ((lambda g=gid: game_change(g)), (lambda g=gid: game_changed(g, ""))))
+            ttk.Button(bf, text="\u00c4ndern\u2026", command=chg).pack(side="left")
+            ttk.Button(bf, text="Zur\u00fccksetzen (automatisch)", command=rst).pack(side="left", padx=(4, 0))
         gm_frame.columnconfigure(1, weight=1)
 
     # ---- Log tab ----
@@ -703,8 +860,7 @@ def run_gui():
     ttk.Button(lb, text="Clear", command=lambda: log_txt.delete("1.0", "end")).pack(side="left", padx=3)
 
     # ---- Settings tab ----
-    se = ttk.Frame(nb, padding=10)
-    nb.add(se, text="Settings")
+    se = scrollable("Settings", 10)
     worlds_var = tk.StringVar(value=c.settings.get("worlds", ""))
     extra_var = tk.StringVar(value=c.settings.get("extra", ""))
     base_var = tk.StringVar(value=c.settings.get("update_base", DEFAULT_UPDATE_BASE))
@@ -783,7 +939,7 @@ def run_gui():
     rose_btns.grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
     rose_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
     rose_lbl.grid(row=r + 2, column=0, columnspan=2, sticky="w")
-    rose_found = {"path": "", "how": "", "busy": False}
+    rose_found = {"path": "", "how": "", "busy": False, "silent": False}
     rose_chk = {"path": None, "text": "", "busy": False}          # rosefind.check result of the typed folder (computed off the Tk thread)
 
     def rose_check_bg(path):
@@ -821,9 +977,30 @@ def run_gui():
         q = "/rose/install?dir=" + urllib.parse.quote(path or "")
         bg(lambda: ui_q.put(("rose_applied", c.rose_post(q))))
 
-    def rose_detect():
+    def rose_redraw():
+        if gm_state["val"] is not None:
+            show_games(gm_state["val"])
+
+    def rose_set(path):
+        """save rose_install (empty = auto-detect) and tell the running companion"""
+        rose_var.set(path)
+        c.settings.update(rose_install=path)
+        try:
+            c.save_settings()
+        except OSError as e:
+            c.log("[gui] could not save settings: %s" % e)
+        rose_sent["v"] = path
+        if c.running():
+            rose_apply(path)
+        rose_found.update(path="", how="")
+        rose_show()
+
+    def rose_detect(silent=False):
         rose_found["busy"] = True
-        rose_lbl.configure(text="searching ...")
+        rose_found["silent"] = silent
+        if not silent:
+            rose_lbl.configure(text="searching ...")
+        rose_redraw()
 
         def work():
             ui_q.put(("rose_found", rosefind.find(configured=rose_var.get().strip() or None, with_reasons=True)))
@@ -921,7 +1098,7 @@ def run_gui():
             return
         remember()
         c.start()
-        nb.select(st_tab)
+        nb.select(getattr(st_tab, "tab", st_tab))
         refresh_buttons()
     btn_toggle.configure(command=toggle)
 
@@ -1153,12 +1330,22 @@ def run_gui():
                     rose_found["busy"] = False
                     if val:
                         rose_found["path"], rose_found["how"] = val[0][0], val[0][1]
-                        if not rose_var.get().strip():
+                        if not rose_var.get().strip() and not rose_found["silent"]:
                             rose_apply(val[0][0])
                         rose_show()
                     else:
                         rose_found["path"] = ""
-                        rose_lbl.configure(text="not found - use Browse to pick the ROSE folder (the one with data.idx).")
+                        if not rose_found["silent"]:
+                            rose_lbl.configure(text="not found - use Browse to pick the ROSE folder (the one with data.idx).")
+                    rose_redraw()
+                elif kind == "rose_picked":
+                    d, ok, why = val
+                    if ok:
+                        rose_set(d)
+                        rose_detect()
+                        gm_note.configure(text="ROSE-Ordner gespeichert: %s" % d)
+                    else:
+                        gm_note.configure(text="Kein g\u00fcltiger ROSE-Ordner: %s" % why)
                 elif kind == "hl_found":
                     hl_items[:] = val
                     hl_list.delete(0, "end")
@@ -1184,6 +1371,7 @@ def run_gui():
     pump_logs()
     poll_status()
     pump_ui()
+    rose_detect(silent=True)                         # fills the ROSE row of the Spiele table (off the Tk thread)
     if c.settings.get("auto_update_check", True):
         root.after(800, lambda: check_now(quiet=True))
     # players just want it running: start the companion right away (Windows autostart passes --minimized)

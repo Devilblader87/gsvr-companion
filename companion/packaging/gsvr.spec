@@ -26,7 +26,8 @@ if _miss:
 # the W5+ engine tables and JASS compiler of w3pack_jvm.py: package tools/jvm (synced without its tests)
 JVM_FILES = sorted(f for f in os.listdir(os.path.join(TOOLS, "jvm")) if f.endswith(".py") and not f.startswith("test_"))
 COMPANION_MODULES = ["companion", "gui", "updater", "runtime", "version", "builder", "models", "prebuilt", "games", "steam",
-                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild"]
+                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild",
+                     "rose_conv_stub"]    # --selftest runs one stub ROSE build in a child (gsvr-cli --run-rose-build)
 # w3pack.py decodes BLP (JPEG inside) with Pillow; the tools run via runpy, so PyInstaller must be told
 PILLOW_MODULES = ["PIL", "PIL.Image", "PIL.ImageChops", "PIL.JpegImagePlugin", "PIL.BlpImagePlugin",
                   "PIL.ImageFont", "PIL.ImageDraw", "PIL.TgaImagePlugin", "PIL.PngImagePlugin"]   # HUD / menu fonts, previews
