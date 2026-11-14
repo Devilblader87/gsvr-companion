@@ -17,11 +17,11 @@ Updates come from the Gitea release feed (updater.py); no git needed.
 
 The logic lives in `Controller` (no Tkinter) so it can be tested headless: `python3 -I companion/gui.py --selftest`.
 """
-import collections, json, os, queue, shutil, socket, subprocess, sys, threading, time, urllib.error, urllib.request
+import collections, json, os, queue, shutil, socket, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                            # -I drops the script dir from sys.path
-import cachedir, companion, games, runtime, steam, updater                                  # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+import cachedir, companion, games, rosefind, runtime, steam, updater                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
 from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION                    # noqa: E402
 
 REPO = os.path.dirname(HERE)                                        # source checkout root (test data in work/)
@@ -31,13 +31,11 @@ DEFAULT_SETTINGS = {"worlds": DEFAULT_WORLDS, "extra": "", "war3_root": "", "war
                     "relay_url": "https://w3relay.heimserver.me", "map_autodownload": "on",
                     "update_base": DEFAULT_UPDATE_BASE, "update_token": "",
                     "auto_update_check": True, "prereleases": True, "auto_start": True,
-                    "cache_dir": ""}                                # "" = default cache folder
+                    "cache_dir": "", "rose_install": ""}                             # "" = default cache folder
 
 
 def settings_path():
-    if sys.platform == "win32":
-        return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "GSVR", "gui.json")
-    return os.path.expanduser("~/.config/gsvr/gui.json")
+    return rosefind.settings_file()                 # one place: the companion's ROSE auto-find reads the same gui.json
 
 
 def cache_dir(setting=""):
@@ -62,6 +60,21 @@ def ports_from_args(args):
 
 python_cmd = runtime.console_python                                 # kept for older callers
 
+
+
+def rose_live_text(d):
+    """status.json "rose" dict -> status line text, "" when idle / unknown.
+    Keys: state building|ready|error, name, progress 0..1, text, all_ready."""
+    if not isinstance(d, dict):
+        return ""
+    s = d.get("state")
+    if s == "building":
+        return "building %s %d%%" % (d.get("name", "?"), int(round(100 * float(d.get("progress") or 0))))
+    if s == "ready" and d.get("all_ready"):
+        return "all zones ready"
+    if s == "error":
+        return "error: %s" % (d.get("text") or d.get("error") or "?")
+    return ""
 
 
 def _is_old_lan_feed(url):
@@ -149,6 +162,9 @@ class Controller:
             v = self.settings.get(key, "").strip()
             if v:
                 a += [flag, v]
+        rose = self.settings.get("rose_install", "").strip()        # ROSE: own install folder (empty = auto-detect)
+        if rose:
+            a += ["--rose-install", rose]
         relay = self.settings.get("relay_url", "").strip()          # MAP-RELAY: empty = feature off
         if relay:
             a += ["--relay-url", relay]
@@ -332,6 +348,33 @@ class Controller:
                 return r.status == 200
         except OSError:
             return False
+
+    def rose_post(self, path):
+        """ROSE build control in the running companion (POST /rose/install?dir=... | /rose/build_all; custom header = no CSRF
+        from a page). -> parsed JSON answer, or None when the companion is not reachable / refused."""
+        if self.active_port is None:
+            return None
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d%s" % (self.active_port, path), data=b"", method="POST",
+                                         headers={"Host": "127.0.0.1", "X-GSVR-Rose": "1"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except (OSError, ValueError):
+            return None
+
+    def rose_state(self):
+        """GET /rose/state (GUI only, header X-GSVR-Rose): the companion's full ROSE build state incl. the install path
+        (status.json carries a scrubbed copy). -> dict or None. Blocking: call it off the Tk thread."""
+        if self.active_port is None:
+            return None
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/rose/state" % self.active_port,
+                                         headers={"Host": "127.0.0.1", "X-GSVR-Rose": "1"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            return d if isinstance(d, dict) else None
+        except (OSError, ValueError):
+            return None
 
     def cache_dir(self):
         return cache_dir(self.settings.get("cache_dir", ""))
@@ -671,6 +714,7 @@ def run_gui():
     war3_var = tk.StringVar(value=c.settings.get("war3_root", ""))
     w3maps_var = tk.StringVar(value=c.settings.get("war3_maps", ""))
     hl_var = tk.StringVar(value=c.settings.get("hl_root", ""))
+    rose_var = tk.StringVar(value=c.settings.get("rose_install", ""))
     # GAME-FOLDERS (maintainer 2026-10-29): folder settings live only on the Spiele tab, not on Settings
     gx = ttk.LabelFrame(gm_tab, text="Ordner von Hand / suchen", padding=8)
     gx.grid(row=3, column=0, sticky="we", pady=(10, 0))
@@ -729,6 +773,83 @@ def run_gui():
         w3_lbl.configure(text=("found: " + e["reason"]) if e["allowed"] else ("not found: " + e["reason"]))
     ttk.Button(gx, text="Detect", command=war3_detect).grid(row=r, column=2, sticky="w", padx=(6, 0))
     r += 1
+    # ROSE Online folder (BYOG: the companion builds the ROSE packs from the player's own install)
+    ttk.Label(gx, text="ROSE Online folder (empty = found automatically: registry, Steam, usual folders):"
+              ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    rose_ent = ttk.Entry(gx, textvariable=rose_var, width=70)
+    rose_ent.grid(row=r + 1, column=0, columnspan=2, sticky="we")
+    rose_ent.bind("<Return>", lambda _e: (remember(), rose_show()))      # Enter = save the typed folder (and tell the companion)
+    rose_btns = ttk.Frame(gx)
+    rose_btns.grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
+    rose_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
+    rose_lbl.grid(row=r + 2, column=0, columnspan=2, sticky="w")
+    rose_found = {"path": "", "how": "", "busy": False}
+    rose_chk = {"path": None, "text": "", "busy": False}          # rosefind.check result of the typed folder (computed off the Tk thread)
+
+    def rose_check_bg(path):
+        if rose_chk["busy"]:
+            return
+        rose_chk["busy"] = True
+
+        def work():
+            ok, why = rosefind.check(path)
+            ui_q.put(("rose_check", (path, ("found: " if ok else "not found: ") + why)))
+        bg(work)
+
+    def rose_show(st=None):
+        """Status line: live build state (status.json "rose" / GET /rose/state) wins over the detection result.
+        The folder check runs in the background (bg + ui_q); the label shows its last result."""
+        live = rose_live(st)
+        typed = rose_var.get().strip()
+        if live:
+            rose_lbl.configure(text=live)
+        elif typed:
+            if rose_chk["path"] == typed:
+                rose_lbl.configure(text=rose_chk["text"])
+            else:
+                rose_lbl.configure(text="checking ...")
+                rose_check_bg(typed)
+        elif rose_found["path"]:
+            rose_lbl.configure(text="found (%s): %s" % (rose_found["how"], rose_found["path"]))
+        elif rose_found["busy"]:
+            rose_lbl.configure(text="searching ...")
+
+    def rose_apply(path):
+        """the companion is a separate process: tell it over its local control route (it also gets --rose-install on restart).
+        The POST runs off the Tk thread; the answer comes back through ui_q."""
+        rose_sent["v"] = path or ""
+        q = "/rose/install?dir=" + urllib.parse.quote(path or "")
+        bg(lambda: ui_q.put(("rose_applied", c.rose_post(q))))
+
+    def rose_detect():
+        rose_found["busy"] = True
+        rose_lbl.configure(text="searching ...")
+
+        def work():
+            ui_q.put(("rose_found", rosefind.find(configured=rose_var.get().strip() or None, with_reasons=True)))
+        bg(work)
+
+    def rose_browse():
+        p = filedialog.askdirectory(initialdir=rose_var.get() or None)
+        if p:
+            rose_var.set(p)
+            remember()                              # saves + POSTs the new folder to the running companion
+            rose_show()
+
+    def rose_build_all():
+        rose_lbl.configure(text="asking the companion ...")
+        bg(lambda: ui_q.put(("rose_built", c.rose_post("/rose/build_all"))))
+
+    def rose_built(ans):
+        if ans is None:
+            rose_lbl.configure(text="Companion not running - start it first (it also builds each zone when the world asks).")
+        else:
+            q = ans.get("queued") or []
+            rose_lbl.configure(text=("build queued: " + ", ".join(q)) if q else "all ROSE zones are already up to date")
+    ttk.Button(rose_btns, text="Browse…", command=rose_browse).pack(side="left")
+    ttk.Button(rose_btns, text="Auto-detect", command=rose_detect).pack(side="left", padx=(4, 0))
+    ttk.Button(gx, text="Build all ROSE zones now", command=rose_build_all).grid(row=r + 2, column=2, sticky="w", padx=(6, 0))
+    r += 3
     r = 0
     relay_var = tk.StringVar(value=c.settings.get("relay_url", ""))
     dl_var = tk.StringVar(value=c.settings.get("map_autodownload", "on"))
@@ -773,8 +894,14 @@ def run_gui():
               foreground="#555").grid(row=r + 6, column=0, columnspan=3, sticky="w", pady=(12, 0))
     se.columnconfigure(0, weight=1)
 
+    rose_sent = {"v": c.settings.get("rose_install", "").strip()}     # the ROSE folder the running companion knows
+
     def remember():
-        c.settings.update(worlds=worlds_var.get(), extra=extra_var.get(), war3_root=war3_var.get().strip(), hl_root=hl_var.get().strip(),
+        typed_rose = rose_var.get().strip()
+        if typed_rose != rose_sent["v"] and c.running():
+            rose_apply(typed_rose)                  # Save of a typed ROSE folder also reaches the running companion (POST /rose/install)
+        rose_sent["v"] = typed_rose
+        c.settings.update(worlds=worlds_var.get(), extra=extra_var.get(), war3_root=war3_var.get().strip(), hl_root=hl_var.get().strip(), rose_install=rose_var.get().strip(),
                           war3_maps=w3maps_var.get().strip(), relay_url=relay_var.get().strip(),
                           map_autodownload=dl_var.get() if dl_var.get() in ("on", "ask", "off") else "on", update_base=base_var.get().strip(),
                           update_token=token_var.get().strip(), auto_update_check=bool(auto_var.get()),
@@ -925,6 +1052,8 @@ def run_gui():
     def poll_once():
         try:
             st = c.status()
+            if st is not None:
+                st["_rose_state"] = c.rose_state()        # GUI-only full ROSE state (GET /rose/state), off the Tk thread
             ui_q.put(("status", st))
             ui_q.put(("games", c.games_view(st)))
         finally:
@@ -959,7 +1088,22 @@ def run_gui():
                                   "before use." % key, parent=root)
         bg(lambda: c.answer_ask(key, yes))
 
+    last_status = {}
+
+    def rose_live(st=None):
+        st = st if st is not None else last_status.get("st")
+        txt = rose_live_text((st or {}).get("rose"))
+        if txt:
+            return txt
+        full = (st or {}).get("_rose_state") or {}             # GET /rose/state: a background build the world is not waiting for
+        cur = full.get("current") if isinstance(full, dict) else None
+        if isinstance(cur, dict) and cur.get("name"):
+            return "building %s %d%% (background)" % (cur["name"], int(round(100 * float(cur.get("progress") or 0))))
+        return ""
+
     def show_status(st):
+        last_status["st"] = st
+        rose_show(st)
         for key in (st or {}).get("ask") or ():
             if key not in asked:
                 ask_map(key)
@@ -996,6 +1140,25 @@ def run_gui():
                     cache_done(val)
                 elif kind == "refresh":
                     refresh_buttons()
+                elif kind == "rose_check":
+                    rose_chk["busy"] = False
+                    rose_chk["path"], rose_chk["text"] = val
+                    rose_show()
+                elif kind == "rose_applied":
+                    if val is not None and not val.get("ok", False):
+                        rose_lbl.configure(text="not usable: " + str(val.get("reason", "")))
+                elif kind == "rose_built":
+                    rose_built(val)
+                elif kind == "rose_found":
+                    rose_found["busy"] = False
+                    if val:
+                        rose_found["path"], rose_found["how"] = val[0][0], val[0][1]
+                        if not rose_var.get().strip():
+                            rose_apply(val[0][0])
+                        rose_show()
+                    else:
+                        rose_found["path"] = ""
+                        rose_lbl.configure(text="not found - use Browse to pick the ROSE folder (the one with data.idx).")
                 elif kind == "hl_found":
                     hl_items[:] = val
                     hl_list.delete(0, "end")

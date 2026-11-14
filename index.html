@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GSVR Companion</title>
-<meta name="description" content="Play your own copy of Counter-Strike 1.6, Half-Life, Sven Co-op and Warcraft III in VRChat: the GSVR companion app converts your installed game files locally.">
+<meta name="description" content="Play your own copy of Counter-Strike 1.6, Half-Life, Sven Co-op, Warcraft III and ROSE Online in VRChat: the GSVR companion app converts your installed game files locally.">
 <style>
   :root { --bg: #14130f; --panel: #1f1c15; --text: #e8dcc0; --muted: #a8987a; --accent: #ffb42a; --line: #3a3324; }
   @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #f4efe4; --panel: #fffaf0; --text: #2a2418; --muted: #6d5f45; --accent: #b86e00; --line: #dccfb3; } }
@@ -27,7 +27,7 @@
 <body>
 <main>
   <h1>GSVR <span>Companion</span></h1>
-  <p class="lead">Play Counter-Strike 1.6, the Half-Life campaign, Sven Co-op and Warcraft III in VRChat — built from <b>your own</b> installed games, on your PC.</p>
+  <p class="lead">Play Counter-Strike 1.6, the Half-Life campaign, Sven Co-op, Warcraft III and ROSE Online in VRChat — built from <b>your own</b> installed games, on your PC.</p>
   <p class="muted">Four separate worlds: <b>GSVR - Counter-Strike</b> (classic rounds, bomb, hostages, bots), <b>GSVR - Half-Life</b> (the campaign in co-op: HL weapons, HEV, monsters), <b>GSVR - Sven Co-op</b> (co-op maps with Sven weapons, monsters and allies) and <b>Warcraft III</b> (melee, tower defense and other custom maps on a table — box-select with the trigger, right click with the grip — with your friends; its texts and dialogs come from your own install). Each world only needs the game it is built from.</p>
 
   <div class="card">
@@ -58,6 +58,14 @@
   and is saved in <code>Warcraft III\Maps\Download\GSVR</code>, so it also works in the real game. Blizzard's own maps
   and game data are never sent. You can switch it off in the settings (<i>Karten vom Host automatisch laden</i>: on / ask / off).
   Takedown requests: <code>abuse@heimserver.me</code>.</p>
+
+  <h2>ROSE Online (bring your own game)</h2>
+  <p>The companion finds your ROSE Online install automatically, or you set the
+  "ROSE Online folder" in the GUI (<code>--rose-install &lt;folder&gt;</code>). On your first join it
+  builds the zone, avatar and lobby packs from your own install (about 1 minute per pack, progress
+  shown in the world's load room), caches them and prebuilds the other zones in the background.
+  Music needs miniaudio (bundled). Nothing is downloaded. The ROSE world is alpha.</p>
+  <p>Community: questions, ideas, bug reports? <a href="https://discord.gg/nc2rw6Snx">Join our Discord</a></p>
 
   <h2>Trouble?</h2>
   <ul>

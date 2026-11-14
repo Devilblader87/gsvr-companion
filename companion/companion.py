@@ -23,6 +23,8 @@ Fixed URL set (VRCUrls can't be built at runtime, so the world bakes these in, p
   GET /pack/tram.bin      the original c0a0 intro tram brush model alone (empty-world GSV3, ~0.9 MB, built on first use from the
                           player's valve install; 404 when valve/c0a0 is not installed / not allowed)
   GET /pack/hologram.bin  mod hub map-hologram bundle (GSPV) for the last `holo=` request (companion/holo.py)
+  GET /pack/rose.rpg1     ready ROSE pack (RPG1) of the last `rose=` request (companion/rose.py; 503 before ready, 404 file missing)
+  GET /rose/state         GUI only (header X-GSVR-Rose: 1, else 403): the full rosebuild.state() incl. the install path
 status.json "build": [{kind: map|models|hologram|war3, mod, name, pct 0-100, eta_s (-1 unknown), state}] = the converter runs in progress
 (empty list when idle; companion/buildprog.py parses the converters' "@progress" stdout lines; old worlds ignore the field).
 Requests from the world arrive as VRChat log lines:
@@ -33,13 +35,17 @@ Requests from the world arrive as VRChat log lines:
   [GSVR-REQ] rescan                         re-run ownership + map index
   [GSVR-REQ] models=<mod> [req=<id>]        build/serve the weapon model+sound pack (status.json "models")
   [GSVR-REQ] holo=<mod> maps=<a,b,c> [req=<id>]  build/serve the hub's hologram bundle of those maps (status.json "holo")
+  [GSVR-REQ] rose=<name> [req=<id>]         ROSE: serve <rose dir>/rose__<name>.rpg1 as GET /pack/rose.rpg1 (status.json "rose");
+                                            missing / stale + install known -> built by rosebuild.py ("rose" state "building",
+                                            stage, progress 0..1, eta_s), status.json "rose_build" = rosebuild.public_state()
+                                            (no user folder names: any world reads status.json)
   [GSVR-REQ] music=<Sound\\...mp3> slot=a|b  W3VR: serve that mp3 of the war3 install as GET /music/<slot>.mp3
                                             (status.json "music": {slot: path}); the world's video player decodes it
 """
 import argparse, errno, http.server, json, os, queue, re, socket, struct, sys, threading, time, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I drops the script dir from sys.path
-import builder, buildprog, csshare, games as games_mod, holo, logwatch, mapshare, models, prebuilt, runtime, steam, war3   # noqa: E402
+import builder, buildprog, csshare, games as games_mod, holo, logwatch, mapshare, models, prebuilt, rose, rosebuild, runtime, steam, war3   # noqa: E402
 from version import VERSION                                        # noqa: E402  (single source of truth)
 
 APP = "gsvr-companion"          # status.json "app": the world + GUI accept a status only with this value
@@ -144,6 +150,8 @@ class State:
         self.models_wake = threading.Event()
         self.holo, self.holo_job, self.hconv = holo.new_slot(), None, None       # /pack/hologram.bin (holo.py)
         self.holo_wake = threading.Event()
+        self.rose = rose.new_slot()             # /pack/rose.rpg1 (rose.py); packs built by rosebuild.py from the ROSE install
+        self.rosebuild = rosebuild.init(getattr(args, "rose_dir", None), log=log, on_update=self.rose_update)
         self.prewarm = []                       # mods whose model pack is built in the background (models_worker)
         self.prewarm_done = False
         self.neighbors = []                     # (mod, map) levels next to the current map, pre-converted when idle
@@ -298,8 +306,26 @@ class State:
             return out
 
     def status_json(self):
+        rb = self.rosebuild.state()                       # outside self.lock (own lock; per pack state cached 2 s)
         with self.lock:
-            return self._status_locked()
+            d = self._status_locked()
+        d["rose"].update(rose_summary(d["rose"], rb))
+        d["rose"]["error"] = rosebuild.scrub(d["rose"].get("error"))      # status.json is public: no user folder names
+        d["rose"]["text"] = rosebuild.scrub(d["rose"]["text"])
+        d["rose_build"] = rosebuild.public_state(rb)
+        return d
+
+    def rose_update(self, name, fields):
+        """rosebuild -> the "rose" slot: progress / ready / error of the build the world is waiting for"""
+        with self.changed:
+            if self.rose.get("name") != name or self.rose.get("state") != "building":
+                return
+            self.rose.update(fields)
+            self.seq += 1
+            self.changed.notify_all()
+        if fields.get("state") in ("ready", "error"):
+            log(f"  rose {name}: {fields['state']}" + (f" ({fields['size']} bytes)" if fields["state"] == "ready"
+                                                       else f" ({fields['error']})"))
 
     def _status_locked(self):
         pub = {s: {k: v for k, v in d.items() if k != "path"} for s, d in self.slots.items()}
@@ -313,6 +339,7 @@ class State:
                 "index_rev": self.index_rev, "log": self.args.vrchat_log_dir is not None,
                 "models": models.public(self.models),
                 "holo": holo.public(self.holo),
+                "rose": rose.public(self.rose),
                 "build": buildprog.TRACKER.public(),
                 "music": {s: p for s, (p, _d) in self.music.items()},
                 "ownership": {m: e["allowed"] for m, e in sorted(self.ownership.items())},
@@ -426,6 +453,20 @@ class State:
                     self.models.update(state="queued", req=self.models_job[1], error=None)
                     self.seq += 1
             self.models_wake.set()
+        if "rose" in cmd:
+            name, req = cmd["rose"][:64], cmd.get("req", "")[:32] or None
+            ok = rose.valid_name(name)
+            # one lock over request() + the slot write: an instant ready / error from the build thread (rose_update, which needs
+            # this lock and only applies to a "building" slot of that name) lands AFTER the slot shows this request, never before
+            # (it was lost and the slot stuck in "building"). No deadlock: rosebuild never calls rose_update with its own lock held.
+            with self.lock:
+                r = self.rosebuild.request(name) if ok else \
+                    {"state": "error", "size": 0, "path": None, "error": "bad rose pack name (expected [a-z0-9_]{1,32})"}
+                self.rose.update(r, req=req, name=name if ok else None)
+                self.seq += 1
+            log(f"  rose {name}: {r['state']}" + (f" ({r['size']} bytes)" if r["state"] == "ready" else
+                                                  f" ({r['stage']} {int(r['progress'] * 100)}%)" if r["state"] == "building"
+                                                  else f" ({r['error']})"))
         if "holo" in cmd:
             with self.lock:
                 self.holo_job = (cmd["holo"][:64], cmd.get("maps", "")[:4000], cmd.get("req", "")[:32] or None)
@@ -740,6 +781,10 @@ def make_handler(state):
                 return self._send(403, "forbidden\n")
             if hostname not in ALLOWED_HOSTS:                 # DNS-rebinding defence
                 return self._send(421, "misdirected request\n")
+            if path == "/rose/state":                         # GUI only: full build state incl. the install path (CSRF: custom header)
+                if self.headers.get("X-GSVR-Rose") != "1":
+                    return self._send(403, "forbidden\n")
+                return self._send(200, json.dumps(state.rosebuild.state(), separators=(",", ":")), "application/json")
             if path not in ("/status.json", "/pack/wait.bin") and not state.world_ok:  # --world-allow: only serve data inside allowed worlds
                 return self._send(403, "world not allowed\n")
             if path == "/status.json":
@@ -762,7 +807,7 @@ def make_handler(state):
                     self.wfile.write(data)
                 return
             if path in ("/pack/current.bin", "/pack/next.bin", "/pack/models.bin", "/pack/previews.bin", "/pack/hologram.bin",
-                        "/pack/tram.bin"):
+                        "/pack/tram.bin", "/pack/rose.rpg1"):
                 s = None
                 if path == "/pack/tram.bin":                  # built outside the lock; 404 when valve/c0a0 is not installed
                     s = state.tram_slot()
@@ -787,8 +832,12 @@ def make_handler(state):
                         s = dict(state.models)
                     elif path == "/pack/hologram.bin":
                         s = dict(state.holo)
+                    elif path == "/pack/rose.rpg1":
+                        s = dict(state.rose)
                     else:
                         s = dict(state.slots["current" if path == "/pack/current.bin" else "next"])
+                if path == "/pack/rose.rpg1" and s["state"] == "error" and "no rose__" in (s["error"] or ""):
+                    return self._send(404, "no such rose pack file\n")
                 if s["state"] != "ready" or not s["path"]:
                     return self._send(503, f"pack not ready ({s['state']})\n")
                 try:
@@ -854,18 +903,37 @@ def make_handler(state):
             self._send(405, "method not allowed\n")
 
         def do_POST(self):
-            """POST /ask?sha=<16 hex>&answer=yes|no — the GUI's answer to the 'ask' prompt (map_autodownload=ask)."""
+            """POST /ask?sha=<16 hex>&answer=yes|no — the GUI's answer to the 'ask' prompt (map_autodownload=ask).
+            POST /rose/install?dir=<path> (empty = clear), POST /rose/build_all[?force=1] — the GUI's ROSE folder field and
+            "Build all ROSE zones now" (header X-GSVR-Rose: 1); answer = JSON {ok, reason | queued, rose_build}."""
             host = (self.headers.get("Host") or "").strip().lower()
             hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host
             q = urllib.parse.urlsplit(self.path)
-            if (self.client_address[0] not in ("127.0.0.1", "::1") or hostname not in ALLOWED_HOSTS
-                    or q.path != "/ask" or self.headers.get("X-GSVR-Ask") != "1"):
+            if self.client_address[0] not in ("127.0.0.1", "::1") or hostname not in ALLOWED_HOSTS:
+                return self._reject()
+            if q.path in ("/rose/install", "/rose/build_all") and self.headers.get("X-GSVR-Rose") == "1":
+                return self._rose_post(q)
+            if q.path != "/ask" or self.headers.get("X-GSVR-Ask") != "1":
                 return self._reject()
             qs = urllib.parse.parse_qs(q.query)
             key, ans = (qs.get("sha") or [""])[0], (qs.get("answer") or [""])[0]
             if not re.match(r"^[0-9a-f]{16}$", key) or ans not in ("yes", "no"):
                 return self._send(400, "bad request\n")
             return self._send(200 if state.answer_ask(key, ans == "yes") else 404, "ok\n")
+
+        def _rose_post(self, q):
+            qs = urllib.parse.parse_qs(q.query, keep_blank_values=True)
+            log(f"HTTP POST {q.path} from {self.client_address[0]}")
+            if q.path == "/rose/install":
+                d = (qs.get("dir") or [""])[0].strip()
+                if len(d) > 1024 or "\0" in d:
+                    return self._send(400, "bad request\n")
+                ok, why = state.rosebuild.set_install(d or None)
+                body = {"ok": bool(ok), "reason": why}
+            else:
+                body = {"ok": True, "queued": state.rosebuild.build_all(force=(qs.get("force") or ["0"])[0] == "1")}
+            body["rose_build"] = state.rosebuild.state()
+            return self._send(200, json.dumps(body, separators=(",", ":")), "application/json")
 
         do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _reject
 
@@ -900,7 +968,7 @@ def bind_reason(e):
     return f"{type(e).__name__}: {e}"
 
 
-QUIET_PATHS = {"/status.json", "/pack/wait.bin"}
+QUIET_PATHS = {"/status.json", "/pack/wait.bin", "/rose/state"}
 _polls_seen = set()
 
 
@@ -965,6 +1033,44 @@ def parse_ports(port_arg, cand_arg):
     return (int(port_arg),), False
 
 
+def rose_summary(slot, rb):
+    """status.json "rose" extras for the GUI status line: text (one short line) + all_ready (every PACKS entry fresh)."""
+    packs = rb.get("packs") or {}
+    all_ready = bool(packs) and all(p["state"] == "fresh" for p in packs.values())
+    cur = rb.get("current")
+    if slot.get("state") == "building":
+        text = f"building {slot.get('name')} {int((slot.get('progress') or 0) * 100)}%"
+    elif cur:
+        text = f"building {cur['name']} {int(cur['progress'] * 100)}% (background)"
+    elif slot.get("state") == "error":
+        text = slot.get("error") or "error"
+    elif not rb.get("install"):
+        text = "ROSE folder not set" if rb.get("conv") else "ready packs only"
+    elif not rb.get("install_ok"):
+        text = f"ROSE folder not usable: {rb.get('install_reason')}"
+    elif all_ready:
+        text = "all ROSE zones ready"
+    else:
+        n = sum(1 for p in packs.values() if p["state"] == "fresh")
+        text = f"{n}/{len(packs)} ROSE packs ready"
+    return {"text": text[:160], "all_ready": all_ready}
+
+
+def find_rose_install(rb):
+    """no --rose-install: the GUI's saved folder (gui.json rose_install) or the auto search of rosefind.py (lane A)"""
+    try:
+        import rosefind
+        configured = rosefind.load_config(rosefind.settings_file())        # -> str ("" = not set)
+        found = rosefind.find(configured or None)
+    except Exception as e:                                       # noqa: BLE001 - missing / failing search = no install
+        log(f"[rose] install search failed: {e}")
+        return
+    if found:
+        rb.set_install(found[0])
+    else:
+        log("[rose] no ROSE install found (set the ROSE folder in the companion)")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="GSVR companion v0")
     ap.add_argument("--game-root", help="manual override: GoldSrc game dir containing valve/, cstrike/ … (skips Steam ownership check)")
@@ -979,6 +1085,11 @@ def main(argv=None):
                     help="'auto' (default): first free of " + ",".join(map(str, PORT_CANDIDATES)) + "; or a fixed port")
     ap.add_argument("--port-candidates", help=argparse.SUPPRESS)       # tests only: replaces PORT_CANDIDATES
     ap.add_argument("--cache-dir", default=default_cache_dir())
+    ap.add_argument("--rose-dir", help="folder with ready ROSE packs rose__<name>.rpg1 served as GET /pack/rose.rpg1 "
+                    "(default: <cache dir>/rose; the converter lives in the rose-vrchat repo, tools/rose_pack.py)")
+    ap.add_argument("--rose-install", help="the player's own ROSE install folder: rosebuild.py builds the ROSE packs from it "
+                    "(default: the GUI's saved folder / auto search, rosefind.py)")
+    ap.add_argument("--no-rose-find", action="store_true", help=argparse.SUPPRESS)   # tests: no ROSE auto search
     ap.add_argument("--converter", default=os.path.join(runtime.tools_dir(), "pack.py"))
     ap.add_argument("--pack-cmd", help="converter command template, e.g. '{python} -I {converter} --bsp {bsp} {out}'")
     ap.add_argument("--model-converter", default=os.path.join(runtime.tools_dir(), "modelpack.py"))
@@ -1006,6 +1117,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     a.world_allow = set(a.world_allow.split(",")) if a.world_allow else None
     a.cache_dir = os.path.abspath(a.cache_dir)
+    a.rose_dir = os.path.abspath(a.rose_dir) if a.rose_dir else rose.default_dir(a.cache_dir)
     if a.prebuilt_dir and a.game_root:
         ap.error("--prebuilt-dir and --game-root are mutually exclusive")
     if a.prebuilt_mod and not a.prebuilt_dir:
@@ -1038,7 +1150,14 @@ def main(argv=None):
     log(f"converter: {conv.converter} version={conv.version}")
     log(f"command:   {conv.template}")
     log(f"cache:     {a.cache_dir}")
+    log(f"rose dir:  {a.rose_dir}  (packs rose__<name>.rpg1)")
     st = State(a)
+    rb = st.rosebuild
+    log(f"rose conv: {getattr(rb.conv, 'VERSION', None) or 'not bundled (ready packs only)'}")
+    if a.rose_install:
+        rb.set_install(a.rose_install)
+    elif rb.conv is not None and not a.no_rose_find:
+        threading.Thread(target=find_rose_install, args=(rb,), daemon=True).start()   # time-boxed search, off the start path
     st.port = port
     st.conv = conv
     st.mconv = (models.PrebuiltModels(a.prebuilt_dir) if a.prebuilt_dir

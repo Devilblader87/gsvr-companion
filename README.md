@@ -1,6 +1,6 @@
 # GSVR Companion
 
-Play your own copy of **Counter-Strike 1.6, Half-Life, Sven Co-op and Warcraft III** in VRChat: the companion converts maps, models and sounds from the games installed on **your** PC.
+Play your own copy of **Counter-Strike 1.6, Half-Life, Sven Co-op, Warcraft III and ROSE Online** in VRChat: the companion converts maps, models and sounds from the games installed on **your** PC.
 
 **Download & instructions:** https://devilblader87.github.io/gsvr-companion/
 
@@ -12,6 +12,20 @@ Play your own copy of **Counter-Strike 1.6, Half-Life, Sven Co-op and Warcraft I
 * PC (Windows) VRChat only. Needs the VRChat setting *Allow Untrusted URLs*.
 
 Fan project, not affiliated with Valve, Blizzard Entertainment or VRChat. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment.
+
+
+### ROSE Online (bring your own game)
+
+The companion supports the ROSE Online world. It finds your ROSE install automatically
+(registry, Steam, usual folders); otherwise set the "ROSE Online folder" in the GUI or start
+with `--rose-install <folder>`. On your first join it builds the zone, avatar and lobby packs
+from your own install (about 1 minute per pack; progress is shown in the world's load room),
+caches them, and prebuilds the other zones in the background. Music needs miniaudio (bundled).
+Nothing is downloaded, and no game files are shared: everything is built locally from your copy.
+The ROSE world is alpha: the first build takes about 1 minute per zone and zone loads in the
+world still take 1.5 to 2.5 minutes.
+
+**Community:** questions, ideas, bug reports? Join our Discord: https://discord.gg/nc2rw6Snx
 
 ## License, code signing and privacy
 

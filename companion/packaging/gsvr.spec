@@ -26,7 +26,7 @@ if _miss:
 # the W5+ engine tables and JASS compiler of w3pack_jvm.py: package tools/jvm (synced without its tests)
 JVM_FILES = sorted(f for f in os.listdir(os.path.join(TOOLS, "jvm")) if f.endswith(".py") and not f.startswith("test_"))
 COMPANION_MODULES = ["companion", "gui", "updater", "runtime", "version", "builder", "models", "prebuilt", "games", "steam",
-                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir"]
+                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild"]
 # w3pack.py decodes BLP (JPEG inside) with Pillow; the tools run via runpy, so PyInstaller must be told
 PILLOW_MODULES = ["PIL", "PIL.Image", "PIL.ImageChops", "PIL.JpegImagePlugin", "PIL.BlpImagePlugin",
                   "PIL.ImageFont", "PIL.ImageDraw", "PIL.TgaImagePlugin", "PIL.PngImagePlugin"]   # HUD / menu fonts, previews
@@ -37,19 +37,26 @@ try:
 except ImportError:
     raise SystemExit("gsvr.spec: the miniaudio package is not installed in the build venv (pip install -r companion/packaging/requirements-build.txt)")
 MUSIC_MODULES = ["miniaudio", "_miniaudio", "_cffi_backend"]
+# ROSE converter (companion/rose_conv, BYOG: builds the RPG1 packs from the player's own ROSE install; docs/design/rose_companion_build.md).
+# The converter modules import each other as top-level names (rose_conv/__init__ puts its folder on sys.path), several only inside functions:
+# every module of SOURCE_HASHES is a hidden import, rose_conv/ is on pathex so PyInstaller finds them. test_rose_packaging.py guards this list.
+ROSE_CONV = os.path.join(COMP, "rose_conv")
+with open(os.path.join(ROSE_CONV, "SOURCE_HASHES"), encoding="utf-8") as _f:
+    ROSE_MODULES = ["rose_conv"] + [os.path.splitext(ln.split()[-1])[0] for ln in _f.read().splitlines() if ln.strip()]
+ROSE_DATA = [(os.path.join(ROSE_CONV, f), "rose_conv") for f in ("VERSION_SOURCE", "lobby_default.json")]
 ICON = os.path.join(SPEC_DIR, "gsvr.ico")                # optional: drop a gsvr.ico here
 icon = ICON if os.path.isfile(ICON) else None
 
 a = Analysis(
     [os.path.join(COMP, "gsvr_main.py")],
-    pathex=[COMP, TOOLS],
+    pathex=[COMP, TOOLS, os.path.join(COMP, "rose_conv")],
     binaries=[],
     datas=[(os.path.join(TOOLS, f), "tools") for f in TOOL_FILES] + [(os.path.join(TOOLS, "jvm", f), "tools/jvm")
                                                                     for f in JVM_FILES]
-          + [(os.path.join(COMP, "README.md"), ".")],
+          + [(os.path.join(COMP, "README.md"), ".")] + ROSE_DATA,
     hiddenimports=COMPANION_MODULES + [os.path.splitext(f)[0] for f in TOOL_FILES]
                   + ["jvm"] + ["jvm." + os.path.splitext(f)[0] for f in JVM_FILES if f != "__init__.py"] + ["tkinter", "tkinter.ttk",
-                                                                                    "tkinter.messagebox"] + PILLOW_MODULES + MUSIC_MODULES,
+                                                                                    "tkinter.messagebox"] + PILLOW_MODULES + MUSIC_MODULES + ROSE_MODULES,
     hookspath=[],
     runtime_hooks=[],
     excludes=["unittest", "pydoc_data", "test", "lib2to3", "idlelib", "ensurepip", "distutils", "setuptools", "pip"],

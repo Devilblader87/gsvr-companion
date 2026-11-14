@@ -970,6 +970,9 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.work, exist_ok=True)
     unit_tests(a.work, a.game_root)
+    print("[rose_conv] converter bundle smoke (same check as the frozen --selftest)")
+    import gsvr_main
+    check(gsvr_main.rose_smoke(), "rose_conv smoke (import, VERSION != rv-unknown-1, lobby_default.json, converter modules)")
     ports_test(a.work)
     integration(a.work, a.game_root, a.sabotage)
     queued_test(a.work, a.game_root)

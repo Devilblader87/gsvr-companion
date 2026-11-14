@@ -4,6 +4,8 @@ A small local program the player runs on their own Windows PC next to VRChat. It
 in their Steam library, converts maps from **their own install** into packs, and serves them to the VRChat
 world over `http://127.0.0.1` (one of three fixed ports, see "Ports") only. The world itself contains no Valve assets.
 
+**Community:** questions, ideas, bug reports? Join our Discord: https://discord.gg/nc2rw6Snx
+
 The companion is Python 3 stdlib only (3.9+; tested with 3.9 and 3.14 on macOS). Players get it as a
 **Windows app** (`GSVR.exe`, a PyInstaller build, no Python needed) that updates itself from our Gitea releases;
 the same code also runs from source. Files:
@@ -23,6 +25,8 @@ the same code also runs from source. Files:
 | `prebuilt.py` | `--prebuilt-dir` mode: serves already-built packs, no game files, no converter |
 | `models.py` | weapon model + sound pack (GSM1, `tools/modelpack.py`): `/pack/models.bin`, `models=` command, `validate_models`, cache |
 | `buildprog.py` | build progress: converters print `@plan stage=weight ...` / `@progress <stage> <done> <total>` (`tools/bprog.py`), the companion streams their stdout per job and publishes `status.json` `build`: `[{kind: map\|models\|hologram\|war3, mod, name, pct 0-100, eta_s (-1 unknown), state}]` (empty = idle; eta from the rate, or the last build of the same key in `<cache>/build_times.json`); GUI bars + world HUD (`GsvrBuildHud`) read it |
+| `rose.py` | ROSE pack route: serves a ready `rose__<name>.rpg1` (RPG1) from `--rose-dir` (default `<cache>/rose`) as `/pack/rose.rpg1`, `rose=<name>` command, header check (magic, major 1, fileSize, <= 100 MB, no path traversal), `status.json` `rose`. The conversion itself lives in `rosebuild.py` + `rose_conv/` (see the ROSE section below); a pack copied in by hand (no install configured) is still served as is |
+| `rosefind.py` / `rosebuild.py` / `rose_conv/` | ROSE install detection, build manager (on demand + background), vendored converter; see **ROSE** below |
 | `holo.py` | map hologram bundle for the mod hub (GSPV, `tools/previewpack.py`): `/pack/hologram.bin`, `holo=` command, `validate_hologram`, cache, `--prebuilt-dir` `<mod>__hologram.gspv` |
 | `selftest.py` / `selftest.sh` | end-to-end self-test (`--sabotage` = must fail); also runs `selftest_update.py` |
 | `selftest_update.py` | updater / release script / frozen-dispatch tests against a local fake Gitea |
@@ -229,6 +233,7 @@ Log commands. The tag can appear anywhere in the line; tokens are `key=value` or
 [GSVR-REQ] ping=8f3a                     echoed as status.ping (shows the companion is alive and reading the log, and how far behind it is)
 [GSVR-REQ] rescan                        re-run the ownership check and the map index (after installing a game)
 [GSVR-REQ] models=cstrike req=m4711      build/serve the weapon model+sound pack of an ALLOWED mod (status.models)
+[GSVR-REQ] rose=<name> req=<id>   serve <rose dir>/rose__<name>.rpg1 as GET /pack/rose.rpg1 (status.rose {state idle|ready|error, req, name, size, error}; 503 before ready, 404 file missing)
 [GSVR-REQ] holo=valve maps=c1a0,c1a1 req=h3x81  build/serve the mod hub's map hologram bundle (decimated world faces of those installed maps, status.holo,
                                          GET /pack/hologram.bin, <= 10 MB; prebuilt mode: <mod>__hologram.gspv as is; companion/holo.py)
 ```
@@ -392,6 +397,20 @@ findet GSVR es meistens nicht von selbst. So gibst du den Ordner an:
 Nur mit eigener, legal erworbener Kopie. Ohne Steam kann der Besitz nicht geprueft werden. Ist das Feld leer,
 bleibt alles wie bisher: Steam wird automatisch gefunden (auch mit eigener Installation, Registry, anderen
 Laufwerken und zusaetzlichen Steam-Bibliotheken).
+
+## ROSE (RPG1 packs built from your own install)
+
+The ROSE world (RPG1) needs one pack per zone plus a login/lobby pack and an avatar pack. The companion builds them itself from **your own ROSE Online install** (BYOG: no game files are shipped or downloaded, the packs are built locally and stay in your cache).
+
+- **Finding the install:** automatic (registry uninstall entries, Steam libraries, usual folders like `C:\Program Files*\*ROSE*` / `C:\Games\*ROSE*`, top-level folders of fixed drives, time-boxed). Override: the **ROSE folder** row in the GUI (path, Browse, status "found / not found / building zone X NN%", plus "Build all ROSE zones now"), or on the command line `--rose-install DIR`. The choice is saved in the companion config next to the Half-Life settings.
+- **When it builds:** on the first join when the world asks for a pack that is missing or stale (the load room shows "Building <zone> from your ROSE install ... NN%"), and afterwards quietly in the background for the other zones. An on-demand request pre-empts the background build; only one build runs at a time.
+- **Where it goes:** `<cache>/rose/rose__<name>.rpg1` plus a `.json` sidecar (converter version + install fingerprint). A pack is rebuilt when the converter or your install changed. `--rose-dir DIR` moves the folder (also for hand-copied ready packs without an install, e.g. test containers).
+- **Cost:** about 1 minute per zone, about 0.7 GB peak memory, a few hundred MB of disk per zone in total.
+- **Music** needs the `miniaudio` package (bundled in the exe; running from source: `pip install miniaudio`). Without it the packs carry sound effects only (a warning is logged).
+- **No install found:** `status.json` `rose` reports `error` with "ROSE install not found: set the ROSE folder in the companion".
+- **Converter source:** `companion/rose_conv/` is a verbatim copy of `rose-vrchat/tools` (never edit it here). Update it with `tools/sync_rose_converter.sh` (reads `$ROSE_REPO`, default `~/dev/rose-vrchat`); it refuses when a copied file was edited locally (`--force` overrides) and rewrites `VERSION_SOURCE` / `SOURCE_HASHES`. The pack cache key `rose_conv.VERSION` (`rv-<commit>-<wrapper rev>`) changes with it.
+- **Packaging:** `gsvr.spec` bundles `rose_conv` (all modules of `SOURCE_HASHES` as hidden imports, `VERSION_SOURCE` + `lobby_default.json` as data); `test_rose_packaging.py` guards the list; the frozen `--selftest` prints a `[rose_conv] frozen smoke` block.
+- **Tests (no game data):** `cd companion && python3 -I -m unittest discover -p "test_rose*.py"`.
 
 ## GAME-FOLDERS (Tab "Spiele")
 

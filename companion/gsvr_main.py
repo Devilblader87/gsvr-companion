@@ -51,6 +51,33 @@ def run_converter(script, args):
     return 0
 
 
+def rose_smoke():
+    """Frozen/source smoke check of the vendored ROSE converter (BYOG, lane E): rose_conv imports (all converter modules were bundled),
+    VERSION carries the real source hash (VERSION_SOURCE was bundled) and lobby_default.json is there. Returns True when ok."""
+    ok = True
+    try:
+        import rose_conv
+        ver = rose_conv.VERSION
+        good = bool(ver) and ver != "rv-unknown-1"
+        print("  %s rose_conv imports, VERSION %s" % ("ok  " if good else "FAIL", ver))
+        ok &= good
+        lob = os.path.isfile(rose_conv.LOBBY_DEFAULT)
+        print("  %s rose_conv/lobby_default.json bundled" % ("ok  " if lob else "FAIL"))
+        ok &= lob
+        miss = []
+        for name in ("rose_pack", "rose_avatar_pack", "rose_lobby", "rpg1", "rosevfs"):
+            try:
+                __import__(name)
+            except Exception as e:                       # noqa: BLE001
+                miss.append("%s (%s)" % (name, e))
+        print("  %s converter modules import%s" % ("ok  " if not miss else "FAIL", "" if not miss else ": " + ", ".join(miss)))
+        ok &= not miss
+    except Exception as e:                               # noqa: BLE001
+        print("  FAIL rose_conv import: %r" % (e,))
+        ok = False
+    return bool(ok)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     _utf8_streams()
@@ -85,7 +112,10 @@ def main(argv=None):
         return 0
     import gui
     if "--selftest" in argv:
-        return gui.selftest()
+        print("[rose_conv] frozen smoke")
+        smoke = rose_smoke()
+        rc = gui.selftest()
+        return rc if smoke else (rc or 1)
     gui.run_gui()
     return 0
 
