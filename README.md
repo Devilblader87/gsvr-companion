@@ -23,7 +23,13 @@ from your own install (about 1 minute per pack; progress is shown in the world's
 caches them, and prebuilds the other zones in the background. Music needs miniaudio (bundled).
 Nothing is downloaded, and no game files are shared: everything is built locally from your copy.
 The ROSE world is alpha: the first build takes about 1 minute per zone and zone loads in the
-world still take 1.5 to 2.5 minutes.
+world still take 1.5 to 2.5 minutes (neighbour zones are preloaded in the background, so most
+gate trips are much faster).
+
+Zones built by the companion (0.9.42): Birth Island, Valley of Luxem Tower, Adventurer's Plain,
+Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach,
+Gorge of Silence, the Goblin Cave dungeon (B1-B3) and Junon Polis. The world has co-op up to 4,
+parties, clans and a global chat.
 
 **Community:** questions, ideas, bug reports? Join our Discord: https://discord.gg/nc2rw6Snx
 

@@ -77,9 +77,11 @@ CALL_IDS = {'QF_checkQuestCondition': 1, 'QF_doQuestTrigger': 2, 'QF_findQuest':
             'QF_getPlanetVAR': 7, 'QF_getQuestItemQuantity': 8, 'QF_getQuestCount': 9, 'QF_getQuestVar': 10, 'QF_getQuestSwitch': 11, 'QF_getQuestID': 12,
             'GF_getVariable': 13, 'GF_openStore': 20, 'GF_repair': 21, 'GF_appraisal': 22, 'GF_openBank': 23,
             # ZONES MORE: services of the town NPCs (not modelled, the runtime says so) and the NPC object variable 0
-            'GF_openSeparate': 24, 'GF_openUpgrade': 25, 'GF_openDeliveryStore': 26, 'QF_getNpcQuestZeroVal': 16}
+            'GF_openSeparate': 24, 'GF_openUpgrade': 25, 'GF_openDeliveryStore': 26, 'QF_getNpcQuestZeroVal': 16,
+            # JUNON POLIS: the clan founding / disband NPC (effects; the runtime says the clan service is not available until the guild lane wires them)
+            'GF_organizeClan': 27, 'GF_disorganizeClan': 28}
 CALL_QVAR_ID, CALL_QSW_ID = 14, 15          # ZONES MORE: QF_getQuestVar / QF_getQuestSwitch whose slot argument is QF_findQuest(questId): fused, a0 = quest id
-EFFECT_CALLS = (2, 20, 21, 22, 23, 24, 25, 26)
+EFFECT_CALLS = (2, 20, 21, 22, 23, 24, 25, 26, 27, 28)
 TRIGGER_ARG_CALLS = (1, 2)                  # first argument is a trigger name
 IGNORED_CALLS = ('QF_getEventOwner', 'GF_setRevivePosition', 'GF_GetMotionUseFile', 'GF_SetMotion', 'GF_playSound', 'GF_playEffect', 'QF_MotionCallNpc', 'QF_EffectCallNpc')
 LUA_CONSTANTS = {'SV_SEX': 0, 'SV_BIRTH': 1, 'SV_CLASS': 2, 'SV_UNION': 3, 'SV_RANK': 4, 'SV_FAME': 5, 'SV_STR': 6, 'SV_DEX': 7, 'SV_INT': 8, 'SV_CON': 9,

@@ -90,6 +90,7 @@ PACKS = {
     "forestofwisdom": _zone(26, "Forest of Wisdom"),
     "kenjibeach": _zone(27, "Kenji Beach"),
     "gorgeofsilence": _zone(28, "Gorge of Silence"),
+    "junonpolis": _zone(2, "Junon Polis"),
     "goblincaveb1": _zone(31, "Goblin Cave (B1)"),                       # DUNGEON: the Goblin Cave floors (underground: rose_pack seals the walk grid to the cave)
     "goblincaveb2": _zone(32, "Goblin Cave (B2)"),
     "goblincaveb3": _zone(33, "Goblin Cave (B3)"),

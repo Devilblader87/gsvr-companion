@@ -48,6 +48,7 @@ PACKS = {
     "goblincaveb1": {"kind": "zone", "zone": 31, "args": ["--zone", "31", "--all", "--ui"]},
     "goblincaveb2": {"kind": "zone", "zone": 32, "args": ["--zone", "32", "--all", "--ui"]},
     "goblincaveb3": {"kind": "zone", "zone": 33, "args": ["--zone", "33", "--all", "--ui"]},
+    "junonpolis": {"kind": "zone", "zone": 2, "args": ["--zone", "2", "--all", "--ui"]},
     "login": {"kind": "lobby", "args": ["--lobby"]},
     "avatar": {"kind": "avatar", "args": []},
 }
