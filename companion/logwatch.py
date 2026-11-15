@@ -14,11 +14,74 @@ REQ = re.compile(r"\[GSVR-REQ\]\s+(.*?)\s*$")
 WORLD = re.compile(r"Joining (wrld_[0-9A-Za-z\-]+)")
 
 
+VRC_SUB = ("steamapps", "compatdata", "438100", "pfx", "drive_c", "users", "steamuser", "AppData", "LocalLow", "VRChat", "VRChat")
+STEAM_SUBS = ((".steam", "steam"), (".steam", "debian-installation"), (".steam", "root"), (".local", "share", "Steam"),
+              (".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"), ("snap", "steam", "common", ".local", "share", "Steam"))
+
+
+def _newest_mtime(d):
+    try:
+        f = newest_log(d)
+        return os.path.getmtime(f) if f else -1.0
+    except OSError:
+        return -1.0
+
+
+def _library_roots(steam_root):
+    """steam_root plus the extra libraries from libraryfolders.vdf ("path" lines)"""
+    out = [steam_root]
+    vdf = os.path.join(steam_root, "steamapps", "libraryfolders.vdf")
+    try:
+        with open(vdf, encoding="utf-8", errors="replace") as fh:
+            for m in re.finditer(r'"path"\s+"([^"]+)"', fh.read()):
+                p = m.group(1).replace("\\\\", "\\")
+                if p not in out:
+                    out.append(p)
+    except OSError:
+        pass
+    return out
+
+
+def proton_log_candidates(homes, to_local=lambda p: p):
+    """VRChat log dirs inside Steam's Proton prefix (app 438100) for each home dir; to_local maps a POSIX path to this
+    process's view (Wine: "/home/x" -> "Z:\\home\\x")."""
+    seen, out = set(), []
+    for h in homes:
+        for sub in STEAM_SUBS:
+            root = to_local(os.path.join(h, *sub))
+            for lib in _library_roots(root):
+                lib = to_local(lib) if lib.startswith("/") else lib
+                d = os.path.join(lib, *VRC_SUB)
+                if d not in seen and os.path.isdir(d):
+                    seen.add(d); out.append(d)
+    return out
+
+
+def _wine_z(p):
+    return "Z:" + p.replace("/", "\\")
+
+
 def default_log_dir():
+    """Windows: %USERPROFILE%\\AppData\\LocalLow\\VRChat\\VRChat. Under Wine/Proton (the companion in its own prefix, 2026-11-15
+    Linux report) that is the companion's prefix, not VRChat's: also look in Steam's Proton prefix of VRChat (compatdata/438100)
+    through the Z: drive, and take the folder whose newest output_log is the most recent. Native Linux: the same search."""
+    cands = []
     if sys.platform == "win32":
         base = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-        return os.path.join(base, "AppData", "LocalLow", "VRChat", "VRChat")
-    return None      # VRChat (PC) only exists on Windows; elsewhere pass --vrchat-log-dir
+        cands.append(os.path.join(base, "AppData", "LocalLow", "VRChat", "VRChat"))
+        if os.path.isdir("Z:\\home"):               # Wine maps / to Z:
+            homes = []
+            try:
+                homes = ["/home/" + n for n in os.listdir("Z:\\home")]
+            except OSError:
+                pass
+            cands += proton_log_candidates(homes, _wine_z)
+    else:
+        cands += proton_log_candidates([os.path.expanduser("~")])
+    live = [d for d in cands if os.path.isdir(d)]
+    if not live:
+        return cands[0] if cands else None
+    return max(live, key=_newest_mtime)
 
 
 def newest_log(log_dir):

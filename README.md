@@ -31,6 +31,13 @@ Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisd
 Gorge of Silence, the Goblin Cave dungeon (B1-B3) and Junon Polis. The world has co-op up to 4,
 parties, clans and a global chat.
 
+### Linux / Steam Deck (Proton)
+
+The Windows build also runs under Wine/Proton. Since 0.9.42.1 it looks for VRChat's log in VRChat's own Proton prefix
+(`steamapps/compatdata/438100/pfx/.../LocalLow/VRChat/VRChat`) in your Steam libraries, so it sees which world you
+joined. If the status still says "not in a world yet" while you are in a GSVR world, start `gsvr-cli.exe --companion`
+with `--vrchat-log-dir <the folder that holds output_log_*.txt>`.
+
 **Community:** questions, ideas, bug reports? Join our Discord: https://discord.gg/nc2rw6Snx
 
 ## License, code signing and privacy
