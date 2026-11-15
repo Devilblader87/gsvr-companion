@@ -133,7 +133,8 @@ def zone_row(vfs, zone_id):
             name = langs[1][keys[sid][0]][0]
     except Exception:
         pass
-    return dict(id=zone_id, name=name, zon=col(1), start=col(2), deco_zsc=col(11), cnst_zsc=col(12), cells=list(c))
+    # LIST_ZONE col 4 (지하지형, "0: outdoor, 1: underground"): the dungeon floors (Goblin Cave 31 - 33) set it; their walk grid is sealed to the cave (seal_interior)
+    return dict(id=zone_id, name=name, zon=col(1), start=col(2), deco_zsc=col(11), cnst_zsc=col(12), cells=list(c), underground=col(4).strip() == '1')
 
 
 def existing_blocks(vfs, zone_dir):
@@ -658,14 +659,15 @@ class Grid:
     def __init__(self, win, cs, terr=None, band=(0.5, 2.0)):
         self.win, self.cs = win, cs
         self.terr, self.band = terr, band
+        self.per_sample = False                          # DUNGEON: underground zones test the body band per sample point (rasterize)
         self.w = int(round(win.size_x / cs)); self.h = int(round(win.size_z / cs))
         self.cells = bytearray(b'\x01') * (self.w * self.h)
-        self.reason = bytearray(self.w * self.h)         # 0 free, 1 outside data, 2 slope, 3 water, 4 object
+        self.reason = bytearray(self.w * self.h)         # 0 free, 1 outside data, 2 slope, 3 water, 4 object, 5 outside the cave (seal_interior)
         self.obj_cells = 0
         self.floor = {}                                  # cell -> {y in 0.1 m}: walkable object surfaces (flat enough, collision shape without NOT_MOVEABLE)
         self.wall = {}                                   # cell -> {(steep, lo, hi, inner)}: collision geometry y-ranges in 0.1 m (inner = sample near the cell centre)
         self.slope = None                                # per cell terrain slope (finish_grid)
-        self.floor_cells = 0; self.carved_cells = 0
+        self.floor_cells = 0; self.carved_cells = 0; self.void_cells = 0
 
     def block(self, i, reason):
         if self.cells[i]:
@@ -675,6 +677,9 @@ class Grid:
         """mark every cell the XZ footprint of the triangles touches as blocked by an object."""
         cs = self.cs; w, h = self.w, self.h
         mark = self._mark_obj
+        if self.per_sample and self.terr is not None:
+            self._rasterize_samples(vs, tris)
+            return
         for a, b, c in tris:
             pa, pb, pc = vs[a], vs[b], vs[c]
             if self.terr is not None:                    # only geometry at body height blocks: skip canopies / overhangs / ground-hugging parts
@@ -718,6 +723,31 @@ class Grid:
                         inner = abs(x / cs - gx - 0.5) < INNER and abs(z / cs - gz - 0.5) < INNER
                         self.wall.setdefault(ci, set()).add((not flat, lo, hi, inner))
 
+    def _rasterize_samples(self, vs, tris):
+        """DUNGEON: the body band per sample point against the terrain under that point. In a cave the terrain drops by ~100 m into pits right next to the
+        floors, so the terrain under a triangle's centroid says nothing about its edges (bridge supports below a room's floor closed the room's doorway).
+        The sample spacing also follows the triangle's height, so a tall wall always has samples inside the band."""
+        cs = self.cs; b0, b1 = self.band
+        terr = self.terr; mark = self._mark_obj
+        for a, b, c in tris:
+            pa, pb, pc = vs[a], vs[b], vs[c]
+            gs = [g for g in (terr.height_at(pa[0], pa[2]), terr.height_at(pb[0], pb[2]), terr.height_at(pc[0], pc[2])) if g is not None]
+            ylo = min(pa[1], pb[1], pc[1]); yhi = max(pa[1], pb[1], pc[1])
+            if gs and (yhi < min(gs) + b0 or ylo > max(gs) + b1) and max(gs) - min(gs) < b1 - b0:
+                continue                                 # flat terrain under the triangle and the triangle wholly above / below the band
+            e = max(math.hypot(pa[0] - pb[0], pa[2] - pb[2]), math.hypot(pb[0] - pc[0], pb[2] - pc[2]), math.hypot(pc[0] - pa[0], pc[2] - pa[2]))
+            n = max(1, int(math.ceil(e / (cs * 0.5))), min(64, int(math.ceil((yhi - ylo) / (0.5 * (b1 - b0))))))
+            for i in range(n + 1):
+                for j in range(n + 1 - i):
+                    u = i / n; v = j / n; t = 1 - u - v
+                    x = pa[0] * t + pb[0] * u + pc[0] * v; z = pa[2] * t + pb[2] * u + pc[2] * v
+                    g = terr.height_at(x, z)
+                    if g is None:
+                        continue
+                    y = pa[1] * t + pb[1] * u + pc[1] * v
+                    if g + b0 <= y <= g + b1:
+                        mark(x, z)
+
     def _mark_obj(self, x, z):
         gx = int(x // self.cs); gz = int(z // self.cs)
         if 0 <= gx < self.w and 0 <= gz < self.h:
@@ -730,6 +760,7 @@ FLOOR_NY = 0.6              # |normal.y| of a walkable surface (up to ~53 degree
 INNER = 0.3                 # a collision sample blocks a floor cell only within this fraction of the cell around its centre (rails at the edge of a bridge do not)
 FLOOR_STEP = 1.4            # floor levels of neighbouring cells connect up to this many cell sizes of height difference (a ramp at FLOOR_NY)
 FLOOR_REACH = 80.0          # floors higher than this above the terrain are ignored (ZONES MORE: was 15; a bridge over a deep gorge floats 50 m above the ground, the chain rule below already drops roofs and towers)
+INTERIOR_FLOOR_REACH = 200.0   # DUNGEON: underground zones; the Goblin Cave bridges cross a pit whose terrain lies ~100 m below them (seal_interior already drops everything outside the cave)
 PASS_SLOPE = 3.0            # a required point may be linked through slope-blocked cells up to this rise / run (the original has no slope limit at all)
 PASS_CELLS = 12             # ... through at most this many cells
 
@@ -753,7 +784,7 @@ def floor_levels(ys):
     return [c[len(c) // 2] / 10.0 for c in out]
 
 
-def add_floors(grid, heights, water, max_wade):
+def add_floors(grid, heights, water, max_wade, reach=FLOOR_REACH):
     """Walkable object surfaces (bridges, ramps, stairs, platforms): the original lets the player stand on any collision surface its floor ray hits, the terrain-only
     grid blocked the water / steep ground under them or the rails on them. A floor level of a cell becomes walkable when it is not deep under water, has no collision
     geometry at body height around the cell centre and is reachable from open ground through floor levels of neighbouring cells without a wall spanning the height
@@ -767,7 +798,7 @@ def add_floors(grid, heights, water, max_wade):
         wt = water_top(water, (ci % w + 0.5) * cs, (ci // w + 0.5) * cs)
         walls = grid.wall.get(ci, ())
         for y in floor_levels(sorted(grid.floor[ci])):
-            if y < hc - 0.3 or y > hc + FLOOR_REACH:
+            if y < hc - 0.3 or y > hc + reach:
                 continue
             if abs(y - hc) <= 0.3 and grid.cells[ci]:
                 continue                                 # the terrain itself is walkable here
@@ -822,6 +853,39 @@ def add_floors(grid, heights, water, max_wade):
         heights[ci] = int(round(y * 100))
     grid.floor_cells = opened
     return opened
+
+
+def seal_interior(grid):
+    """DUNGEON: walk grid of an underground zone (LIST_ZONE col 4 = 1). A cave is a terrain floor inside rock meshes; outside the rock the heightmap goes on as
+    flat ground that no geometry covers and no light reaches (the original's walls keep the player in; our rasterised walls have gaps at body height and the
+    corridor ends behind the gates are open). Every cell that holds no collision geometry and no object floor and is connected to the window border through
+    such cells is that outer void: it is blocked (reason 5). Uncovered cells enclosed by the cave (open room centres) stay as they are.
+    Returns the number of walkable cells closed."""
+    w, h = grid.w, grid.h
+    cov = bytearray(w * h)
+    for i in grid.wall:
+        cov[i] = 1
+    for i in grid.floor:
+        cov[i] = 1
+    void = bytearray(w * h); st = []
+    for i in range(w * h):
+        x, z = i % w, i // w
+        if (x == 0 or z == 0 or x == w - 1 or z == h - 1) and not cov[i]:
+            void[i] = 1; st.append(i)
+    while st:
+        c = st.pop(); x, z = c % w, c // w
+        for d, ok in ((1, x < w - 1), (-1, x > 0), (w, z < h - 1), (-w, z > 0)):
+            n = c + d
+            if ok and not cov[n] and not void[n]:
+                void[n] = 1; st.append(n)
+    closed = 0
+    for i in range(w * h):
+        if void[i]:
+            if grid.cells[i]:
+                closed += 1
+            grid.cells[i] = 0; grid.reason[i] = 5
+    grid.void_cells = closed
+    return closed
 
 
 def grid_components(grid):
@@ -1274,6 +1338,7 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
         if rosevfs.norm(p) in vfs.files:
             ifos[b] = F.ifo(vfs.read(p))
     grid = Grid(win, cell, terr)
+    grid.per_sample = bool(zone.get('underground'))
     ob = ObjBuilder(vfs, win, grid)
     zsc_d = F.zsc(vfs.read(zone['deco_zsc'])) if zone.get('deco_zsc') and rosevfs.norm(zone['deco_zsc']) in vfs.files else None
     zsc_c = F.zsc(vfs.read(zone['cnst_zsc'])) if zone.get('cnst_zsc') and rosevfs.norm(zone['cnst_zsc']) in vfs.files else None
@@ -1304,7 +1369,11 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
     wplanes, water_tile = rose_env.water_planes(ifos, win)
     water = [(p['x0'], p['z0'], p['x1'], p['z1'], p['y']) for p in wplanes]
     heights = finish_grid(grid, terr, water, max_slope, max_wade)
-    add_floors(grid, heights, water, max_wade)
+    under = bool(zone.get('underground'))
+    if under:                                    # DUNGEON: before the floors, so no rock top chains to the outer void
+        seal_interior(grid)
+        log('walk grid: underground zone, %d cells outside the cave closed' % grid.void_cells)
+    add_floors(grid, heights, water, max_wade, INTERIOR_FLOOR_REACH if under else FLOOR_REACH)
     reasons = collections.Counter(grid.reason)
 
     # --- start + spawns
@@ -1555,7 +1624,7 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
                    object_materials=len(ob.mats), lightmapped_parts=ob.stats['lightmapped parts'], lightmapped_chunks=sum(1 for c in chunks if c['lit']),
                    collision_parts=ob.stats['collision parts'], collider_parts=ob.stats['collider parts'], collider_pieces=len(col_pieces),
                    collider_tris=sum(p[4] for p in col_pieces), collider_ranges=len(col_ranges), grid=[grid.w, grid.h], walkable_cells=walk,
-                   blocked_by=dict(outside=reasons[1], slope=reasons[2], water=reasons[3], object=reasons[4]), floor_cells=grid.floor_cells, carved_cells=grid.carved_cells,
+                   blocked_by=dict(outside=reasons[1], slope=reasons[2], water=reasons[3], object=reasons[4], interior=reasons[5]), underground=bool(zone.get('underground')), floor_cells=grid.floor_cells, carved_cells=grid.carved_cells,
                    unlinked_places=unlinked, reachable_from_start=reach,
                    spawns=sum(1 for s in spawns if s['kind'] == 0), npcs=sum(1 for s in spawns if s['kind'] == 1), actors=len(side['actors']),
                    spawn_slots=sum(len(r['slots']) for r in rules) if rules else 0, water_planes=len(wplanes), water_levels=dict((str(k), v) for k, v in lvl.items()),

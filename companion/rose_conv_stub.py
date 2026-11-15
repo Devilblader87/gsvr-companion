@@ -41,6 +41,13 @@ PACKS = {
     "breezyhills": {"kind": "zone", "zone": 23, "args": ["--zone", "23", "--all", "--ui"]},
     "zant": {"kind": "zone", "zone": 1, "args": ["--zone", "1", "--all", "--ui"]},
     "elverloondesert": {"kind": "zone", "zone": 24, "args": ["--zone", "24", "--all", "--ui"]},
+    "animalake": {"kind": "zone", "zone": 25, "args": ["--zone", "25", "--all", "--ui"]},
+    "forestofwisdom": {"kind": "zone", "zone": 26, "args": ["--zone", "26", "--all", "--ui"]},
+    "kenjibeach": {"kind": "zone", "zone": 27, "args": ["--zone", "27", "--all", "--ui"]},
+    "gorgeofsilence": {"kind": "zone", "zone": 28, "args": ["--zone", "28", "--all", "--ui"]},
+    "goblincaveb1": {"kind": "zone", "zone": 31, "args": ["--zone", "31", "--all", "--ui"]},
+    "goblincaveb2": {"kind": "zone", "zone": 32, "args": ["--zone", "32", "--all", "--ui"]},
+    "goblincaveb3": {"kind": "zone", "zone": 33, "args": ["--zone", "33", "--all", "--ui"]},
     "login": {"kind": "lobby", "args": ["--lobby"]},
     "avatar": {"kind": "avatar", "args": []},
 }

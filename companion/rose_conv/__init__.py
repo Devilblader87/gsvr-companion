@@ -86,6 +86,13 @@ PACKS = {
     "breezyhills": _zone(23, "Breezy Hills"),
     "zant": _zone(1, "Zant"),
     "elverloondesert": _zone(24, "El Verloon Desert"),
+    "animalake": _zone(25, "Anima Lake"),
+    "forestofwisdom": _zone(26, "Forest of Wisdom"),
+    "kenjibeach": _zone(27, "Kenji Beach"),
+    "gorgeofsilence": _zone(28, "Gorge of Silence"),
+    "goblincaveb1": _zone(31, "Goblin Cave (B1)"),                       # DUNGEON: the Goblin Cave floors (underground: rose_pack seals the walk grid to the cave)
+    "goblincaveb2": _zone(32, "Goblin Cave (B2)"),
+    "goblincaveb3": _zone(33, "Goblin Cave (B3)"),
     "login": dict(kind="lobby", zone=None, all=False, ui=True, label="Character select",         # out/w5 login has UIAT + UIDL: built with --ui
                   argv=["--lobby", "--lobby-config", "<rose_conv/lobby_default.json>", "--ui"]),
     "avatar": dict(kind="avatar", zone=None, all=False, ui=False, label="Avatar + items", argv=["rose_avatar_pack.py"]),

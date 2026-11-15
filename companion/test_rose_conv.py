@@ -53,10 +53,12 @@ class VersionAndTable(unittest.TestCase):
 
     def test_packs_table(self):
         P = rose_conv.PACKS
-        self.assertEqual(set(P), {"birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "login", "avatar"})
+        self.assertEqual(set(P), {"birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "goblincaveb1", "goblincaveb2", "goblincaveb3", "login", "avatar"})
         zones = {n: (s["zone"], s["all"]) for n, s in P.items() if s["kind"] == "zone"}
         self.assertEqual(zones, {"birthisland": (20, False), "luxemtower": (21, True), "adventurersplain": (22, True), "breezyhills": (23, True),
-                                 "zant": (1, True), "elverloondesert": (24, True)})
+                                 "zant": (1, True), "elverloondesert": (24, True), "animalake": (25, True), "forestofwisdom": (26, True),
+                                 "kenjibeach": (27, True), "gorgeofsilence": (28, True), "goblincaveb1": (31, True),
+                                 "goblincaveb2": (32, True), "goblincaveb3": (33, True)})
         for n, s in P.items():
             self.assertIn(s["kind"], ("zone", "lobby", "avatar"))
             self.assertTrue(s["label"])

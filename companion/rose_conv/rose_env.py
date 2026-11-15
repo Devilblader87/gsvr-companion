@@ -189,6 +189,12 @@ def read_sky(vfs, zone_cells, sky_px=1024):
                 info[key + '_texture'] = rosevfs.norm(tp)
         if len(textures) == 2:
             flags |= P.SK_NIGHT_TEX
+    if cell(4).strip() == '1':
+        # DUNGEON: an underground zone (LIST_ZONE col 4) keeps the time of day at night (morning = day = evening = night = 0: rose-offline-client zone_time_system
+        # takes the night branch for every tick) and its sky row has white background colours; the fog colour (pal_bg, what the runtime fogs to) follows the
+        # client's fixed fog colours instead (night = 10 / 255: the cave fades to black). The map ambient stays the sky row's.
+        pal_bg = list(FOG_ALT_COLORS)
+        info['fog_palette'] = 'underground: fixed fog colours'
     lf = read_lua_fog(vfs); ll = read_lua_light(vfs)
     fog = (0.0, 0.0, 0.0, 0.0)
     if lf.get('use') and 'range' in lf:
