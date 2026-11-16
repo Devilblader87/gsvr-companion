@@ -120,6 +120,15 @@ PACKS = {
                   argv=["--lobby", "--lobby-config", "<rose_conv/lobby_default.json>", "--ui"]),
     "avatar": dict(kind="avatar", zone=None, all=False, ui=False, label="Avatar + items", argv=["rose_avatar_pack.py"]),
 }
+# LOAD PACKAGE 5 (0.9.44): every pack with characters + clips (the zones and the login pack) carries the pre-baked bone texture BONT (rose_bont.py) and
+# rebuilds once; the avatar pack has no clips, so it keeps its version (no 71 s rebuild for it). One more revision per zone / lobby entry instead of a
+# WRAPPER_REV bump for exactly that reason.
+BONT_REV = 1
+for _n, _s in PACKS.items():
+    if _s["kind"] != "avatar":
+        PACK_REV[_n] = PACK_REV.get(_n, 0) + BONT_REV
+del _n, _s
+PACK_REV["avatar"] = 2          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds
 
 
 # ------------------------------------------------------------------ install check
@@ -379,6 +388,15 @@ def _avatar_bytes(spec, install_dir, run):
     """rose_avatar_pack.main with its defaults (FLDM ground models included)."""
     vfs = _Vfs(install_dir, run)
     sections, info = RA.build(vfs, log=run.log, with_field=True)
+    # ROSE w14 GLOBAL QUEST TEXTS (QGLB + TXJA, PACK_REV avatar 1). A client without the quest tables simply yields no section (rose_qglob.build returns nothing);
+    # any real error (import failure in a frozen build, a table that does not parse) FAILS the avatar build: the pack must never be cached as good without QGLB.
+    import rose_qglob
+    import rose_text
+    rose_text.reset()
+    gs, ginfo, gj = rose_qglob.build(vfs)
+    sections = list(sections) + gs + gj
+    if gs:
+        run.log('global quest texts: %d quests, %d quest items, %d bytes' % (ginfo['quests'], ginfo['quest_items'], ginfo['bytes']))
     pack = P.write_pack(sections)
     warnings = ["%s (x%d)" % (k, v) for k, v in sorted((info.get("warnings") or {}).items())]
     return pack, warnings

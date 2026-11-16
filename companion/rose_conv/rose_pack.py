@@ -25,7 +25,7 @@ TOOL_VERSION = 4
 FULL_ZONE_TAGS = (b'AREA', b'CELL', b'HGHT', b'TERR', b'TATL', b'TTIL', b'OTEX', b'OMAT', b'OMSH', b'SPWN', b'SPWE',
                   b'SKEL', b'CMSH', b'CANM', b'ACTR', b'AVAT',
                   b'SPWR', b'NBEH', b'EVNT', b'REVV', b'WARP', b'WATR', b'SKYB', b'OCOL', b'OCLD',
-                  b'DROP', b'SKIL', b'ITEM', b'ITEX', b'SKDB', b'SHOP', b'QUST', b'SNDS', b'MMAP', b'UIAT', b'UIDL')
+                  b'DROP', b'SKIL', b'ITEM', b'ITEX', b'SKDB', b'SHOP', b'QUST', b'SNDS', b'MMAP', b'UIAT', b'UIDL', b'BONT')
 LOBBY_NAME = 'login'          # --lobby output: out/login.rpg1, the world asks the companion for rose__login.rpg1
 BUDGET_BYTES = 48 * 1024 * 1024     # whole zone with characters, avatar, sky, water, music (hard design ceiling 100 MB); Birth Island 5x5 = 22.6 MB + 6 MB audio, Adventurer's Plain = 33.1 MB + 6 MB
 BLOCK_M = 160.0
@@ -1715,6 +1715,16 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
         sections += TX.current().sections()
     except Exception as e:
         log('language overlay: %s' % e)
+    if cb:                  # BONT (rose_bont.py): the eager clips' skin frames pre-baked bit-exact like the runtime's actors (they skip the load stage "bone frames"); optional, never fails the conversion
+        import rose_bont
+        try:
+            bt = rose_bont.from_sections(sections)
+            if bt is not None:
+                sections.append(bt)
+            else:
+                log('bone texture: not pre-baked (no clips, or the pack would pass %d MB)' % (rose_bont.MAX_PACK_BYTES // 2 ** 20))
+        except Exception as e:
+            log('bone texture: %s' % e)
     pack = P.write_pack(sections)
     pinfo = P.read_pack(pack)
     char_bytes = None

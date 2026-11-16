@@ -43,7 +43,7 @@ MUSIC_MODULES = ["miniaudio", "_miniaudio", "_cffi_backend"]
 # every module of SOURCE_HASHES is a hidden import, rose_conv/ is on pathex so PyInstaller finds them. test_rose_packaging.py guards this list.
 ROSE_CONV = os.path.join(COMP, "rose_conv")
 with open(os.path.join(ROSE_CONV, "SOURCE_HASHES"), encoding="utf-8") as _f:
-    ROSE_MODULES = ["rose_conv"] + [os.path.splitext(ln.split()[-1])[0] for ln in _f.read().splitlines() if ln.strip()]
+    ROSE_MODULES = ["rose_conv", "rose_qglob"] + [os.path.splitext(ln.split()[-1])[0] for ln in _f.read().splitlines() if ln.strip()]
 ROSE_DATA = [(os.path.join(ROSE_CONV, f), "rose_conv") for f in ("VERSION_SOURCE", "lobby_default.json")]
 ICON = os.path.join(SPEC_DIR, "gsvr.ico")                # optional: drop a gsvr.ico here
 icon = ICON if os.path.isfile(ICON) else None

@@ -51,14 +51,18 @@ class VersionAndTable(unittest.TestCase):
         self.assertRegex(rose_conv.VERSION, r"^rv-[0-9a-f]{8}-\d+$")
 
     def test_pack_version(self):
-        """ROSE w13: WRAPPER_REV 5 (weapon-class motions in every zone pack). ROSE w12 summons: WRAPPER_REV 4 (SKDB carries the magic item skills + summon npcs, every zone the summon actors: all packs rebuild once); Birth Island alone carries a per-pack revision."""
+        """ROSE w13: WRAPPER_REV 5 (weapon-class motions in every zone pack). ROSE w12 summons: WRAPPER_REV 4 (SKDB carries the magic item skills + summon npcs, every zone the summon actors: all packs rebuild once).
+        LOAD PACKAGE 5: every zone + the login pack one revision more (BONT, the pre-baked bone texture), the avatar pack (no clips) keeps its version; Birth Island had 2 already.
+        ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py)."""
         self.assertEqual(rose_conv.WRAPPER_REV, 5)
-        self.assertEqual(rose_conv.PACK_REV, {"birthisland": 2})
+        self.assertEqual(rose_conv.BONT_REV, 1)
+        self.assertEqual(rose_conv.PACK_REV, dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=2))
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
-        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p2")
+        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p3")
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p2")          # ROSE w14: QGLB global quest texts + EFCT effects
         for n in rose_conv.PACKS:
-            if n != "birthisland":
-                self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION)
+            if n not in ("birthisland", "avatar"):
+                self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p1")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)
 
     def test_weapon_motion_table(self):
@@ -107,7 +111,7 @@ class VersionAndTable(unittest.TestCase):
         self.assertIn("rose_pack.py", listed)
         for name, h in listed.items():
             self.assertEqual(_sha(os.path.join(HERE, name)), h, "%s edited locally: change rose-vrchat and run tools/sync_rose_converter.sh" % name)
-        own = {"__init__.py"}
+        own = {"__init__.py", "rose_qglob.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
         extra = [f for f in os.listdir(HERE) if f.endswith(".py") and f not in listed and f not in own]
         self.assertEqual(extra, [], "unlisted modules in rose_conv/")
 
@@ -450,6 +454,301 @@ class Summons(unittest.TestCase):
         skel = {1: 0, 2: 1, 9001: 0, 8601: 7, 8602: 8, 8603: None}
         add, drop = self.S.pick_summon_actors({1, 2}, [9001, 8601, 8602, 8603], skel.get, max_skel=3)
         self.assertEqual((add, drop), ([8601, 9001], [8602, 8603]))                  # 9001 shares skeleton 0; 8601 takes the last skeleton; 8602 over budget; 8603 has no model
+
+
+class PrebakedBones(unittest.TestCase):
+    """LOAD PACKAGE 5: BONT (rose_conv/rose_bont.py), the bone texture pre-baked like GsvrRpg1Actors.StepBones. The bit-exact comparison with the
+    compiled runtime runs in tools/usharp_offline/bont_check.py (check.sh); here: layout, header, lazy marking, guards, the rose_pack hook."""
+
+    @staticmethod
+    def _pack(clipmap=(), actor_clips=None, nclips=4):
+        import rose_bont
+        joints = [dict(parent=-1, flags=0, name="root", lpos=(0.0, 1.0, 0.0), lrot=(0.0, 0.0, 0.0, 1.0), gpos=(0.0, 1.0, 0.0), grot=(0.0, 0.0, 0.0, 1.0)),
+                  dict(parent=0, flags=0, name="arm", lpos=(0.5, 0.0, 0.0), lrot=(0.0, 0.0, 0.0, 1.0), gpos=(0.5, 1.0, 0.0), grot=(0.0, 0.0, 0.0, 1.0))]
+        skel = rpg1.enc_skel([dict(name="s", nreal=2, flags=1, joints=joints)])
+        clips = [dict(name="still", skeleton=0, frames=3, loop=True, src_fps=30, tracks=[], events=[])]
+        for c in range(1, nclips):           # the root rises by 0.25 m in frame 1
+            clips.append(dict(name="c%d" % c, skeleton=0, frames=2, loop=False, src_fps=30, events=[],
+                              tracks=[dict(joint=0, pos=[(0.0, 1.0, 0.0), (0.0, 1.25, 0.0)], rot=None, scale=None)]))
+        canm = rpg1.enc_canm(clips, 30)
+        avat = rpg1.enc_avat([], [], list(clipmap)) if clipmap else None
+        actr = None
+        if actor_clips is not None:
+            actr = struct.pack("<6I", 1, 128, 24, 152, 156, 0) + bytes(88) + struct.pack("<12h", *(list(actor_clips) + [-1] * (12 - len(actor_clips)))) + bytes(16) + bytes(8)
+        return rose_bont, skel, canm, avat, actr
+
+    def test_identity_clip_and_header(self):
+        B, skel, canm, avat, actr = self._pack()
+        tag, ver, count, data = B.bont_section(skel, canm)
+        self.assertEqual((tag, ver, count), (b"BONT", 1, 4))
+        h = B.HEADER.unpack_from(data, 0)
+        texels = 2 * 2 + 3 * 4 + 3 * 2 * 4                                      # bind + clip 0 (3 frames) + 3 clips of 2 frames, 2 texels per joint
+        self.assertEqual(h[:3], (texels, 4, 1))
+        self.assertEqual(h[3:5], (struct.unpack("<i", struct.pack("<I", zlib_crc(skel)))[0], struct.unpack("<i", struct.pack("<I", zlib_crc(canm)))[0]))
+        self.assertEqual(h[5:7], (0, 0))                                         # no AVAT / ACTR
+        self.assertEqual(h[7:], (texels, 48, 64, 68, 0))
+        self.assertEqual(len(data), 68 + texels * 16)
+        rise = struct.unpack_from("<4f", data, 48)
+        self.assertEqual(rise[0], 0.0)
+        self.assertAlmostEqual(rise[1], 0.25, places=5)                          # u16 quantised: 1.25 - 1.0
+        self.assertEqual(list(data[64:68]), [1, 1, 1, 1])
+        tex = struct.unpack_from("<%df" % (texels * 4), data, 68)
+        ident = (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
+        for t in range(2 + 3 * 2):                                               # bind frame + the still clip: every skin transform is the identity
+            self.assertEqual(tex[t * 8:t * 8 + 8], ident)
+        self.assertEqual(B.bont_section(skel, canm), B.bont_section(skel, canm))   # deterministic
+
+    def test_lazy_weapon_sets(self):
+        """MarkLazyClips like the runtime: weapon type >= 2 only = lazy, unless an unarmed / sword row or an ACTR actor uses the clip; lazy_too bakes them anyway"""
+        B, skel, canm, avat, actr = self._pack(clipmap=[(0, 0, 0, 1), (0, 0, 3, 2), (0, 0, 10, 3), (0, 1, 1, 3)], actor_clips=[0])
+        self.assertEqual(B.mark_lazy(avat, None, 4), [False, False, True, False])
+        self.assertEqual(B.mark_lazy(avat, actr, 4), [False, False, True, False])
+        _B, _s, _c, avat2, actr2 = self._pack(clipmap=[(0, 0, 3, 2), (0, 0, 10, 3)], actor_clips=[3])
+        self.assertEqual(B.mark_lazy(avat2, actr2, 4), [False, False, True, False])          # the actor keeps clip 3 eager
+        self.assertEqual(B.mark_lazy(None, actr2, 4), [False] * 4)
+        full = B.bont_section(skel, canm, avat, None)[3]
+        eager = B.bont_section(skel, canm, avat, None, lazy_too=False)[3]
+        self.assertEqual(list(full[64:68]), [1, 1, 1, 1])
+        self.assertEqual(list(eager[64:68]), [1, 1, 0, 1])
+        self.assertEqual(len(full) - len(eager), 2 * 2 * 2 * 16)                # clip 2: 2 frames x 2 joints x 2 texels
+        self.assertEqual(struct.unpack_from("<f", eager, 48 + 8)[0], 0.0)        # a clip that is not baked has rise 0
+
+    def test_guards_and_hook(self):
+        B, skel, canm, avat, actr = self._pack()
+        self.assertIsNone(B.bont_section(None, canm))
+        self.assertIsNone(B.bont_section(skel, None))
+        self.assertIsNone(B.from_sections([(b"AREA", 1, 1, b"x" * 128)]))
+        secs = [(b"SKEL", 1, 1, skel), (b"CANM", 1, 4, canm)]
+        self.assertEqual(B.from_sections(secs)[0], b"BONT")
+        self.assertIsNone(B.from_sections(secs, max_pack=1000))                  # the pack would pass the limit: no BONT, the runtime bakes
+        self.assertLess(B.MAX_PACK_BYTES, rose_conv_rose_max())
+        self.assertIn(b"BONT", rose_conv.RP.FULL_ZONE_TAGS)
+        src = inspect.getsource(rose_conv.RP.convert)
+        self.assertIn("rose_bont.from_sections(sections)", src)                   # every zone / lobby pack with characters gets it
+        self.assertLess(src.index("rose_bont.from_sections(sections)"), src.index("pack = P.write_pack(sections)"))
+
+
+def _s32(s):
+    b = s.encode()
+    return struct.pack("<I", len(b)) + b
+
+
+def _fx_ptl(tex="FX/A.DDS", keys=(), loops=1, num=4, coords=1, src=5, dst=2, life=(4.8, 9.6), emit=(10.0, 10.0), rad=(0, 0, 0, 0, 0, 0), grav=(0, 0, 0, 0, 0, 0)):
+    """synthetic PTL with one sequence (layout of rose-file-readers ptl.rs); keys = [(type, t0, t1, fade, floats)]"""
+    b = struct.pack("<I", 1) + _s32("seq") + struct.pack("<4fi", life[0], life[1], emit[0], emit[1], loops) + struct.pack("<6f", *([0.0] * 6))
+    b += struct.pack("<6f", *rad) + struct.pack("<6f", *grav) + _s32(tex)
+    b += struct.pack("<iIIIIIIII", num, 0, coords, 2, 2, 0, dst, src, 1) + struct.pack("<I", len(keys))
+    for typ, t0, t1, fade, vals in keys:
+        b += struct.pack("<I2fB", typ, t0, t1, fade) + struct.pack("<%df" % len(vals), *vals)
+    return b
+
+
+def _fx_eft(ptls=(), meshes=()):
+    """synthetic EFT (rose-file-readers eft.rs): particle parts [(ptl path, pos, delay ms)], mesh parts [(mesh, anim, tex, src, dst)]"""
+    b = _s32("name") + struct.pack("<I", 0) + _s32("") + struct.pack("<I", 0) + struct.pack("<I", len(ptls))
+    for path, pos, delay in ptls:
+        b += _s32("n") + _s32("u") + bytes(4) + _s32(path) + struct.pack("<I", 0) + _s32("NULL") + struct.pack("<I", 0) + bytes(4)
+        b += struct.pack("<3f", *pos) + struct.pack("<3f", 0.0, 90.0, 0.0) + bytes(4) + struct.pack("<II", delay, 0)
+    b += struct.pack("<I", len(meshes))
+    for mesh, anim, tex, src, dst in meshes:
+        b += _s32("n") + _s32("u") + bytes(4) + _s32(mesh) + _s32(anim) + _s32(tex) + struct.pack("<8I", 1, 1, 0, 1, 0, src, dst, 1)
+        b += struct.pack("<I", 0) + _s32("NULL") + struct.pack("<I", 0) + bytes(4) + struct.pack("<3f", 0, 0, 0) + struct.pack("<3f", 0, 0, 0) + bytes(4) + struct.pack("<III", 0, 2, 0)
+    return b
+
+
+def _fx_dds(rgba=(255, 0, 0, 255), w=8, h=8):
+    import rosedds
+    return rosedds.make_dds(rosedds.FMT_RGBA32, w, h, [bytes(rgba) * (w * h)])
+
+
+def _fx_stb(rows):
+    """rosefmt.stb-like dict from {row: {cell: value}} (row 0 unused like the client tables)"""
+    n = max(rows) + 1
+    width = max(max(c) for c in rows.values()) + 1
+    cells = [[""] * width for _ in range(n)]
+    for r, c in rows.items():
+        for k, v in c.items():
+            cells[r][k] = str(v)
+    return dict(rows=n, cells=cells)
+
+
+class Effects(unittest.TestCase):
+    """ROSE w14 effects: EFCT (rose_conv/rose_effects.py) from synthetic EFT / PTL / DDS / STB data (no game data). The runtime rules (keyframes, pool, budget)
+    run in tools/usharp_offline/rosefxrules.cs against the compiled GsvrRoseFx."""
+
+    def setUp(self):
+        import rose_effects
+        self.E = rose_effects
+        size = (1, 0.0, 0.0, 0, (10.0, 20.0, 30.0, 40.0))                       # x 10..30 cm, y 20..40 cm (file order: xmin, ymin, xmax, ymax)
+        fade_a = (6, 4.8, 4.8, 1, (0.0, 0.0))
+        vely = (9, 0.0, 9.6, 0, (100.0, 200.0))                                 # file y velocity (north) 100..200
+        self.files = {
+            "FX/A.PTL": _fx_ptl(keys=[fade_a, size, vely]),
+            "FX/B.PTL": _fx_ptl(tex="FX/MISSING.DDS"),
+            "FX/A.DDS": _fx_dds(),
+            "FX/C.DDS": _fx_dds((0, 0, 255, 128), 256, 128),
+            "FX/CAST.EFT": _fx_eft([("FX/A.PTL", (100.0, 200.0, 300.0), 500)]),
+            "FX/HIT.EFT": _fx_eft([("FX/A.PTL", (0, 0, 0), 0), ("FX/B.PTL", (0, 0, 0), 0)]),
+            "FX/RING.EFT": _fx_eft([], [("FX/NOPE.ZMS", "", "FX/C.DDS", 5, 6)]),
+            "FX/BAD.EFT": b"\x01\x00",
+        }
+        self.read = self.files.__getitem__
+        self.fe = _fx_stb({1: {1: "FX\\CAST.EFT"}, 2: {1: "FX\\HIT.EFT"}, 3: {1: "FX\\RING.EFT"}, 4: {1: "FX\\BAD.EFT"}, 5: {1: "FX\\GONE.EFT"}})
+        self.le = _fx_stb({1: {9: 2, 11: 3, 15: 1500}, 2: {9: 4}})
+        self.sk = _fx_stb({10: {4: 1, 5: 3, 51: 7, 56: 1, 71: 1},                   # cast 1, bullet effect 1 -> bullet file 3 + hit normal 2 (no own hit)
+                           11: {4: 1, 5: 3, 51: 7, 74: 2, 77: 3},                    # own hit file 2, hit dummy 3
+                           12: {4: 1, 5: 3, 51: 7, 56: 4, 59: 5, 71: 2},             # only broken / missing files -> no record
+                           13: {5: 3, 56: 1}})                                       # monster skill (no page / icon): still in the table
+        self.npc = _fx_stb({7: {33: 1, 34: 1}, 8: {33: 2}})
+        self.wpn = _fx_stb({3: {38: 1, 39: 1}})
+
+    def test_parse_roundtrip(self):
+        e = self.E.parse_eft(self.files["FX/CAST.EFT"])
+        self.assertEqual(len(e["particles"]), 1)
+        self.assertEqual(e["particles"][0]["ptl"], "FX/A.PTL")
+        self.assertEqual(e["particles"][0]["delay"], 500)
+        self.assertEqual(e["particles"][0]["yaw"], 90.0)
+        m = self.E.parse_eft(self.files["FX/RING.EFT"])["meshes"]
+        self.assertEqual((m[0]["tex"], m[0]["src"], m[0]["dst"], m[0]["repeat"], m[0]["anim"]), ("FX/C.DDS", 5, 6, 2, ""))
+        p = self.E.parse_ptl(self.files["FX/A.PTL"])
+        self.assertEqual((p[0]["num"], p[0]["coords"], p[0]["cols"], p[0]["dst"], len(p[0]["keys"])), (4, 1, 2, 2, 3))
+        with self.assertRaises((ValueError, struct.error)):
+            self.E.parse_eft(self.files["FX/BAD.EFT"])
+        with self.assertRaises(ValueError):
+            self.E.parse_ptl(_fx_ptl(keys=[(14, 0, 0, 0, ())]))
+
+    def test_key_conversion_axes_units(self):
+        E = self.E
+        t, f, tm, v = E.convert_key(dict(type=1, t=(0.0, 0.0), fade=0, v=(10.0, 20.0, 30.0, 40.0)))
+        self.assertEqual((t, f, tm), (1, 0, 0.0))
+        self.assertEqual([round(x, 6) for x in v[:4]], [0.1, 0.3, 0.2, 0.4])            # (xlo, xhi, ylo, yhi) metres
+        t, f, tm, v = E.convert_key(dict(type=9, t=(0.0, 9.6), fade=0, v=(100.0, 200.0)))
+        self.assertEqual(t, 10)                                                       # file y -> Unity z (front), negated
+        self.assertAlmostEqual(tm, 1.0)                                               # middle of 0..9.6 particle units / 4.8
+        self.assertAlmostEqual(v[0], -9.6); self.assertAlmostEqual(v[1], -4.8)        # 100..200 cm x 4.8 / 100, negated
+        t, _f, _t, v = E.convert_key(dict(type=10, t=(0, 0), fade=1, v=(100.0, 100.0)))
+        self.assertEqual(t, 9); self.assertAlmostEqual(v[0], 4.8)                    # file z (up) -> Unity y
+        t, _f, _t, v = E.convert_key(dict(type=11, t=(0, 0), fade=0, v=(1.0, 2.0, 3.0, 1.0, 2.0, 3.0)))
+        self.assertEqual(t, 11)
+        self.assertEqual([round(x / 0.048, 4) for x in v[:6]], [-1.0, -1.0, 3.0, 3.0, -2.0, -2.0])
+        self.assertEqual(E.rng(5.0, 2.0), (5.0, 8.0))                                 # the original's |max - min| + min for an inverted range
+        t, _f, _t, v = E.convert_key(dict(type=2, t=(0, 0), fade=0, v=(4.8, 9.6)))
+        self.assertAlmostEqual(v[0], 1.0); self.assertAlmostEqual(v[1], 2.0)
+
+    def test_order_keys_next_fade(self):
+        ks = self.E.order_keys([(6, 1, 2.0, [0] * 9), (1, 0, 0.0, [0] * 9), (6, 0, 0.0, [0] * 9), (6, 1, 1.0, [0] * 9), (3, 1, 0.5, [0] * 9)])
+        self.assertEqual([k[2] for k in ks], [0.0, 0.0, 0.5, 1.0, 2.0])
+        self.assertEqual([(k[0], k[4]) for k in ks], [(1, -1), (6, 3), (3, -1), (6, 4), (6, -1)])
+
+    def test_blend_and_duration(self):
+        E = self.E
+        self.assertEqual(E.blend_mode(5, 2), E.MODE_ADD)
+        self.assertEqual(E.blend_mode(5, 6), E.MODE_ALPHA)
+        self.assertEqual(E.emitter_duration(2.0, 10.0, 1, 4, 0.5), 0.5 + 0.4 + 2.0)
+        self.assertEqual(E.emitter_duration(2.0, 10.0, 0, 4, 0.0), -1.0)              # endless
+        self.assertEqual(E.emitter_duration(2.0, 10.0, 3, 0, 0.25), 0.25)             # no particles: finite (ends at its delay), never endless
+        self.assertEqual(E.emitter_duration(2.0, 10.0, 0, 0, 0.0), 0.0)
+        self.assertEqual((E._int(["12"], 0), E._int(["x"], 0), E._int([], 3), E._int([None], 0), E._int(["9" * 400], 0) > 0), (12, 0, 0, 0, True))
+        self.assertEqual((E.fin(float("nan")), E.fin(float("inf")), E.fin(-1e30), E.fin("x"), E.fin(2.5)), (0.0, 0.0, -E.F_LIMIT, 0.0, 2.5))
+        self.assertEqual(E.pos_unity((100.0, 200.0, 300.0)), (-1.0, 3.0, -2.0))
+
+    def test_tables_and_section(self):
+        E = self.E
+        skills, npcs, weapons, b = E.build_tables(self.read, self.fe, self.le, self.sk, self.npc, self.wpn)
+        by = {s["id"]: s for s in skills}
+        self.assertEqual(sorted(by), [10, 11, 13])
+        self.assertEqual((by[10]["cast"], by[10]["bullet"], by[10]["hit"], by[10]["speed"]), ([1, 0], 3, 2, 1500))
+        self.assertEqual((by[11]["hit"], by[11]["hit_dummy"], by[11]["bullet"]), (2, 3, 0))
+        self.assertEqual([(n["id"], n["hit"], n["die"]) for n in npcs], [(7, 2, 1)])   # npc 8: LIST_EFFECT 2 hits with the broken file 4 -> nothing
+        self.assertEqual([(w["id"], w["hit"], w["bullet"], w["speed"]) for w in weapons], [(3, 2, 3, 1500)])
+        self.assertEqual(sorted(f for f, r in b.files.items() if r), [1, 2, 3])
+        self.assertEqual(b.files[2]["count"], 1)                                      # FX/B.PTL has no texture: skipped
+        self.assertEqual(b.warn.get("particle texture missing"), 1)
+        ring = b.emitters[b.files[3]["first"]]
+        self.assertEqual((ring["kind"], ring["mode"], ring["mrep"], ring["cell"]), (1, E.MODE_ALPHA, 2.0, 1))
+        cast = b.emitters[b.files[1]["first"]]
+        self.assertEqual(cast["pos"], (-1.0, 3.0, -2.0))
+        self.assertAlmostEqual(cast["delay"], 0.5)
+        self.assertEqual(([round(x, 5) for x in cast["life"]], cast["num"], cast["mode"], cast["cell"]), ([1.0, 2.0], 4, E.MODE_ADD, 0))
+        self.assertAlmostEqual(b.files[1]["dur"], 0.5 + 0.4 + 2.0, places=5)
+        d = E.enc_efct(b, skills, npcs, weapons)
+        x = E.dec_efct(d)
+        self.assertEqual([f[0] for f in x["files"]], [1, 2, 3])
+        self.assertEqual([s[0] for s in x["skills"]], [10, 11, 13])
+        self.assertEqual(x["skills"][0][:7], (10, 1, 0, 3, 2, 0, 1500))
+        self.assertEqual(len(x["keys"]), 3)
+        self.assertEqual(x["keys"][0][0], 1)                                         # sorted by time: size (0) before the alpha fade (1 s) and velocity (1 s)
+        fmt, w, h, lv, nb, cell, cols, cells = x["atlas"]
+        self.assertEqual((fmt, w, h, lv, cell, cols, cells), (2, 256, 128, 4, 128, 16, 2))
+        self.assertEqual(nb, sum(max(1, (w >> k) // 4) * max(1, (h >> k) // 4) * 16 for k in range(4)))
+        h0 = E.HDR.unpack_from(d, 0)
+        self.assertEqual(h0[17] + h0[18], len(d))
+        self.assertEqual(h0[17] % 4, 0)
+        with self.assertRaises(ValueError):
+            E.dec_efct(d[:100])
+
+    def test_atlas_cells(self):
+        import rosedds
+        E = self.E
+        a = E.Atlas(self.read)
+        self.assertEqual(a.add("FX/A.DDS"), 0)
+        self.assertEqual(a.add("fx/a.dds"), 0)                                       # case-insensitive VFS paths, one cell each
+        self.assertEqual(a.add("FX/C.DDS"), 1)
+        self.assertIsNone(a.add("FX/NOPE.DDS"))
+        w, h, levels = a.encode()
+        self.assertEqual((w, h, len(levels)), (256, 128, 4))
+        px = rosedds.decode_dxt("DXT5", levels[0], w, h)
+        self.assertEqual(tuple(px[0:4]), (255, 0, 0, 255))                            # cell 0 red
+        o = (64 * w + 128 + 64) * 4
+        self.assertEqual(tuple(px[o:o + 3]), (0, 0, 255))                            # cell 1 blue (scaled 256 x 128 -> 128 x 128)
+        self.assertLess(abs(px[o + 3] - 128), 3)
+        small = E.Atlas(self.read, max_cells=1)
+        small.add("FX/A.DDS")
+        self.assertIsNone(small.add("FX/C.DDS"))                                    # full
+
+    def test_broken_floats_never_reach_the_section(self):
+        """a PTL with NaN / inf values: the section carries only finite floats (the runtime never sees NaN)"""
+        E = self.E
+        self.files["FX/A.PTL"] = _fx_ptl(life=(float("nan"), float("inf")), emit=(float("inf"), 1.0), keys=[(6, float("nan"), 0.0, 0, (float("nan"), 1.0))])
+        skills, npcs, weapons, b = E.build_tables(self.read, self.fe, self.le, self.sk)
+        x = E.dec_efct(E.enc_efct(b, skills))
+        import math
+        floats = [v for e in x["emitters"] for v in e[10:35]] + [v for k in x["keys"] for v in k[5:]] + [f[4] for f in x["files"]]
+        self.assertTrue(floats and all(math.isfinite(v) and abs(v) <= E.F_LIMIT for v in floats))
+
+    def test_bad_table_fails_missing_table_skips(self):
+        """error policy (like QGLB): no tables = no section; a table that is there but broken raises (the avatar build fails); one bad EFT is only skipped"""
+        E = self.E
+
+        class V:
+            def __init__(s, files):
+                s.files = files
+
+            def read(s, p):
+                return s.files[p]
+        self.assertEqual(E.build_section(V({}), log=lambda *_: None)[0], [])
+        with self.assertRaises(Exception):
+            E.build_section(V({"3DDATA/STB/FILE_EFFECT.STB": b"junk", "3DDATA/STB/LIST_SKILL.STB": b"junk"}), log=lambda *_: None)
+        b = E.Builder(self.read)
+        self.assertFalse(b.add_file(4, "FX/BAD.EFT"))
+        self.assertEqual(b.warn.get("EFT missing or unreadable"), 1)
+
+    def test_avatar_pack_hook(self):
+        src = inspect.getsource(rose_conv.RA.build)
+        self.assertIn("rose_effects.build_section(vfs, log=log)", src)
+        self.assertNotIn("log('effects: %s' % e)", src)                                # not swallowed: an import / table error fails the avatar build
+        self.assertLess(src.index("rose_effects.build_section"), src.index("info = dict("))
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p2")
+
+
+def zlib_crc(b):
+    import zlib
+    return zlib.crc32(b) & 0xffffffff
+
+
+def rose_conv_rose_max():
+    import rose
+    return rose.MAX_BYTES
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@
   python3 -I tools/rose_avatar_pack.py <client dir> -o out/rose__avatar.rpg1
 
 Sections (docs/RPG1_PACK.md section 23): SKEL (MALE, FEMALE, FIELD), CMSH (every mesh once; rigid parts baked on their joint like the zone pack), OTEX / OMAT (DXT, deduplicated by texture file),
-AVAT (items only: genders without clips, every (gender, slot, number) of the item tables with a mesh; sorted so the runtime can binary search) and FLDM (field models + the drop animation).
+AVAT (items only: genders without clips, every (gender, slot, number) of the item tables with a mesh; sorted so the runtime can binary search) and FLDM (field models + the drop animation),
+EFCT (rose_effects.py: skill / npc / weapon effects + their particle atlas; one copy here because the runtime keeps this pack across zone switches).
 Item number = item table row = ZSC object index (the client's get_model_part_index). Items without a mesh in the client get no AVAT item. The client is only read; nothing of it is committed.
 """
 import os, sys, json, argparse, collections, hashlib
@@ -77,8 +78,15 @@ def build(vfs, log=print, genders=(0, 1), with_field=True):
     sections.append((b'OMAT', 1, len(ob.mats), P.enc_omat(ob.mats)))
     if fld:
         sections.append((b'FLDM', 1, len(fld), P.enc_fldm(fld, anim)))
+    # EFCT (rose_effects.py): skill cast / bullet / hit effects, npc hit / die and weapon hit effects for the runtime's pooled effect player. A client without the effect tables
+    # yields no section; one bad EFT / PTL / texture is skipped inside the builder; anything else (the module missing in a frozen build, a table that does not parse) FAILS the
+    # avatar build like QGLB, so a pack without EFCT is never cached as good.
+    import rose_effects
+    fs, fx = rose_effects.build_section(vfs, log=log)
+    sections += fs
     info = dict(texture_dedup_bytes=saved, items=len(av['items']), meshes=len(cb.meshes), textures=len(ob.textures), materials=len(ob.mats), field_models=len(fld), cart_items=len(cart_items),
-                warnings={k: v for k, v in cb.warn.items()}, section_bytes={t.decode(): len(d) for t, _v, _c, d in sections})
+                warnings=dict(list(cb.warn.items()) + [('effects: ' + k, v) for k, v in (fx.get('warnings') or {}).items()]),
+                effects={k: v for k, v in fx.items() if k != 'warnings'}, section_bytes={t.decode(): len(d) for t, _v, _c, d in sections})
     return sections, info
 
 

@@ -10,7 +10,11 @@ Per pack (with a usable install):  missing = no .rpg1;  stale = no sidecar / oth
 PACK_REV) / other fingerprint;  fresh = else.
 Without a usable install (or without rose_conv) every file in the folder is served as is (hand-dropped dev / test packs).
 
-Builds: one at a time, run by one worker thread (zone builds use 1-3 GB). The companion runs each build in a CHILD PROCESS
+Builds: at most PARALLEL_MAX = 2 at once (one worker thread each), never two zone builds at once (LOAD PACKAGE 5: a first join
+builds the login and the avatar pack side by side, the likely zone starts as soon as one of them is done). Memory (Mac M4, peak RSS
+of one child, 0.9.44 converter): zone Adventurer's Plain 0.94 GB, login 0.55 GB, avatar 0.57 GB, so two children stay under
+~1.6 GB (earlier notes: zone builds 1-3 GB in-process). In-process builds (a converter module given to the Manager without
+parallel=, GSVR_ROSE_INPROC=1) stay one at a time: rose_conv keeps module state (rose_text) and holds the GIL. The companion runs each build in a CHILD PROCESS
 (isolate=True, the default for an auto-loaded converter): rose_conv is pure Python CPU work, and in a thread it held the GIL so
 long that the HTTP server starved (status.json 2+ s, the GUI flipped to "Starting", the world's polls slowed; maintainer
 2026-11-14). The child is `gsvr-cli --run-rose-build NAME INSTALL OUT` (frozen) / `python -I gsvr_main.py --run-rose-build ...`
@@ -19,7 +23,8 @@ long that the HTTP server starved (status.json 2+ s, the GUI flipped to "Startin
 Cancel / pre-emption = terminate the child (+ the .part cleanup). The child exits when its stdin closes (the companion died).
 A Manager given an explicit converter module (tests) builds in-process in the worker thread unless isolate=True. On-demand (request) first; the latest on-demand request wins
 and pre-empts a background build or an on-demand build below PREEMPT_KEEP_FRAC (cancel -> requeued at the front of the background
-queue); an on-demand build past it is finished first and the new request runs next. Background prebuild of the other PACKS starts
+queue) when no worker is free for it (or it is a zone and another zone builds); an on-demand build past it is finished first and
+the new request runs next. While an on-demand pack waits, no background build starts. Background prebuild of the other PACKS starts
 after the first successful on-demand build, or when an install becomes known (set_install). A second request for the pack that is
 building joins it. A failed pack is not rebuilt on every request: the error is answered again until FAIL_RETRY_S passed, the
 install fingerprint changed or "Build all" was pressed. The HTTP server never waits for any of this: request() only looks at the
@@ -47,6 +52,8 @@ CHILD_FLAG = "--run-rose-build"   # gsvr_main.py: run one pack build in this (ch
 CHILD_NICE = 5              # POSIX: the child lowers its own priority by this much
 CREATE_NO_WINDOW = 0x08000000
 KILL_WAIT_S = 5.0           # terminate() -> kill() after this long
+PARALLEL_MAX = 2            # LOAD PACKAGE 5: child builds at once (never two zones); in-process builds: 1
+LAST_ZONE_FILE = "rosebuild_last.json"      # in the rose folder: {"zone": name}, the last zone pack the world asked for (likely zone of the next first load)
 
 
 def load_conv(log=None):
@@ -86,23 +93,59 @@ def start_zone(conv):
     return None
 
 
-def first_contact(conv):
-    """the packs a first join needs, in the order the world asks for them: lobby, avatar, start zone (only those PACKS has)"""
+def is_zone(conv, name):
+    spec = (getattr(conv, "PACKS", None) or {}).get(name)
+    return isinstance(spec, dict) and spec.get("kind") == "zone"
+
+
+def likely_zone(conv, last=None):
+    """LOAD PACKAGE 5: the zone a first load most likely ends in: the last zone pack the world asked for (rosebuild_last.json; the companion
+    cannot read the player's save slots) while PACKS still has it, else the start zone (a new player's first character starts there)"""
+    if last and is_zone(conv, last):
+        return last
+    return start_zone(conv)
+
+
+def first_contact(conv, zone=None):
+    """the packs a first join needs, in the order the world asks for them: lobby, avatar, then `zone` (likely_zone) or the start zone (only those PACKS has)"""
     packs = getattr(conv, "PACKS", None) or {}
-    return [n for n in (LOBBY_PACK, AVATAR_PACK, start_zone(conv)) if n and n in packs]
+    z = zone if zone and is_zone(conv, zone) else start_zone(conv)
+    return [n for n in (LOBBY_PACK, AVATAR_PACK, z) if n and n in packs]
 
 
-def prebuild_order(conv, names):
-    """background prebuild order: the first-contact packs first (lobby, avatar, start zone), then the rest in PACKS order"""
-    fc = first_contact(conv)
+def prebuild_order(conv, names, zone=None):
+    """background prebuild order: the first-contact packs first (lobby, avatar, likely zone), then the rest in PACKS order"""
+    fc = first_contact(conv, zone)
     return [n for n in fc if n in names] + [n for n in names if n not in fc]
 
 
-def warm_after(conv, name):
+def warm_after(conv, name, zone=None):
     """W10 warm-up: when the world asks for `name`, the packs it will ask for next (they go to the front of the background queue, so their
-    build overlaps the lobby instead of starting at the pick): login -> avatar + start zone, avatar -> start zone, anything else -> none"""
-    fc = first_contact(conv)
+    build overlaps the lobby instead of starting at the pick): login -> avatar + likely zone, avatar -> likely zone, anything else -> none"""
+    fc = first_contact(conv, zone)
     return fc[fc.index(name) + 1:] if name in fc else []
+
+
+def read_last_zone(rose_dir):
+    """the zone name rosebuild_last.json holds (a-z 0-9 _ only) or None"""
+    try:
+        with open(os.path.join(rose_dir, LAST_ZONE_FILE), encoding="utf-8") as fh:
+            d = json.load(fh)
+        z = d.get("zone") if isinstance(d, dict) else None
+        return z if isinstance(z, str) and re.fullmatch(r"[a-z0-9_]{1,64}", z) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def write_last_zone(rose_dir, name):
+    p = os.path.join(rose_dir, LAST_ZONE_FILE)
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"zone": name}, fh)
+        os.replace(tmp, p)
+    except OSError:
+        _rm(tmp)
 
 
 def conv_env_value(conv):
@@ -323,7 +366,7 @@ def public_state(st):
 
 
 class Manager:
-    def __init__(self, rose_dir, conv=None, log=print, on_update=None, autoload=True, isolate=None, child_env=None):
+    def __init__(self, rose_dir, conv=None, log=print, on_update=None, autoload=True, isolate=None, child_env=None, parallel=None):
         self.rose_dir = rose_dir
         self.log = log or (lambda m: None)
         self.conv = conv if conv is not None else (load_conv(self.log) if autoload else None)
@@ -331,6 +374,8 @@ class Manager:
         if isolate is None:
             isolate = conv is None and os.environ.get("GSVR_ROSE_INPROC", "") != "1"
         self.isolate = bool(isolate)
+        # LOAD PACKAGE 5: builds at once (child processes: PARALLEL_MAX; in-process: 1 unless a test asks for more with the stub)
+        self.parallel = max(1, int(parallel if parallel is not None else (PARALLEL_MAX if self.isolate else 1)))
         self.child_env = dict(child_env or {})          # extra environment of the child (tests: stub knobs)
         self.on_update = on_update              # on_update(name, slot_fields): called WITHOUT the manager lock held
         self.cv = threading.Condition()
@@ -339,13 +384,14 @@ class Manager:
         self.demand = None                      # pending on-demand pack (latest request wins)
         self.queue = []                         # background prebuild queue
         self.forced = set()                     # build_all(force=True): queued packs built even when fresh
-        self.cur = None                         # running build: {name, kind, stage, progress, t0, hist_s, cancel, requeue, ...}
+        self.running = []                       # running builds {name, kind, stage, progress, t0, hist_s, cancel, requeue, ...}, at most self.parallel
         self.errors = {}                        # name -> last build error text (GUI view)
         self.failed = {}                        # name -> {t, fp, conv, err}: no rebuild before FAIL_RETRY_S / other install
         self.prebuild_started = False
         self.stopped = False
         self.finishing = 0                      # a finished build whose slot update is still being delivered (wait_idle)
-        self.thread = None
+        self.threads = []
+        self.last_zone = read_last_zone(rose_dir) if rose_dir else None      # LOAD PACKAGE 5: the likely zone of the next first load
         self._state_cache = (0.0, None)
         self._state_rev = 0                     # bumped by _invalidate(): a state() computed outside the lock is cached only when unchanged
         self._refresh = threading.Event()       # wakes the "rosestate" thread (state(cached=True) found the rows old / invalid)
@@ -353,6 +399,63 @@ class Manager:
         self.clean_parts()
 
     # ---- helpers -----------------------------------------------------------------------------
+    @property
+    def cur(self):
+        """the build the GUI / status shows first: the first running on-demand build, else the first running one, else None"""
+        run = list(self.running)
+        for c in run:
+            if c["kind"] == "demand":
+                return c
+        return run[0] if run else None
+
+    def _run_of(self, name, live=True):
+        """caller holds the lock: the running build of name (live: not cancelled) or None"""
+        for c in self.running:
+            if c["name"] == name and (not live or not c["cancel"].is_set()):
+                return c
+        return None
+
+    def _zone(self):
+        """the likely zone (likely_zone) of this manager"""
+        return likely_zone(self.conv, self.last_zone)
+
+    def _can_start(self, name):
+        """caller holds the lock: a free worker, name not running (also not a cancelled build of it still winding down), never two zones"""
+        if len(self.running) >= self.parallel or any(c["name"] == name for c in self.running):
+            return False
+        return not (is_zone(self.conv, name) and any(is_zone(self.conv, c["name"]) for c in self.running))
+
+    def _blockers(self, name):
+        """caller holds the lock: the live running builds that keep name from starting (cancelled ones end on their own)"""
+        live = [c for c in self.running if not c["cancel"].is_set()]
+        if is_zone(self.conv, name) and any(is_zone(self.conv, c["name"]) for c in self.running):
+            return [c for c in live if is_zone(self.conv, c["name"])]
+        return live if len(self.running) >= self.parallel else []
+
+    def _pick(self):
+        """caller holds the lock: -> (name, kind) for a free worker, or None. The on-demand pack first; while it has to wait, no background
+        build starts (it would take the worker the on-demand pack waits for)."""
+        if self.demand is not None:
+            if self._can_start(self.demand):
+                n, self.demand = self.demand, None
+                return n, "demand"
+            return None
+        for i, n in enumerate(self.queue):
+            if self._can_start(n):
+                self.queue.pop(i)
+                return n, "background"
+        return None
+
+    def _remember_zone(self, name):
+        """LOAD PACKAGE 5: the world asked for zone pack name -> the likely zone of the next first load (rosebuild_last.json). No lock held."""
+        if not self.rose_dir or not is_zone(self.conv, name):
+            return
+        with self.cv:
+            if self.last_zone == name:
+                return
+            self.last_zone = name
+        write_last_zone(self.rose_dir, name)
+
     def packs(self):
         p = getattr(self.conv, "PACKS", None) if self.conv and self.rose_dir else None
         return list(p) if p else []
@@ -408,7 +511,7 @@ class Manager:
         return -1
 
     def _building(self, name):
-        cur = self.cur if self.cur and self.cur["name"] == name else None
+        cur = self._run_of(name, live=False)
         return {"state": "building", "size": 0, "error": None, "path": None,
                 "stage": cur["stage"] if cur else "queued", "progress": round(cur["progress"], 3) if cur else 0.0,
                 "eta_s": self._eta(cur) if cur else -1}
@@ -421,16 +524,19 @@ class Manager:
                 self.log(f"[rose] slot update failed: {e}")
 
     def _ensure_thread(self):
-        if self.thread is None or not self.thread.is_alive():
-            self.thread = threading.Thread(target=self._run, name="rosebuild", daemon=True)
-            self.thread.start()
+        self.threads = [t for t in self.threads if t.is_alive()]
+        while len(self.threads) < self.parallel:
+            t = threading.Thread(target=self._run, name="rosebuild" if not self.threads else "rosebuild%d" % len(self.threads), daemon=True)
+            self.threads.append(t)
+            t.start()
 
-    def _preempt(self, by):
-        """cancel the running build (requeued at the front of the background queue)"""
-        if self.cur and not self.cur["cancel"].is_set():
-            self.cur["requeue"] = True
-            self.cur["preempted_by"] = by
-            self.cur["cancel"].set()
+    @staticmethod
+    def _preempt(cur, by):
+        """cancel a running build (requeued at the front of the background queue)"""
+        if cur and not cur["cancel"].is_set():
+            cur["requeue"] = True
+            cur["preempted_by"] = by
+            cur["cancel"].set()
 
     @staticmethod
     def _keep_running(cur):
@@ -456,6 +562,8 @@ class Manager:
         for _attempt in range(3):
             with self.cv:
                 usable, install, gen, known = self.usable(), self.install, self.gen, name in self.packs()
+            if usable and known:
+                self._remember_zone(name)
             if not usable or not known:
                 r = rose.prepare(self.rose_dir, name)
                 if r["state"] == "error" and "no rose__" in (r["error"] or "") and known:
@@ -481,8 +589,8 @@ class Manager:
                             "error": f"ROSE build of {name} failed: {f['err']} (next try in {left} s, or after the ROSE "
                                      f"install changed / Build all ROSE zones now in the companion)"}
                 self.errors.pop(name, None)
-                cur = self.cur
-                if cur and cur["name"] == name and not cur["cancel"].is_set():
+                cur = self._run_of(name)
+                if cur:
                     cur["kind"] = "demand"                       # join the running build (background -> on-demand)
                     if self.demand is not None and self.demand != name:
                         self._requeue_front(self.demand)
@@ -495,10 +603,16 @@ class Manager:
                     self.demand = name
                     if name in self.queue:
                         self.queue.remove(name)
-                    if self._keep_running(cur):
-                        self.log(f"[rose] {name} runs next: {cur['name']} is {int(cur['progress'] * 100)}% done (not pre-empted)")
-                    else:
-                        self._preempt(name)
+                    if not self._can_start(name):
+                        # no free worker (or another zone builds): pre-empt a background build first (least progress first), then an
+                        # on-demand one below PREEMPT_KEEP_FRAC; one past it is finished first
+                        bl = sorted(self._blockers(name), key=lambda c: (c["kind"] == "demand", c["progress"]))
+                        victim = next((c for c in bl if not self._keep_running(c)), None)
+                        if victim is not None:
+                            self._preempt(victim, name)
+                        elif bl:
+                            k = bl[0]
+                            self.log(f"[rose] {name} runs next: {k['name']} is {int(k['progress'] * 100)}% done (not pre-empted)")
                     self._ensure_thread()
                     self.cv.notify_all()
                 self._warm_next(name, fp, now)
@@ -509,8 +623,8 @@ class Manager:
         """caller holds the lock. W10 FIRST LOAD: the packs the world asks for after `name` (warm_after) go to the front of the background
         queue (behind nothing but the on-demand pack): a first join builds lobby -> avatar -> start zone back to back while the player is in
         the lobby. Fresh packs are skipped by the worker (no disk IO here); packs in their failure cool-down stay where they are."""
-        nxt = [n for n in warm_after(self.conv, name) if n != self.demand and n in self.packs()
-               and not (self.cur and self.cur["name"] == n and not self.cur["cancel"].is_set())
+        nxt = [n for n in warm_after(self.conv, name, self._zone()) if n != self.demand and n in self.packs()
+               and self._run_of(n) is None
                and self._fail_block(n, fp, now) is None]
         if not nxt or self.queue[:len(nxt)] == nxt:
             return
@@ -543,11 +657,11 @@ class Manager:
         with self.cv:
             if path == self.install and ok == self.install_ok:
                 return ok, reason
-            resume = self.demand or (self.cur["name"] if self.cur and self.cur["kind"] == "demand"
-                                     and not self.cur["cancel"].is_set() else None)
-            if self.cur:
-                self.cur["requeue"] = False
-                self.cur["cancel"].set()
+            run_d = [c["name"] for c in self.running if c["kind"] == "demand" and not c["cancel"].is_set()]
+            resume = self.demand or (run_d[0] if run_d else None)
+            for c in self.running:
+                c["requeue"] = False
+                c["cancel"].set()
             self.install, self.install_ok, self.install_reason = path, bool(ok), reason
             self.gen += 1
             self.demand, self.queue, self.errors, self.failed, self.forced = None, [], {}, {}, set()
@@ -584,8 +698,8 @@ class Manager:
         with self.cv:
             if gen != self.gen or not self.usable() or self.stopped:
                 return []
-            busy = {self.demand, self.cur["name"] if self.cur and not self.cur["cancel"].is_set() else None}
-            add = [n for n in prebuild_order(self.conv, self.packs()) if n not in busy and n not in self.queue and states.get(n) != "fresh"
+            busy = {self.demand} | {c["name"] for c in self.running if not c["cancel"].is_set()}
+            add = [n for n in prebuild_order(self.conv, self.packs(), self._zone()) if n not in busy and n not in self.queue and states.get(n) != "fresh"
                    and (force or self._fail_block(n, fp, now) is None)]
             if force:
                 self.forced.update(add)
@@ -610,20 +724,20 @@ class Manager:
     def cancel(self):
         """Stop the running build and drop the queue (no requeue). The on-demand slot gets an error."""
         with self.cv:
-            name = self.cur["name"] if self.cur and self.cur["kind"] == "demand" else self.demand
-            if self.cur:
-                self.cur["requeue"] = False
-                self.cur["cancel"].set()
+            names = [c["name"] for c in self.running if c["kind"] == "demand"] + ([self.demand] if self.demand else [])
+            for c in self.running:
+                c["requeue"] = False
+                c["cancel"].set()
             self.demand, self.queue, self.forced = None, [], set()
-        if name:
+        for name in dict.fromkeys(names):
             self._notify(name, {"state": "error", "size": 0, "path": None, "error": f"ROSE build of {name} cancelled"})
 
     def stop(self):
         with self.cv:
             self.stopped = True
-            if self.cur:
-                self.cur["requeue"] = False
-                self.cur["cancel"].set()
+            for c in self.running:
+                c["requeue"] = False
+                c["cancel"].set()
             self.cv.notify_all()
         self._refresh.set()
 
@@ -631,7 +745,7 @@ class Manager:
         """tests / CLI: wait until nothing runs or is queued -> True when idle"""
         end = None if timeout is None else time.monotonic() + timeout
         with self.cv:
-            while self.cur or self.demand or self.queue or self.finishing:
+            while self.running or self.demand or self.queue or self.finishing:
                 left = None if end is None else end - time.monotonic()
                 if left is not None and left <= 0:
                     return False
@@ -706,11 +820,15 @@ class Manager:
         with self.cv:
             packs = {n: dict(v, error=self.errors.get(n)) for n, v in packs.items()}
             cur = self.cur
+
+            def row(c):
+                return {"name": c["name"], "kind": c["kind"], "stage": c["stage"], "progress": round(c["progress"], 3),
+                        "eta_s": self._eta(c, now), "elapsed_s": int(now - c["t0"])}
             return {"install": self.install, "install_ok": self.install_ok, "install_reason": self.install_reason,
                     "conv": getattr(self.conv, "VERSION", None) if self.conv else None,
-                    "current": None if not cur else {"name": cur["name"], "kind": cur["kind"], "stage": cur["stage"],
-                                                     "progress": round(cur["progress"], 3), "eta_s": self._eta(cur, now),
-                                                     "elapsed_s": int(now - cur["t0"])},
+                    "current": None if not cur else row(cur),
+                    "running": [row(c) for c in self.running],          # LOAD PACKAGE 5: every running build (at most `parallel`)
+                    "likely_zone": self._zone() if self.conv else None,
                     "queue": ([self.demand] if self.demand else []) + list(self.queue),
                     "packs": packs}
 
@@ -741,14 +859,14 @@ class Manager:
     def _run(self):
         while True:
             with self.cv:
-                while not self.stopped and self.demand is None and not self.queue:
+                while True:
+                    if self.stopped:
+                        return
+                    pick = self._pick()
+                    if pick is not None:
+                        break
                     self.cv.wait()
-                if self.stopped:
-                    return
-                if self.demand is not None:
-                    name, kind, self.demand = self.demand, "demand", None
-                else:
-                    name, kind = self.queue.pop(0), "background"
+                name, kind = pick
                 if not self.usable():
                     self.cv.notify_all()
                     continue
@@ -756,7 +874,8 @@ class Manager:
                 cur = {"name": name, "kind": kind, "stage": "starting", "progress": 0.0, "t0": time.monotonic(),
                        "hist_s": None, "cancel": threading.Event(), "requeue": False, "preempted_by": None,
                        "pushed": 0.0, "pushed_at": 0.0, "logged": -10}
-                self.cur, install, gen = cur, self.install, self.gen
+                self.running.append(cur)
+                install, gen = self.install, self.gen
                 forced = name in self.forced
                 self._invalidate()
             fp = fingerprint(self.conv, install)
@@ -764,7 +883,7 @@ class Manager:
             sc = read_sidecar(self.rose_dir, name) or {}
             with self.cv:
                 if fresh and cur["kind"] == "background" and not cur["cancel"].is_set():
-                    self.cur = None                          # built meanwhile (or never stale): nothing to do
+                    self.running.remove(cur)                 # built meanwhile (or never stale): nothing to do
                     self._invalidate()
                     self.cv.notify_all()
                     continue
@@ -890,7 +1009,8 @@ class Manager:
             _rm(out + ".part")
         pb_gen = None
         with self.cv:
-            self.cur = None
+            if cur in self.running:
+                self.running.remove(cur)
             self.finishing += 1
             self._invalidate()
             notify = None

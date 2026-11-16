@@ -506,6 +506,135 @@ class Builds(Base):
         self.assertEqual(len(stub.CALLS), 2 * len(stub.PACKS))
 
 
+class Parallel(Base):
+    """LOAD PACKAGE 5: two builds at once (child processes in the companion; here the in-process stub with parallel=2), never two zones,
+    login + avatar side by side on a first join, then the likely zone (the last zone the world asked for, else the start zone)."""
+    def mk(self):
+        self.live, self.peak, self.zpeak = set(), 0, 0
+        lk = threading.Lock()
+        test = self
+
+        def build(name, install, out, progress=None, cancel=None):
+            with lk:
+                test.live.add(name)
+                test.peak = max(test.peak, len(test.live))
+                test.zpeak = max(test.zpeak, sum(1 for n in test.live if rosebuild.is_zone(stub, n)))
+            try:
+                return stub.build(name, install, out, progress=progress, cancel=cancel)
+            finally:
+                with lk:
+                    test.live.discard(name)
+
+        class Conv:
+            VERSION, PACKS, BuildError, Cancelled = stub.VERSION, stub.PACKS, stub.BuildError, stub.Cancelled
+            pack_version = staticmethod(stub.pack_version)
+            check_install = staticmethod(stub.check_install)
+            install_files = staticmethod(stub.install_files)
+            install_extra = staticmethod(stub.install_extra)
+        Conv.build = staticmethod(build)
+        self.conv = Conv
+        return rosebuild.Manager(self.rdir, conv=Conv, log=self.logs.append, on_update=self.on_update, parallel=2)
+
+    def running(self):
+        with self.m.cv:
+            return sorted(c["name"] for c in self.m.running)
+
+    def test_defaults(self):
+        self.assertEqual(rosebuild.Manager(self.rdir, conv=stub).parallel, 1)            # in-process: one at a time (GIL, converter module state)
+        self.assertEqual(rosebuild.Manager(self.rdir, conv=stub, isolate=True).parallel, rosebuild.PARALLEL_MAX)
+        self.assertEqual(rosebuild.PARALLEL_MAX, 2)
+        self.assertEqual(self.m.parallel, 2)
+
+    def test_first_join_builds_login_and_avatar_together(self):
+        stub.HOLD = threading.Event()
+        self.m.set_install(self.inst, prebuild=False)
+        self.assertEqual(self.m.request("login")["state"], "building")
+        self.assertTrue(until(lambda: self.running() == ["avatar", "login"]), self.running())
+        st = self.m.state()
+        self.assertEqual(st["current"]["name"], "login")                          # the on-demand one is shown first
+        self.assertEqual(sorted(r["name"] for r in st["running"]), ["avatar", "login"])
+        self.assertEqual(st["queue"][:1], [A])                                    # the start zone waits for a free worker
+        self.assertEqual(self.m.request("avatar")["state"], "building")           # the world asks for the avatar pack: joins
+        self.assertEqual(self.m.cur["kind"], "demand")
+        stub.HOLD.set()
+        self.assertTrue(self.m.wait_idle(30))
+        self.assertEqual(sorted(stub.CALLS[:2]), ["avatar", "login"])
+        self.assertEqual(stub.CALLS[2], A)
+        self.assertEqual(stub.CALLS.count("login") + stub.CALLS.count("avatar"), 2)
+        self.assertEqual((self.last("login")["state"], self.last("avatar")["state"]), ("ready", "ready"))
+        self.assertLessEqual(self.peak, 2)
+        self.assertEqual(self.zpeak, 1)                                            # never two zone builds at once
+
+    def test_never_two_zones(self):
+        self.m.set_install(self.inst)
+        self.assertTrue(self.m.wait_idle(60))
+        self.assertEqual(sorted(stub.CALLS), sorted(stub.PACKS))
+        self.assertEqual(self.peak, 2)
+        self.assertEqual(self.zpeak, 1)
+
+    def test_likely_zone_is_the_last_requested_zone(self):
+        self.assertIsNone(rosebuild.read_last_zone(self.rdir))
+        self.assertEqual(self.m._zone(), A)                                      # nothing known: the start zone
+        self.m.set_install(self.inst, prebuild=False)
+        self.m.request(B)
+        self.assertTrue(self.m.wait_idle(60))
+        self.assertEqual(rosebuild.read_last_zone(self.rdir), B)
+        self.m.request("login")                                                   # lobby / avatar requests never overwrite it
+        self.assertTrue(self.m.wait_idle(60))
+        self.assertEqual(rosebuild.read_last_zone(self.rdir), B)
+        m2 = self.mk()                                                            # a restarted companion reads it back
+        self.addCleanup(m2.stop)
+        self.assertEqual(m2._zone(), B)
+        self.assertEqual(rosebuild.warm_after(stub, "login", m2._zone()), ["avatar", B])
+        self.assertEqual(rosebuild.prebuild_order(stub, list(stub.PACKS), B)[:3], ["login", "avatar", B])
+        self.assertEqual(m2.state()["likely_zone"], B)
+        self.assertEqual(rosebuild.likely_zone(stub, "login"), A)                # not a zone / unknown: the start zone
+        self.assertEqual(rosebuild.likely_zone(stub, "nosuchzone"), A)
+        with open(os.path.join(self.rdir, rosebuild.LAST_ZONE_FILE), "w") as fh:
+            fh.write('{"zone": "../x"}')
+        self.assertIsNone(rosebuild.read_last_zone(self.rdir))
+
+    def test_first_join_warms_the_likely_zone(self):
+        rosebuild.write_last_zone(self.rdir, C)
+        self.m = self.mk()
+        stub.HOLD = threading.Event()
+        self.m.set_install(self.inst, prebuild=False)
+        self.m.request("login")
+        self.assertIn("[rose] warm-up after login: avatar, " + C + " next", "\n".join(self.logs))
+        self.assertTrue(until(lambda: self.running() == ["avatar", "login"]), self.running())
+        stub.HOLD.set()
+        self.assertTrue(self.m.wait_idle(30))
+        self.assertEqual(stub.CALLS[2], C)
+
+    def test_demand_preempts_a_background_build_when_both_workers_are_busy(self):
+        stub.HOLD = threading.Event()
+        self.m.set_install(self.inst)                                             # background: login + avatar
+        self.assertTrue(until(lambda: self.running() == ["avatar", "login"]), self.running())
+        self.assertEqual(self.m.request(B)["state"], "building")
+        self.assertTrue(until(lambda: B in self.running()), self.running())
+        self.assertEqual(len(self.running()), 2)
+        txt = "\n".join(self.logs)
+        self.assertEqual(txt.count(f"(pre-empted by {B}, requeued)"), 1)         # exactly one background build gave way
+        stub.HOLD.set()
+        self.assertTrue(self.m.wait_idle(60))
+        self.assertEqual(sorted(set(stub.CALLS)), sorted(stub.PACKS))
+        self.assertEqual(self.last(B)["state"], "ready")
+        self.assertEqual(self.zpeak, 1)
+
+    def test_zone_demand_waits_for_a_zone_past_half(self):
+        stub.HOLD, stub.HOLD_FROM = threading.Event(), 6
+        self.m.set_install(self.inst, prebuild=False)
+        self.m.request(A)
+        self.assertTrue(until(lambda: self.m.cur is not None and self.m.cur["progress"] >= 0.5))
+        self.m.request(B)                                                         # a free worker, but A is a zone past 50 %: B waits
+        self.assertIn(f"[rose] {B} runs next: {A} is 60% done (not pre-empted)", "\n".join(self.logs))
+        self.assertEqual(self.running(), [A])
+        stub.HOLD.set()
+        self.assertTrue(self.m.wait_idle(30))
+        self.assertEqual(stub.CALLS[:2], [A, B])
+        self.assertEqual(self.zpeak, 1)
+
+
 class StatusShape(unittest.TestCase):
     def test_public_slot(self):
         s = rose.new_slot()
