@@ -33,6 +33,7 @@ Layout (little endian, 4-byte aligned; offsets from the section start):
 import struct, collections
 
 import rosevfs, rosefmt as F
+import rose_text as TX
 
 TAG_QUST = b'QUST'
 VERSION = 1
@@ -61,7 +62,10 @@ COND_DOC = {
     3: 'ability value: a = ability type, b = value, c = cmp', 4: 'quest item: a = raw equipment index (1..11 = that equipment slot must hold the item, else a count check), b = item sn, c = count, d = cmp',
     6: 'position: a = zone, b = x cm, c = y cm, d = distance cm', 10: 'random percent: b = low, c = high', 13: 'select npc: b = npc id',
     11: 'object variable (ZONES MORE): sub = object (0 selected npc, 1 selected event), a = variable 0..19, b = value, c = cmp',
+    9: 'has skill (QUEST CHECK): sub = has (1) / has not (0), b = first id, c = last id',
     14: 'user switch: a = id, b = value 0/1', 21: 'object distance: a = object (0 npc 1 event), b = distance cm', 22: 'server channel: b = low, c = high',
+    23: 'clan: has a clan: b = 1 / 0 (CLAN QUESTS)', 24: 'clan rank (0 penalty .. 6 master): b = value, c = cmp', 25: 'clan contribution: b = value, c = cmp', 26: 'clan level: b = value, c = cmp',
+    27: 'clan points: b = value, c = cmp', 28: 'clan money: b = value, c = cmp', 29: 'clan member count: b = value, c = cmp', 30: 'clan skill in range: sub = has (1 / 0), b = first id, c = last id',
     255: 'unsupported (sub = original op): false'}
 REW_DOC = {
     0: 'quest op: sub 0 remove selected 1 add 2 change selected keep data 3 change selected new 4 select, b = quest id', 1: 'item: sub 1 add 0 remove, b = item sn, c = quantity',
@@ -69,7 +73,10 @@ REW_DOC = {
     5: 'calculated: sub 0 xp 1 money 2 item, a = equation, b = value, c = item sn, d = gem', 6: 'hp / mp percent: b = hp, c = mp', 7: 'teleport: a = zone, b = x cm, c = y cm',
     9: 'trigger chain: b = trigger index (-1 unknown name)', 10: 'reset basic stats', 12: 'npc message: sub = type, b = string id', 14: 'skill: sub 1 add 0 remove, b = skill id',
     11: 'object variable (ZONES MORE): sub = object (0 selected npc, 1 selected event), a = variable 0..19, b = value, c = reward op',
+    23: 'clan level increase (QUEST CHECK; the runtime fails it: no clan growth yet)', 24: 'clan money: b = value, c = reward op', 25: 'clan points: b = value, c = reward op',
+    26: 'clan skill: sub 1 add 0 remove, b = skill id', 27: 'clan contribution: b = value, c = reward op',
     15: 'set user switch: a = id, b = value', 16: 'clear switch group: a = group', 17: 'clear all switches', 29: 'call lua (client side): no-op', 30: 'reset skills',
+    28: 'teleport me and the nearby clan members (CLAN QUESTS): a = zone, b = x cm, c = y cm, d = distance cm',
     255: 'unsupported (sub = original op): fails like the reference server'}
 
 # ---- dialog call ids (node.call)
@@ -139,6 +146,9 @@ def _cond_records(op, d, p, size, warn):
     elif op == 8:
         val, cmp_ = struct.unpack_from('<iB', d, p)
         out.append((1, 2, 0, val, cmp_, 0))
+    elif op == 9:           # QUEST CHECK: HasSkill / HasSkillInRange (rose-offline qsd.rs): u32 first id, u32 last id, u8 has: sub = has (1 / 0), b = first id, c = last id
+        lo, hi, has = struct.unpack_from('<IIB', d, p)
+        out.append((9, 1 if has else 0, 0, lo, hi, 0))
     elif op == 10:
         lo, hi = struct.unpack_from('<BB', d, p)
         out.append((10, 0, 0, lo, hi, 0))
@@ -156,6 +166,17 @@ def _cond_records(op, d, p, size, warn):
     elif op == 22:
         lo, hi = struct.unpack_from('<HH', d, p)
         out.append((22, 0, 0, lo, hi, 0))
+    elif op == 23:          # CLAN QUESTS: has clan: b = 1 / 0
+        out.append((23, 0, 0, 1 if d[p] else 0, 0, 0))
+    elif op in (24, 25, 26, 27, 29):          # CLAN QUESTS: clan rank (24) / contribution (25) / level (26) / points (27) / member count (29): b = value (u16), c = cmp
+        val, cmp_ = struct.unpack_from('<HB', d, p)
+        out.append((op, 0, 0, val, cmp_, 0))
+    elif op == 28:          # CLAN QUESTS: clan money: b = value, c = cmp
+        val, cmp_ = struct.unpack_from('<iB', d, p)
+        out.append((28, 0, 0, val, cmp_, 0))
+    elif op == 30:          # CLAN QUESTS: clan skill in range: sub = has (1 / 0), b = first id, c = last id
+        lo, hi, has = struct.unpack_from('<HHB', d, p)
+        out.append((30, 1 if has else 0, 0, lo, hi, 0))
     else:
         warn['condition op %d: not supported (false)' % op] += 1
         out.append((255, op & 0xFF, 0, 0, 0, 0))
@@ -199,6 +220,14 @@ def _rew_records(op, d, p, size, warn):
         out.append((11, obj, vid, val, rop, 0))
     elif op in (10, 17, 29, 30):
         out.append((op, 0, 0, 0, 0, 0))
+    elif op == 23:          # QUEST CHECK: ClanLevelIncrease (no data): the runtime has no clan growth yet and fails it (docs/design/rose_quests_runtime.md)
+        out.append((23, 0, 0, 0, 0, 0))
+    elif op in (24, 25, 27):          # QUEST CHECK: clan money (24) / points (25) / contribution (27): b = value, c = reward op (5 set 6 add 7 sub 8 zero 9 one)
+        val, rop = struct.unpack_from('<iB', d, p)
+        out.append((op, 0, 0, val, rop, 0))
+    elif op == 26:          # QUEST CHECK: AddClanSkill / RemoveClanSkill: sub = add (1) / remove (0), b = skill id
+        sk, add = struct.unpack_from('<HB', d, p)
+        out.append((26, 1 if add else 0, 0, sk, 0, 0))
     elif op == 12:
         typ, sid = struct.unpack_from('<B3xI', d, p)
         out.append((12, typ, 0, sid, 0, 0))
@@ -210,6 +239,9 @@ def _rew_records(op, d, p, size, warn):
         out.append((15, 0, sid, 1 if val else 0, 0, 0))
     elif op == 16:
         out.append((16, 0, struct.unpack_from('<H', d, p)[0], 0, 0, 0))
+    elif op == 28:          # CLAN QUESTS: teleport nearby clan members (and me): a = zone, b = x cm, c = y cm, d = distance (cm)
+        dist, z, x, y = struct.unpack_from('<IH2xII', d, p)
+        out.append((28, 0, z, x, y, dist))
     else:
         warn['reward op %d: not supported (fails)' % op] += 1
         out.append((255, op & 0xFF, 0, 0, 0, 0))
@@ -390,8 +422,9 @@ class FnCompiler:
     Conditional jumps that compare a call result with a constant become test nodes (both branches are followed); constant comparisons are folded. A backward jump
     (a loop) or an unknown opcode makes the function unsupported (ValueError). Effect calls (QF_doQuestTrigger, GF_openStore ...) become effect nodes in program order."""
 
-    def __init__(s, fn, trig_index, warn, name):
+    def __init__(s, fn, trig_index, warn, name, assigned=None):
         s.fn, s.tix, s.warn, s.name = fn, trig_index, warn, name
+        s.assigned = assigned if assigned is not None else None          # QUEST CHECK: every global the script assigns anywhere (None = unknown: nothing is folded to nil)
         s.nodes = []
         s.memo = {}
         s.refs = set()            # trigger names this function names
@@ -399,6 +432,9 @@ class FnCompiler:
     def compile(s):
         stack = [('opaque',)] * s.fn['nparams']
         return s._run(0, tuple(stack), 0, ())
+
+    def _nilg(s, v):
+        return v[0] == 'global' and v[1] not in LUA_CONSTANTS and v[1] not in s.assigned
 
     def _node(s, kind, call=0, cmp_=0, a0=0, a1=0, k=0, nxt=-1, alt=-1):
         if len(s.nodes) >= MAX_NODES_PER_FN:
@@ -528,6 +564,13 @@ class FnCompiler:
                 if sarg < 0:
                     raise ValueError('backward jump (loop)')
                 c = JUMP_CMP[o]
+                # QUEST CHECK: a global the whole script never assigns (and no SV_* constant) is nil in Lua: nil == n is false, nil ~= n is true (an ordered compare is a Lua error: unsupported)
+                if s.assigned is not None and ((s._nilg(lhs) and rhs[0] == 'int') or (s._nilg(rhs) and lhs[0] == 'int')):
+                    if c not in (CMP_EQ, CMP_NE):
+                        raise ValueError('ordered compare of an unassigned global')
+                    if c == CMP_NE:
+                        pc = tgt
+                    continue
                 if lhs[0] == 'int' and rhs[0] == 'int':
                     if _cmp(c, lhs[1], rhs[1]):
                         pc = tgt
@@ -576,6 +619,15 @@ def compile_dialog_functions(script, names, trig_index, warn):
     """CON Lua blob + the function names its messages use -> ({name: (root, nodes)}, referenced trigger names). Unsupported functions are left out (warning)."""
     main = lua_load(script)
     glob = lua_globals(main)
+    assigned = set()          # QUEST CHECK: every SETGLOBAL name of the script (functions defined with `function f` included)
+
+    def _walk(fn):
+        for ins in fn['code']:
+            if ins & 63 == OP['SETGLOBAL']:
+                assigned.add(fn['ks'][ins >> 6])
+        for q in fn['kp']:
+            _walk(q)
+    _walk(main)
     out = {}
     refs = set()
     for nm in sorted(names):
@@ -585,7 +637,7 @@ def compile_dialog_functions(script, names, trig_index, warn):
         if proto is None:
             warn['dialog: function %s not defined in the script' % nm] += 1
             continue
-        c = FnCompiler(proto, trig_index, warn, nm)
+        c = FnCompiler(proto, trig_index, warn, nm, assigned)
         try:
             root = c.compile()
         except Exception as e:          # audit fix: any failure of one function leaves only that function out
@@ -613,20 +665,27 @@ def ltb_strings(data, column):
 
 
 class StrBlob:
+    """UTF-16 string blob. add(text, ja): ja = the Japanese text of the same line (language overlay TXJA, domain D_QSTR keyed by the offset of the English string);
+    two lines with the same English text and different Japanese text get two blob entries, so every line keeps its own translation."""
+
     def __init__(s):
         s.buf = bytearray(); s.index = {}
 
-    def add(s, text):
+    def add(s, text, ja=None):
         if text is None:
             return -1
         text = text[:4000]
-        if text in s.index:
-            return s.index[text]
+        ja = ja[:4000] if ja and ja != text else None
+        key = (text, ja)
+        if key in s.index:
+            return s.index[key]
         off = len(s.buf)
         u = text.encode('utf-16-le')
         s.buf += struct.pack('<H', len(u) // 2) + u
         s.buf += b'\0' * (-len(s.buf) % 4)
-        s.index[text] = off
+        s.index[key] = off
+        if ja:
+            TX.note(TX.D_QSTR, off, 0, text, ja)
         return off
 
 
@@ -664,18 +723,20 @@ def load_triggers(vfs, warn):
     return trigs, index
 
 
-def quest_table(vfs, warn):
-    """LIST_QUEST.STB + LIST_QUEST_S.STL -> {quest id: (name, desc, start, end, time limit)}."""
+def quest_table(vfs, warn, lang=TX.EN):
+    """LIST_QUEST.STB + LIST_QUEST_S.STL -> {quest id: (name, desc, start, end, time limit)} in the STL language `lang` (1 English, 2 Japanese; rose_text.pick fallbacks)."""
     qs = _stb(vfs, '3DDATA/STB/LIST_QUEST.STB')
     out = {}
     if qs is None:
-        warn['QUST: LIST_QUEST.STB missing'] += 1
+        if lang == TX.EN:
+            warn['QUST: LIST_QUEST.STB missing'] += 1
         return out
     keys = langs = None
     try:
         _typ, keys, langs = F.stl(vfs.read('3DDATA/STB/LIST_QUEST_S.STL'))
     except (KeyError, ValueError, struct.error, IndexError):
-        warn['QUST: LIST_QUEST_S.STL missing (no quest texts)'] += 1
+        if lang == TX.EN:
+            warn['QUST: LIST_QUEST_S.STL missing (no quest texts)'] += 1
     for qid, c in enumerate(qs['cells']):
         if not c:
             continue
@@ -688,8 +749,8 @@ def quest_table(vfs, warn):
             tl = 0
         txt = (None, None, None, None)
         if keys and sid in keys and len(langs) > STL_LANG:
-            e = langs[STL_LANG][keys[sid][0]]
-            txt = tuple((e + [None] * 4)[:4])
+            stl = (_typ, keys, langs)
+            txt = tuple(TX.stl_text(stl, sid, k, lang) if TX.stl_cells(stl, sid, k) else None for k in range(4))
         out[qid] = txt + (max(0, tl),)
     return out
 
@@ -732,8 +793,10 @@ def _build_section(vfs, ifos, monster_ids, warn):
             if len(c) > 3 and c[3].strip():
                 ev_index[k.strip().upper()] = c[3].strip()
     ltb = {}
+    ltb_ja = {}
     try:
         ltb = ltb_strings(vfs.read(LTB_CON), LTB_COLUMN)
+        ltb_ja = ltb_strings(vfs.read(LTB_CON), TX.LTB_JA)
     except (KeyError, struct.error):
         warn['QUST: %s missing (no dialog texts)' % LTB_CON] += 1
     # --- NPC conversations
@@ -853,15 +916,17 @@ def _build_section(vfs, ifos, monster_ids, warn):
             for x in m:
                 cf = fidx.get(x['cond'], -2) if x['cond'] else -1
                 af = fidx.get(x['act'], -2) if x['act'] else -1
-                MS.append((x['type'], x['value'], cf, af, sb.add(ltb.get(x['sid']))))
+                MS.append((x['type'], x['value'], cf, af, sb.add(ltb.get(x['sid']), ltb_ja.get(x['sid']))))
         NP.append((nid, open_fn, first, len(con['menus']), -1, 0))
     qt = quest_table(vfs, warn)
+    qj = quest_table(vfs, collections.Counter(), TX.JA)
     Q = []
     for qid in sorted(quest_ids):
         if qid in qt:
             nm, de, st_, en, tl = qt[qid]
-            Q.append((qid, sb.add(nm), sb.add(de), sb.add(st_), sb.add(en), tl))
-    QN = [(qid, sb.add(v[0])) for qid, v in sorted(qt.items()) if v[0]]
+            j = qj.get(qid, (None,) * 5)
+            Q.append((qid, sb.add(nm, j[0]), sb.add(de, j[1]), sb.add(st_, j[2]), sb.add(en, j[3]), tl))
+    QN = [(qid, sb.add(v[0], qj.get(qid, (None,))[0])) for qid, v in sorted(qt.items()) if v[0]]
     QI = quest_items(vfs, quest_item_codes(trigs, order), sb, warn)
     tables = dict(trig=[TRIG.pack(*x) for x in T], cond=[REC.pack(*x) for x in C], rew=[REC.pack(*x) for x in R], npc=[NPC.pack(*x) for x in NP],
                   menu=[MENU.pack(*x) for x in ME], msg=[MSG.pack(*x) for x in MS], fn=[FN.pack(*x) for x in FNS], node=[NODE.pack(*x) for x in NO],
@@ -921,8 +986,12 @@ def quest_items(vfs, codes, sb, warn):
         except ValueError:
             icon = 0
         sid = c[-1].strip() if c else ''
-        nm = langs[STL_LANG][keys[sid][0]][0] if keys and sid in keys and len(langs) > STL_LANG else None
-        out.append((code, max(0, min(icon, 0xFFFF)), sb.add(nm)))
+        nm = nj = None
+        if keys and sid in keys and len(langs) > STL_LANG:
+            cells = TX.stl_cells((_t, keys, langs), sid, 0)
+            nm, nj = TX.pick(cells, TX.EN), TX.pick(cells, TX.JA)
+            TX.note(TX.D_ITEM, code, 0, nm, nj)
+        out.append((code, max(0, min(icon, 0xFFFF)), sb.add(nm, nj)))
     return out
 
 

@@ -21,7 +21,7 @@ import collections, json, os, queue, shutil, socket, subprocess, sys, threading,
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                            # -I drops the script dir from sys.path
-import cachedir, companion, games, rosefind, runtime, steam, updater                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+import cachedir, companion, games, logwatch, modules, rosefind, runtime, steam, updater                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
 from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION                    # noqa: E402
 
 REPO = os.path.dirname(HERE)                                        # source checkout root (test data in work/)
@@ -33,7 +33,7 @@ DEFAULT_SETTINGS = {"worlds": DEFAULT_WORLDS, "extra": "", "war3_root": "", "war
                     "relay_url": "https://w3relay.heimserver.me", "map_autodownload": "on",
                     "update_base": DEFAULT_UPDATE_BASE, "update_token": "",
                     "auto_update_check": True, "prereleases": True, "auto_start": True,
-                    "cache_dir": "", "rose_install": ""}                             # "" = default cache folder
+                    "cache_dir": "", "rose_install": "", "vrchat_log_dir": ""}                             # "" = default cache folder
 
 
 def settings_path():
@@ -165,6 +165,9 @@ class Controller:
             v = self.settings.get(key, "").strip()
             if v:
                 a += [flag, v]
+        vlog = self.settings.get("vrchat_log_dir", "").strip()      # VRChat log folder override (Linux/Proton); empty = auto-detect
+        if vlog:
+            a += ["--vrchat-log-dir", vlog]
         rose = self.settings.get("rose_install", "").strip()        # ROSE: own install folder (empty = auto-detect)
         if rose:
             a += ["--rose-install", rose]
@@ -591,6 +594,8 @@ def status_rows(st, foreign=()):
         rows.insert(3, ("ROSE Online", rose_txt))
     if st.get("log") is False:
         rows.append(("Note", "no VRChat log folder found — map requests from the world can't arrive"))
+    elif st.get("log_ok") is False:
+        rows.append(("Warning", logwatch.LOG_WARNING))
     return rows + notes
 
 
@@ -772,6 +777,78 @@ def run_gui():
               "Ein manueller Half-Life-Ordner gilt f\u00fcr alle GoldSrc-Spiele (Half-Life, Counter-Strike, Sven Co-op ...).",
               foreground="#555", wraplength=700, justify="left").grid(row=2, column=0, sticky="w", pady=(4, 0))
     gm_tab.columnconfigure(0, weight=1)
+
+    # ---- game modules (modules.py, docs/design/companion_modules.md): version / update / rollback per module; off by default ----
+    mod_box = ttk.LabelFrame(gm_tab, text="Module (experimentell)", padding=6)
+    mod_box.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+    mod_on = tk.BooleanVar(value=modules.enabled())
+    mod_info = {"avail": {}, "msg": ""}
+
+    def mod_toggle():
+        try:
+            modules.set_enabled(mod_on.get())
+            mod_info["msg"] = "Gespeichert. Companion und App neu starten, damit es gilt."
+        except modules.ModuleError as e:
+            mod_on.set(modules.enabled())
+            mod_info["msg"] = "Nicht gespeichert: %s" % e
+        mod_draw()
+
+    def mod_work(kind, name):
+        def work():
+            st = modules.Store()
+            try:
+                if kind == "check":
+                    r = st.check(name)
+                    ui_q.put(("modules", ("check", name, r["message"], r)))
+                elif kind == "install":
+                    v = st.install(name)
+                    ui_q.put(("modules", ("done", name, "%s installiert - Neustart n\u00f6tig" % v, None)))
+                elif kind == "rollback":
+                    v = st.rollback(name)
+                    ui_q.put(("modules", ("done", name, "zur\u00fcck auf %s - Neustart n\u00f6tig" % v, None)))
+                else:
+                    st.disable(name)
+                    ui_q.put(("modules", ("done", name, "eingebaute Version beim n\u00e4chsten Start", None)))
+            except modules.ModuleError as e:
+                ui_q.put(("modules", ("done", name, "Fehler: %s" % e, None)))
+        bg(work)
+
+    def mod_done(val):
+        kind, name, msg, info = val
+        mod_info["msg"] = "%s: %s" % (name, msg)
+        if kind == "check":
+            mod_info["avail"][name] = info
+        else:
+            mod_info["avail"].pop(name, None)
+        mod_draw()
+
+    def mod_draw():
+        for w in mod_box.winfo_children():
+            w.destroy()
+        ttk.Checkbutton(mod_box, text="Module verwenden (signierte Zusatzpakete von GitHub; sonst l\u00e4uft die eingebaute Version)",
+                        variable=mod_on, command=mod_toggle).grid(row=0, column=0, columnspan=6, sticky="w")
+        for i, h in enumerate(("Modul", "L\u00e4uft", "Installiert", "Verf\u00fcgbar", "")):
+            ttk.Label(mod_box, text=h, font=("Segoe UI", 10, "bold")).grid(row=1, column=i, sticky="w", padx=(0, 10))
+        for i, r in enumerate(modules.rows(), 2):
+            av = mod_info["avail"].get(r["name"]) or {}
+            ttk.Label(mod_box, text=r["title"]).grid(row=i, column=0, sticky="w", padx=(0, 10))
+            ttk.Label(mod_box, text=r["running"]).grid(row=i, column=1, sticky="w", padx=(0, 10))
+            ttk.Label(mod_box, text=r["installed"] + (" (Vorg\u00e4nger %s)" % r["previous"] if r["previous"] else "")).grid(
+                row=i, column=2, sticky="w", padx=(0, 10))
+            ttk.Label(mod_box, text=(av.get("version") or "-") if av.get("status") != "incompatible" else "App-Update n\u00f6tig").grid(
+                row=i, column=3, sticky="w", padx=(0, 10))
+            bf = ttk.Frame(mod_box)
+            bf.grid(row=i, column=4, sticky="e")
+            ttk.Button(bf, text="Suchen", command=lambda n=r["name"]: mod_work("check", n)).pack(side="left")
+            ttk.Button(bf, text="Aktualisieren", command=lambda n=r["name"]: mod_work("install", n),
+                       state="normal" if av.get("status") == "available" else "disabled").pack(side="left", padx=(4, 0))
+            ttk.Button(bf, text="Zur\u00fcck auf %s" % (r["previous"] or "-"), command=lambda n=r["name"]: mod_work("rollback", n),
+                       state="normal" if r["can_rollback"] else "disabled").pack(side="left", padx=(4, 0))
+            if r["error"]:
+                ttk.Label(mod_box, text="eingebaute/vorherige Version aktiv: " + r["error"], foreground="#a00", wraplength=620,
+                          justify="left").grid(row=i + 1, column=0, columnspan=6, sticky="w")
+        ttk.Label(mod_box, text=mod_info["msg"], foreground="#555").grid(row=99, column=0, columnspan=6, sticky="w", pady=(4, 0))
+    mod_draw()
     gm_state = {"rows": None, "val": None}
     ROSE_HOW_DE = {"registry": "Registry", "steam": "Steam", "common folder": "Ordner-Suche", "drive scan": "Ordner-Suche",
                    "configured": "manuell"}
@@ -871,6 +948,7 @@ def run_gui():
     w3maps_var = tk.StringVar(value=c.settings.get("war3_maps", ""))
     hl_var = tk.StringVar(value=c.settings.get("hl_root", ""))
     rose_var = tk.StringVar(value=c.settings.get("rose_install", ""))
+    vlog_var = tk.StringVar(value=c.settings.get("vrchat_log_dir", ""))
     # GAME-FOLDERS (maintainer 2026-10-29): folder settings live only on the Spiele tab, not on Settings
     gx = ttk.LabelFrame(gm_tab, text="Ordner von Hand / suchen", padding=8)
     gx.grid(row=3, column=0, sticky="we", pady=(10, 0))
@@ -939,6 +1017,12 @@ def run_gui():
     rose_btns.grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
     rose_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
     rose_lbl.grid(row=r + 2, column=0, columnspan=2, sticky="w")
+    # VRChat log folder (Linux/Proton/Steam Deck): empty = auto-detect; set = used as-is
+    ttk.Label(gx, text="VRChat log folder (empty = found automatically; Linux/Proton: steamapps/compatdata/438100/pfx/.../LocalLow/VRChat/VRChat):"
+              ).grid(row=30, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    ttk.Entry(gx, textvariable=vlog_var, width=70).grid(row=31, column=0, columnspan=2, sticky="we")
+    ttk.Button(gx, text="Browse…", command=lambda: vlog_var.set(filedialog.askdirectory(initialdir=vlog_var.get() or None) or vlog_var.get())
+               ).grid(row=31, column=2, sticky="w", padx=(6, 0))
     rose_found = {"path": "", "how": "", "busy": False, "silent": False}
     rose_chk = {"path": None, "text": "", "busy": False}          # rosefind.check result of the typed folder (computed off the Tk thread)
 
@@ -1078,7 +1162,7 @@ def run_gui():
         if typed_rose != rose_sent["v"] and c.running():
             rose_apply(typed_rose)                  # Save of a typed ROSE folder also reaches the running companion (POST /rose/install)
         rose_sent["v"] = typed_rose
-        c.settings.update(worlds=worlds_var.get(), extra=extra_var.get(), war3_root=war3_var.get().strip(), hl_root=hl_var.get().strip(), rose_install=rose_var.get().strip(),
+        c.settings.update(worlds=worlds_var.get(), extra=extra_var.get(), war3_root=war3_var.get().strip(), hl_root=hl_var.get().strip(), vrchat_log_dir=vlog_var.get().strip(), rose_install=rose_var.get().strip(),
                           war3_maps=w3maps_var.get().strip(), relay_url=relay_var.get().strip(),
                           map_autodownload=dl_var.get() if dl_var.get() in ("on", "ask", "off") else "on", update_base=base_var.get().strip(),
                           update_token=token_var.get().strip(), auto_update_check=bool(auto_var.get()),
@@ -1300,6 +1384,8 @@ def run_gui():
                     show_status(val)
                 elif kind == "games":
                     show_games(val)
+                elif kind == "modules":
+                    mod_done(val)
                 elif kind == "update":
                     show_update(val)
                 elif kind == "progress":

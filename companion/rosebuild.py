@@ -6,7 +6,8 @@ Cache:  <rose dir>/rose__<name>.rpg1  +  rose__<name>.rpg1.json  {"conv": VERSIO
         fingerprint = sha256 over (relative path, size, mtime) of the install's VFS files (rose_conv.install_files(install):
         data.idx + the .VFS stores; a converter without it: the *.idx files at the top of the install), plus the lines of
         rose_conv.install_extra(install) when the converter has it (3Ddata/Control/Xml + Sound folder stats, ogg decoder).
-Per pack (with a usable install):  missing = no .rpg1;  stale = no sidecar / other conv VERSION / other fingerprint;  fresh = else.
+Per pack (with a usable install):  missing = no .rpg1;  stale = no sidecar / other conv version (conv_version: VERSION + the pack's
+PACK_REV) / other fingerprint;  fresh = else.
 Without a usable install (or without rose_conv) every file in the folder is served as is (hand-dropped dev / test packs).
 
 Builds: one at a time, run by one worker thread (zone builds use 1-3 GB). The companion runs each build in a CHILD PROCESS
@@ -62,6 +63,46 @@ def load_conv(log=None):
         if log:
             log(f"[rose] converter failed to load: {e}")
         return None
+
+
+def conv_version(conv, name):
+    """the converter version a pack of `name` is stamped / compared with: conv.pack_version(name) (VERSION + the per-pack revision of
+    rose_conv.PACK_REV, so bumping one entry rebuilds only that pack), conv.VERSION for a converter without it, None without a converter."""
+    pv = getattr(conv, "pack_version", None)
+    if callable(pv):
+        return pv(name)
+    return getattr(conv, "VERSION", None)
+
+
+# W10 FIRST LOAD (first join of a new player): the world asks for the lobby pack, then the avatar pack, then (after the pick) the start zone.
+LOBBY_PACK, AVATAR_PACK = "login", "avatar"
+
+
+def start_zone(conv):
+    """the start zone pack (a new character's first zone): the first PACKS entry of kind "zone" (birthisland); None without one"""
+    for n, spec in (getattr(conv, "PACKS", None) or {}).items():
+        if isinstance(spec, dict) and spec.get("kind") == "zone":
+            return n
+    return None
+
+
+def first_contact(conv):
+    """the packs a first join needs, in the order the world asks for them: lobby, avatar, start zone (only those PACKS has)"""
+    packs = getattr(conv, "PACKS", None) or {}
+    return [n for n in (LOBBY_PACK, AVATAR_PACK, start_zone(conv)) if n and n in packs]
+
+
+def prebuild_order(conv, names):
+    """background prebuild order: the first-contact packs first (lobby, avatar, start zone), then the rest in PACKS order"""
+    fc = first_contact(conv)
+    return [n for n in fc if n in names] + [n for n in names if n not in fc]
+
+
+def warm_after(conv, name):
+    """W10 warm-up: when the world asks for `name`, the packs it will ask for next (they go to the front of the background queue, so their
+    build overlaps the lobby instead of starting at the pick): login -> avatar + start zone, avatar -> start zone, anything else -> none"""
+    fc = first_contact(conv)
+    return fc[fc.index(name) + 1:] if name in fc else []
 
 
 def conv_env_value(conv):
@@ -181,7 +222,7 @@ def _child_build(name, install, out, emit, lock):
         emit("error", json.dumps({"error": str(e) or type(e).__name__,
                                   "cancelled": isinstance(canc, type) and isinstance(e, canc)}))
         return 1
-    emit("result", json.dumps({"conv": getattr(conv, "VERSION", None), "result": res if isinstance(res, dict) else None},
+    emit("result", json.dumps({"conv": conv_version(conv, name), "result": res if isinstance(res, dict) else None},
                               default=str))
     return 0
 
@@ -344,7 +385,7 @@ class Manager:
         if not self.usable():
             return "fresh"                       # nothing to compare with: a hand-dropped / older pack is served as is
         sc = read_sidecar(self.rose_dir, name)
-        if not sc or sc.get("conv") != getattr(self.conv, "VERSION", None):
+        if not sc or sc.get("conv") != conv_version(self.conv, name):
             return "stale"
         if sc.get("install") != (fp if fp is not None else fingerprint(self.conv, self.install)):
             return "stale"
@@ -403,7 +444,7 @@ class Manager:
         f = self.failed.get(name)
         if not f:
             return None
-        if f["fp"] == fp and f["conv"] == getattr(self.conv, "VERSION", None) and now - f["t"] < FAIL_RETRY_S:
+        if f["fp"] == fp and f["conv"] == conv_version(self.conv, name) and now - f["t"] < FAIL_RETRY_S:
             return f
         self.failed.pop(name, None)
         return None
@@ -460,8 +501,25 @@ class Manager:
                         self._preempt(name)
                     self._ensure_thread()
                     self.cv.notify_all()
+                self._warm_next(name, fp, now)
                 return self._building(name)
         return {"state": "error", "size": 0, "path": None, "error": f"ROSE install changed while asking for {name}: ask again"}
+
+    def _warm_next(self, name, fp, now):
+        """caller holds the lock. W10 FIRST LOAD: the packs the world asks for after `name` (warm_after) go to the front of the background
+        queue (behind nothing but the on-demand pack): a first join builds lobby -> avatar -> start zone back to back while the player is in
+        the lobby. Fresh packs are skipped by the worker (no disk IO here); packs in their failure cool-down stay where they are."""
+        nxt = [n for n in warm_after(self.conv, name) if n != self.demand and n in self.packs()
+               and not (self.cur and self.cur["name"] == n and not self.cur["cancel"].is_set())
+               and self._fail_block(n, fp, now) is None]
+        if not nxt or self.queue[:len(nxt)] == nxt:
+            return
+        for n in reversed(nxt):
+            self._requeue_front(n)
+        self.log(f"[rose] warm-up after {name}: {', '.join(nxt)} next")
+        self._invalidate()
+        self._ensure_thread()
+        self.cv.notify_all()
 
     def _requeue_front(self, name):
         if name in self.queue:
@@ -527,7 +585,7 @@ class Manager:
             if gen != self.gen or not self.usable() or self.stopped:
                 return []
             busy = {self.demand, self.cur["name"] if self.cur and not self.cur["cancel"].is_set() else None}
-            add = [n for n in self.packs() if n not in busy and n not in self.queue and states.get(n) != "fresh"
+            add = [n for n in prebuild_order(self.conv, self.packs()) if n not in busy and n not in self.queue and states.get(n) != "fresh"
                    and (force or self._fail_block(n, fp, now) is None)]
             if force:
                 self.forced.update(add)
@@ -796,7 +854,7 @@ class Manager:
         if rc != 0 or got["result"] is None:
             more = (": " + " | ".join(list(tail)[-3:])) if tail else ""
             raise RuntimeError(f"ROSE build process exited with code {rc}{more}"[:500])
-        want = getattr(self.conv, "VERSION", None)
+        want = conv_version(self.conv, name)
         if got["result"].get("conv") != want:
             raise RuntimeError(f"ROSE converter version mismatch (build process {got['result'].get('conv')}, companion "
                                f"{want}): restart the companion")
@@ -815,7 +873,7 @@ class Manager:
                                       cancel=cur["cancel"].is_set)
             size = rose.validate(out)
             secs = round(time.monotonic() - cur["t0"], 1)
-            write_sidecar(self.rose_dir, name, {"conv": getattr(self.conv, "VERSION", None), "install": fp, "bytes": size,
+            write_sidecar(self.rose_dir, name, {"conv": conv_version(self.conv, name), "install": fp, "bytes": size,
                                                 "built": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
                                                 "seconds": secs,
                                                 "warnings": list((res or {}).get("warnings") or [])[:20]
@@ -843,7 +901,7 @@ class Manager:
                 self.forced.discard(name)
                 self.errors[name] = err
                 if gen == self.gen:
-                    self.failed[name] = {"t": time.monotonic(), "fp": fp, "conv": getattr(self.conv, "VERSION", None), "err": err}
+                    self.failed[name] = {"t": time.monotonic(), "fp": fp, "conv": conv_version(self.conv, name), "err": err}
                 if cur["kind"] == "demand":
                     notify = {"state": "error", "size": 0, "path": None, "error": f"ROSE build of {name} failed: {err}"}
             else:

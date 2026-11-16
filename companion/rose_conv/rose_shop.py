@@ -21,6 +21,7 @@ No text or table of the game is committed; everything is read at conversion time
 import struct
 
 import rosefmt as F
+import rose_text as TX
 
 TAG_SHOP = b'SHOP'
 HDR = struct.Struct('<16I')
@@ -115,15 +116,15 @@ def _stb(vfs, name):
         return None
 
 
-def tab_name(sell_s, sid):
-    """tab name from LIST_SELL_S.STL (language index 1), '' when unknown"""
+def tab_name(sell_s, sid, lang=TX.EN):
+    """tab name from LIST_SELL_S.STL (STL language `lang`: 1 English, 2 Japanese), '' when unknown"""
     if not sell_s or not sid:
         return ''
     _t, keys, langs = sell_s
     if sid not in keys or len(langs) < 2:
         return ''
     try:
-        return (langs[1][keys[sid][0]][0] or '').strip()
+        return TX.stl_text(sell_s, sid, 0, lang).strip()
     except IndexError:
         return ''
 
@@ -163,7 +164,9 @@ def build_shops(npc_stb, sell_stb, sell_s, npc_ids):
                     tab_of[tid] = -1
                 else:
                     tab_of[tid] = len(tabs)
-                    tabs.append(dict(name=tab_name(sell_s, str(row[1]).strip() if len(row) > 1 else ''), slots=codes))
+                    sid_ = str(row[1]).strip() if len(row) > 1 else ''
+                    tabs.append(dict(name=tab_name(sell_s, sid_), slots=codes))
+                    TX.note(TX.D_SHOPTAB, len(tabs) - 1, 0, tabs[-1]['name'], tab_name(sell_s, sid_, TX.JA))      # key = the tab's index in the SHOP section
             refs.append(tab_of[tid])
         if any(r >= 0 for r in refs):
             npcs.append(dict(npc=nid, union=max(0, _int(c, 20)), tabs=refs))

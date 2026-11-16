@@ -19,26 +19,31 @@ Layout (little endian, 4-byte aligned):
      64 u32 jobMask (35 resolved through LIST_CLASS to bits of rose_items.JOBS; 0 = no job requirement) ; 68 u16 jobClass (35 raw) ; 70 u16 actionMode (29)
      72 u16 reqSkill[3] (39, 41, 43) ; 78 u16 reqSkillLevel[3] (40, 42, 44) ; 84 u16 reqAbilityType[2] (45, 47) ; 88 i32 reqAbilityValue[2] (46, 48)
      96 u16 icon (51, SKILLICON sprite) ; 98 u16 castMotion (52) ; 100 u16 castMotionSpeed (53) ; 102 u16 repeatMotion (54) ; 104 u16 repeatCount (55) ;
-    106 u16 actionMotion (68) ; 108 u16 actionMotionSpeed (69) ; 110 u16 hitCount (70) ; 112 u16 reqWeaponClass[5] (30..34) ; 122 u16 flags (bit 0 = start skill) ;
-    124 u32 nameOff ; 128 u16 nameLen (UTF-8 in the names blob) ; 130 u16 0 ; 132 u32 0
+    106 u16 actionMotion (68) ; 108 u16 actionMotionSpeed (69) ; 110 u16 hitCount (70) ; 112 u16 reqWeaponClass[5] (30..34) ;
+    122 u16 flags (bit 0 = start skill, bit 1 = item skill: the use skill of a magic item, see below) ;
+    124 u32 nameOff ; 128 u16 nameLen (UTF-8 in the names blob) ; 130 u16 summonNpc (cell 28 of a summon skill, type 14: the LIST_NPC row it calls) ;
+    132 u16 summonPoints (LIST_NPC cell 21 of that npc: the summon gauge it takes) ; 134 u16 0      (130 / 132 are 0 in packs before the summons lane: summons do not run there)
   status record 32 at statusOff + i * statusStride, sorted by id:
       0 u16 id ; 2 u16 type (cell 1) ; 4 u16 reapply (2) ; 6 u16 clearedBy (3) ; 8 u16 icon (9, STATEICON sprite) ; 10 u16 applyId[2] (5, 7) ; 14 u16 0 ;
      16 i32 applyValue[2] (6, 8: value 0 = the per second value of hp / mp / poison effects) ; 24 u16 stepEffect (10) ; 26 u16 endEffect (15) ; 28 u32 0
   job name record 8 at jobOff + i * 8 (lane JOB CHANGE, GsvrRoseJob.JobName): u16 job id (the STR_JOB.STL key) ; u16 nameLen ; u32 nameOff (UTF-8 in the names blob)
       source: 3DDATA/STB/STR_JOB.STL, language 1 (English), keys that are job ids (rose-offline string_database get_job_name); at most 64 rows, names cut at 64 bytes
 
-Rows: every LIST_SKILL row with a skill type, an icon and a page (cell 4) = the player skills (monster skills have no page). A start skill (flag bit 0) is a row of the basic
+Rows: every LIST_SKILL row with a skill type, an icon and a page (cell 4) = the player skills (monster skills have no page), plus (lane SUMMONS) every row a magic item uses
+(LIST_USEITEM class 313, cell 20 = the use skill, rose-offline item_database get_consumeable_use_skill_id): those rows have no page (the summon capsules) and are written with page 0
+and flag bit 1 (never shown in the skill window, never learnt; only the item fires them). A start skill (flag bit 0) is a row of the basic
 page without job class and without learn points at level 0 that has a name: the basic actions, kisses and emotes every new character knows (the reference server gives a fixed
 list of them; this is the data rule for that list). No text or number of the game is committed; everything is read at conversion time on the player's machine.
 """
 import struct
 
 import rosefmt as F
+import rose_text as TX
 import rose_items
 
 TAG_SKDB = b'SKDB'
 HDR = struct.Struct('<12I')
-REC = struct.Struct('<HHHHHH HHHH HH HH HH HH ii HHHH ii hh IHH HHH HHH HH ii HHHHHHHH 5H H IHHI')
+REC = struct.Struct('<HHHHHH HHHH HH HH HH HH ii HHHH ii hh IHH HHH HHH HH ii HHHHHHHH 5H H IHHHH')
 REC_BYTES = 136
 ST = struct.Struct('<HHHHH HHH ii HHI')
 ST_BYTES = 32
@@ -50,6 +55,10 @@ MAX_JOB_NAME = 64
 assert REC.size == REC_BYTES, REC.size
 assert ST.size == ST_BYTES, ST.size
 START_TYPES = (1, 11, 16)       # basic action, target bound (the kisses), emote
+FLAG_START, FLAG_ITEM = 1, 2
+TY_SUMMON = 14
+MAGIC_ITEM_CLASS = 313          # LIST_USEITEM cell 4: magic item (scrolls, summon capsules, charms ...) = it fires the skill in cell 20
+MAX_SUMMON_SKELETONS = 60       # the runtime reads at most 64 skeletons per pack (GsvrRpg1Chars.MaxSkeletons); summon actors stop being added above this many
 
 
 def _int(c, i, default=0):
@@ -75,14 +84,16 @@ def _i32(v):
     return max(-2 ** 31, min(2 ** 31 - 1, v))
 
 
-def skill_record(sid, c, name, class_stb=None):
-    """one LIST_SKILL row -> record dict (None for rows that are no player skill: no type, no icon or no page)"""
+def skill_record(sid, c, name, class_stb=None, item_skill=False, npc_stb=None):
+    """one LIST_SKILL row -> record dict (None for rows that are no player skill: no type, no icon or no page). item_skill = the row is the use skill of a magic item:
+    kept without a page / icon (page 0, flag bit 1). npc_stb = LIST_NPC for the summon gauge cost of a summon skill (cell 21 of its npc; 0 without the table)."""
     typ, icon = _int(c, 5), _int(c, 51)
     page_cell = str(c[4]).strip() if len(c) > 4 else ''
-    if typ <= 0 or icon <= 0 or not page_cell.isdigit():
+    player = typ > 0 and icon > 0 and page_cell.isdigit()
+    if not player and not (item_skill and typ > 0):
         return None
     job_class = _int(c, 35)
-    r = dict(id=sid, base=_int(c, 1, sid) or sid, level=_int(c, 2), learn_pts=_int(c, 3), page=int(page_cell), type=typ, cast_range=_int(c, 6), target_filter=_int(c, 7),
+    r = dict(id=sid, base=_int(c, 1, sid) or sid, level=_int(c, 2), learn_pts=_int(c, 3), page=int(page_cell) if player else 0, type=typ, cast_range=_int(c, 6), target_filter=_int(c, 7),
              scope=_int(c, 8), power=_int(c, 9), harm=_int(c, 10), success_pct=_int(c, 13), status=[_int(c, 11), _int(c, 12)], duration_s=_int(c, 14), damage_type=_int(c, 15),
              use_type=[_int(c, 16), _int(c, 18)], use_value=[_int(c, 17), _int(c, 19)], cooldown=_int(c, 20), cooldown_group=_int(c, 27),
              add_type=[_int(c, 21), _int(c, 24)], add_value=[_int(c, 22), _int(c, 25)], add_rate=[_int(c, 23), _int(c, 26)],
@@ -91,8 +102,79 @@ def skill_record(sid, c, name, class_stb=None):
              req_type=[_int(c, 45), _int(c, 47)], req_value=[_int(c, 46), _int(c, 48)],
              icon=icon, cast_motion=_int(c, 52), cast_speed=_int(c, 53), repeat_motion=_int(c, 54), repeat_count=_int(c, 55),
              action_motion=_int(c, 68), action_speed=_int(c, 69), hit_count=_int(c, 70), req_weapon=[_int(c, 30 + k) for k in range(5)], name=name or '')
-    r['flags'] = 1 if (r['page'] == 0 and job_class == 0 and r['learn_pts'] == 0 and r['level'] == 0 and typ in START_TYPES and r['name']) else 0
+    r['flags'] = FLAG_START if (player and r['page'] == 0 and job_class == 0 and r['learn_pts'] == 0 and r['level'] == 0 and typ in START_TYPES and r['name']) else 0
+    if not player:
+        r['flags'] |= FLAG_ITEM
+    r['summon_npc'] = r['summon_pts'] = 0
+    if typ == TY_SUMMON:
+        npc = _int(c, 28)
+        if 0 < npc <= 65535:
+            r['summon_npc'] = npc
+            if npc_stb is not None and npc < npc_stb['rows']:
+                r['summon_pts'] = max(0, _int(npc_stb['cells'][npc], 21))
     return r
+
+
+def item_skill_ids(useitem_stb):
+    """LIST_USEITEM -> set of the skill ids magic items fire (class 313, cell 20); empty without the table"""
+    out = set()
+    if useitem_stb is None:
+        return out
+    for n in range(1, useitem_stb['rows']):
+        c = useitem_stb['cells'][n]
+        if _int(c, 4) == MAGIC_ITEM_CLASS and 0 < _int(c, 20) <= 65535:
+            out.add(_int(c, 20))
+    return out
+
+
+def summon_npc_list(skill_stb, item_ids=()):
+    """LIST_SKILL -> sorted npc ids of the summon skills (type 14, cell 28) that are player skills or magic item skills"""
+    out = set()
+    for sid in range(1, skill_stb['rows']):
+        c = skill_stb['cells'][sid]
+        if _int(c, 5) != TY_SUMMON or not (0 < _int(c, 28) <= 65535):
+            continue
+        page_cell = str(c[4]).strip() if len(c) > 4 else ''
+        if (page_cell.isdigit() and _int(c, 51) > 0) or sid in item_ids:
+            out.add(_int(c, 28))
+    return sorted(out)
+
+
+def pick_summon_actors(base_ids, summon_ids, skel_of, max_skel=MAX_SUMMON_SKELETONS):
+    """Which summon npcs a zone pack carries as actors (lane SUMMONS: a summon needs its model in the pack). base_ids = the zone's own npc ids, skel_of(npc) -> skeleton index of
+    LIST_NPC.CHR (None = no model). Summons whose skeleton the zone already has cost no skeleton; the others are added in id order while the pack stays at most max_skel
+    skeletons. -> (added ids sorted, dropped ids sorted)"""
+    skels = set(k for k in (skel_of(i) for i in base_ids) if k is not None)
+    add, drop = [], []
+    for n in sorted(set(summon_ids) - set(base_ids)):
+        k = skel_of(n)
+        if k is None:
+            drop.append(n)
+            continue
+        if k in skels or len(skels) < max_skel:
+            skels.add(k)
+            add.append(n)
+        else:
+            drop.append(n)
+    return add, drop
+
+
+def zone_summon_ids(vfs, base_ids):
+    """-> (npc ids to add to the zone's actors, warnings). Never raises on a missing table."""
+    sk = _stb(vfs, 'LIST_SKILL')
+    if sk is None:
+        return [], []
+    ids = summon_npc_list(sk, item_skill_ids(_stb(vfs, 'LIST_USEITEM')))
+    try:
+        npcs = F.chr_(vfs.read('3DDATA/NPC/LIST_NPC.CHR'))[3]
+    except (KeyError, ValueError, struct.error, IndexError):
+        return [], ['SKDB summons: LIST_NPC.CHR missing (no summon actors)']
+
+    def skel_of(n):
+        ch = npcs.get(int(n))
+        return ch['skel'] if ch else None
+    add, drop = pick_summon_actors(base_ids, ids, skel_of)
+    return add, (['SKDB summons: %d summon npcs without a model or above the skeleton budget' % len(drop)] if drop else [])
 
 
 def status_record(sid, c):
@@ -128,7 +210,7 @@ def enc_skdb(skills, status=(), jobs=()):
                          _i32(r['req_value'][0]), _i32(r['req_value'][1]),
                          _u16(r['icon']), _u16(r['cast_motion']), _u16(r['cast_speed']), _u16(r['repeat_motion']), _u16(r['repeat_count']),
                          _u16(r['action_motion']), _u16(r['action_speed']), _u16(r['hit_count']), *[_u16(x) for x in r['req_weapon']], _u16(r.get('flags', 0)),
-                         off, len(nb), 0, 0)
+                         off, len(nb), _u16(r.get('summon_npc', 0)), _u16(r.get('summon_pts', 0)), 0)
     jt = bytearray()
     for j, nm in jobs:
         nb = nm.encode('utf-8')[:MAX_JOB_NAME]
@@ -188,7 +270,8 @@ def dec_skdb(d):
                            cooldown=v[20], cooldown_group=v[21], add_type=[v[22], v[23]], add_value=[v[24], v[25]], add_rate=[v[26], v[27]], job_mask=v[28],
                            job_class=v[29], action_mode=v[30], req_skill=list(v[31:34]), req_skill_level=list(v[34:37]), req_type=[v[37], v[38]], req_value=[v[39], v[40]],
                            icon=v[41], cast_motion=v[42], cast_speed=v[43], repeat_motion=v[44], repeat_count=v[45], action_motion=v[46], action_speed=v[47],
-                           hit_count=v[48], req_weapon=list(v[49:54]), flags=v[54], name=bytes(d[no + v[55]: no + v[55] + v[56]]).decode('utf-8', 'replace')))
+                           hit_count=v[48], req_weapon=list(v[49:54]), flags=v[54], name=bytes(d[no + v[55]: no + v[55] + v[56]]).decode('utf-8', 'replace'),
+                           summon_npc=v[57], summon_pts=v[58]))
     status = []
     for i in range(ns):
         v = ST.unpack_from(d, so + i * sstride)
@@ -203,34 +286,34 @@ def _stb(vfs, name):
         return None
 
 
-def _names(vfs):
-    """string id -> English name of LIST_SKILL_S.STL (language 1, else the first language); {} without the file"""
+def _names(vfs, lang=TX.EN):
+    """string id -> name of LIST_SKILL_S.STL in the STL language `lang` (1 English, 2 Japanese; the fallbacks of rose_text.pick); {} without the file"""
     try:
         typ, keys, langs = F.stl(vfs.read('3DDATA/STB/LIST_SKILL_S.STL'))
     except (KeyError, ValueError):
         return {}
-    lang = langs[1] if len(langs) > 1 else (langs[0] if langs else [])
     out = {}
-    for k, (i, _h) in keys.items():
-        if i < len(lang) and lang[i] and lang[i][0]:
-            out[k] = lang[i][0].strip()
+    for k in keys:
+        t = TX.stl_text((typ, keys, langs), k, 0, lang).strip()
+        if t:
+            out[k] = t
     return out
 
 
-def _job_names(vfs):
-    """STR_JOB.STL (language 1, else the first) -> [(job id, name)] for the keys that are job ids; [] without the file (no warning: the runtime then shows the id)."""
+def _job_names(vfs, lang=TX.EN):
+    """STR_JOB.STL (STL language `lang`) -> [(job id, name)] for the keys that are job ids; [] without the file (no warning: the runtime then shows the id)."""
     try:
         typ, keys, langs = F.stl(vfs.read('3DDATA/STB/STR_JOB.STL'))
     except (KeyError, ValueError, struct.error, IndexError):
         return []
-    lang = langs[1] if len(langs) > 1 else (langs[0] if langs else [])
     out = []
-    for k, (i, _h) in keys.items():
-        k = str(k).strip()
-        if not k.isdigit() or int(k) > 65535:
+    for k in keys:
+        ks = str(k).strip()
+        if not ks.isdigit() or int(ks) > 65535:
             continue
-        if i < len(lang) and lang[i] and lang[i][0] and lang[i][0].strip():
-            out.append((int(k), lang[i][0].strip()))
+        t = TX.stl_text((typ, keys, langs), k, 0, lang).strip()
+        if t:
+            out.append((int(ks), t))
     return sorted(out)
 
 
@@ -246,7 +329,10 @@ def build_section(vfs):
     st = _stb(vfs, 'LIST_STATUS')
     if st is None:
         warn.append('SKDB: LIST_STATUS.STB missing (no buffs / debuffs)')
+    npc_stb = _stb(vfs, 'LIST_NPC')
+    items = item_skill_ids(_stb(vfs, 'LIST_USEITEM'))
     names = _names(vfs)
+    names_ja = _names(vfs, TX.JA)
     if not names:
         warn.append('SKDB: LIST_SKILL_S.STL missing (no names, no start skills)')
     recs = []
@@ -257,9 +343,10 @@ def build_section(vfs):
             continue
         c = sk['cells'][sid]
         key = str(c[-1]).strip() if c else ''
-        r = skill_record(sid, c, names.get(key, ''), class_stb)
+        r = skill_record(sid, c, names.get(key, ''), class_stb, sid in items, npc_stb)
         if r:
             recs.append(r)
+            TX.note(TX.D_SKILL, sid, 0, names.get(key, ''), names_ja.get(key, ''))
     if big:
         warn.append('SKDB: %d rows above id 65535 skipped' % big)
     status = []
@@ -270,4 +357,8 @@ def build_section(vfs):
                 status.append(s)
     if not recs:
         return [], warn + ['SKDB: no player skill rows']
-    return [(TAG_SKDB, 1, len(recs), enc_skdb(recs, status, _job_names(vfs)))], warn
+    jobs_en = _job_names(vfs)
+    jobs_ja = dict(_job_names(vfs, TX.JA))
+    for jid, nm in jobs_en:
+        TX.note(TX.D_JOB, jid, 0, nm, jobs_ja.get(jid, ''))
+    return [(TAG_SKDB, 1, len(recs), enc_skdb(recs, status, jobs_en))], warn

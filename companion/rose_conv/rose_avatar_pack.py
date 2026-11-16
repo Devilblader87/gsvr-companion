@@ -53,6 +53,10 @@ def build(vfs, log=print, genders=(0, 1), with_field=True):
     ob = RP.ObjBuilder(vfs, None, None)
     cb = RC.CharBuilder(vfs, ob)
     av = cb.add_equipment(genders)
+    import rose_carts
+    cart_items = rose_carts.add_cart_items(cb, genders)          # vehicle parts (AVAT-format items of slots 10..13 for the optional ACAR section), docs/design/rose_carts.md
+    if cart_items:
+        log('cart / castle gear part items: %d' % len(cart_items))
     log('avatar items: %d (%s), %d meshes' % (len(av['items']), ', '.join('%s %d' % (P.SLOT_NAMES[s], n) for s, n in sorted(collections.Counter(i['slot'] for i in av['items']).items())), len(cb.meshes)))
     fld = []; anim = []
     if with_field:
@@ -67,11 +71,13 @@ def build(vfs, log=print, genders=(0, 1), with_field=True):
         if tag in secs:
             v, c, d = secs[tag]
             sections.append((tag, v, c, d))
+    if cart_items:
+        sections.append((b'ACAR', 1, len(cart_items), P.enc_avat(av['genders'], cart_items, [])))          # same layout as AVAT, only the vehicle slots; older runtimes ignore the tag
     sections.append((b'OTEX', 1, len(ob.textures), P.enc_otex(ob.textures)))
     sections.append((b'OMAT', 1, len(ob.mats), P.enc_omat(ob.mats)))
     if fld:
         sections.append((b'FLDM', 1, len(fld), P.enc_fldm(fld, anim)))
-    info = dict(texture_dedup_bytes=saved, items=len(av['items']), meshes=len(cb.meshes), textures=len(ob.textures), materials=len(ob.mats), field_models=len(fld),
+    info = dict(texture_dedup_bytes=saved, items=len(av['items']), meshes=len(cb.meshes), textures=len(ob.textures), materials=len(ob.mats), field_models=len(fld), cart_items=len(cart_items),
                 warnings={k: v for k, v in cb.warn.items()}, section_bytes={t.decode(): len(d) for t, _v, _c, d in sections})
     return sections, info
 

@@ -112,6 +112,15 @@ def decode(path):
         off, size, cnt = secs["TMAT"]
         check(size == cnt + (-cnt % 4), f"TMAT: {cnt} bytes padded to {size}")
         P["tmat"] = d[off:off + cnt]
+    P["lpvs"] = None
+    if "LPVS" in secs:                 # landmark PVS (tools/lpvs.py, T3 level transition stage 4)
+        import lpvs
+        off, size, cnt = secs["LPVS"]
+        L = lpvs.parse(d[off:off + size], cnt)
+        check(0 < L["h0"] <= NH and L["w"] * 32 >= 2 * L["h0"] and 0 <= L["head"] < L["h0"],
+              f"LPVS: {cnt} landmarks, H0 {L['h0']} <= {NH} hull nodes, {L['w']} words, headnode {L['head']}")
+        check(all(0 <= r[0] < NE for r in L["recs"]), "LPVS: landmark entity indices inside ENTS")
+        P["lpvs"] = L
     print(f"{path}: V={V} (world {WV}) I={I} (world {WI}, solid {S}) records={R} planes={NP} nodes={NH} "
           f"entities={NE} kvs={NK} size={len(d)}")
     return P

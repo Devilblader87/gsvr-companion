@@ -21,11 +21,19 @@ Layout (little endian, 4-byte aligned):
   label entry 8 (index = LABELS order): u32 off ; u16 len ; u16 0         ability entry 8 (index = ability type number 0 .. abilCount - 1, len 0 = none)
   class entry 12 (sorted by id): u32 id ; u32 off ; u16 len ; u16 0         job class entry 12 (id = LIST_CLASS row, sorted)
   texts: UTF-8 blob at textOff (offsets are relative to it).
+Craft block (optional, header words 16 / 17 = block offset / block bytes, both 0 without it; docs/design/rose_craft.md in the half-life repo, runtime GsvrRoseCraft):
+  block header 16: u32 itemCount ; u32 recipeCount ; u32 0 ; u32 0
+  item 12 (sorted by code): u32 code ; u16 makeType ; u16 skillLevel ; u16 recipeRow ; u16 difficulty        (item table cells 12 / 13 / 14 / 15: the make skill type, its level, the LIST_PRODUCT row, the difficulty)
+  recipe 40 (sorted by row): u32 row ; 4 x { u32 itemCode (0 = any item of the class) ; u16 quantity ; u16 class } ; u32 0
+        LIST_PRODUCT.STB row cells: 1 = class of material 1, 2 = item code of material 1 (blank = by class), 3 = its quantity, 4 / 6 / 8 = item codes of materials 2..4, 5 / 7 / 9 = their quantities.
+        Rows 1..10 are the weapon refine steps (+1..+10), rows 11..20 the armour refine steps; the rows from 21 on are the make recipes the item cells point at.
+  PRODUCT.STB (2003 rows) is a legacy table: the client never loads it, it is not used.
 No text or table of the game is committed; everything is read at conversion time on the player's machine.
 """
 import struct
 
 import rosefmt as F
+import rose_text as TX
 
 TAG_ITEX = b'ITEX'
 HDR = struct.Struct('<20I')
@@ -34,6 +42,13 @@ GRADE = struct.Struct('<5hHI')
 STR8 = struct.Struct('<IHH')
 SPARSE = struct.Struct('<IIHH')
 REC_BYTES = 32
+CRAFT_HDR = 16
+CRAFT_ITEM = struct.Struct('<IHHHH')
+CRAFT_MAT = struct.Struct('<IHH')
+CRAFT_REC = struct.Struct('<I')
+CRAFT_TYPES = (1, 2, 3, 4, 5, 6, 7, 8, 9, 11)       # item tables with the craft cells (faceitem .. subweapon, gems); use items / materials / quest items have none
+MAX_CRAFT_ITEMS = 16384
+MAX_CRAFT_RECIPES = 4096
 MAX_RECS = 1 << 17
 MAX_GRADES = 16
 MAX_ABIL = 128
@@ -79,11 +94,8 @@ def grade_rows(stb):
 
 
 def stl_text(stl, key, k, lang=1):
-    """STL (typ, keys, langs) -> text k (0 name, 1 description) of string id `key`, '' when missing"""
-    if not stl or key not in stl[1] or lang >= len(stl[2]):
-        return ''
-    ent = stl[2][lang][stl[1][key][0]]
-    return ent[k].replace('\r\n', '\n').strip() if k < len(ent) else ''
+    """STL (typ, keys, langs) -> text k (0 name, 1 description) of string id `key` in language `lang` (1 English, 2 Japanese; the fallback rules of rose_text.pick), '' when missing"""
+    return TX.stl_text(stl, key, k, lang).replace('\r\n', '\n').strip() if stl and key in stl[1] else ''
 
 
 def item_rows(tables, stls):
@@ -97,6 +109,8 @@ def item_rows(tables, stls):
                 continue
             nm = stl_text(stls.get(t), sid, 0)
             ds = stl_text(stls.get(t), sid, 1)
+            TX.note(TX.D_ITEM, t * 1000 + n, 0, nm, stl_text(stls.get(t), sid, 0, TX.JA))          # language overlay (rose_text): Japanese name + description
+            TX.note(TX.D_ITEM, t * 1000 + n, 1, ds, stl_text(stls.get(t), sid, 1, TX.JA))
             r = dict(code=t * 1000 + n, rare=_u16(_int(c, 30)) if t <= 9 else 0, cls=_u16(_int(c, 4)), icon=_u16(_int(c, 9)), weight=_u16(_int(c, 7)), name=nm, desc=ds, add=[(0, 0), (0, 0)])
             if t == 11:
                 r['add'] = [(_u16(_int(c, 16)), _i16(_int(c, 17))), (_u16(_int(c, 18)), _i16(_int(c, 19)))]
@@ -121,7 +135,60 @@ class _Blob:
         return off, len(e)
 
 
-def enc_itemx(recs, grades, labels, abil, classes, jobs):
+def craft_rows(tables, product):
+    """-> (items, recipes) of the craft block. tables {type: stb}; product = LIST_PRODUCT stb or None.
+    items: [(code, make, level, row, difficulty)] for every item row that names a make skill type, a recipe row that holds a recipe and a level;
+    recipes: {row: [(code, qty, class) x 4]} for the rows that have any material (refine rows 1..20 and the make rows)."""
+    if product is None:
+        return [], {}
+    recs = {}
+    for n in range(1, min(product['rows'], MAX_CRAFT_RECIPES)):
+        c = product['cells'][n]
+        mats = []
+        cls1 = _u16(_int(c, 1))
+        for k in range(4):
+            if k == 0:
+                code, qty, cls = _int(c, 2), _int(c, 3), cls1
+            else:
+                code, qty, cls = _int(c, 2 + 2 * k), _int(c, 3 + 2 * k), 0
+            if qty <= 0 or (code <= 0 and cls <= 0):
+                mats.append((0, 0, 0))
+            else:
+                mats.append((max(0, code), _u16(qty), cls if code <= 0 else 0))
+        if any(m[1] for m in mats):
+            recs[n] = mats
+    items = []
+    for t in CRAFT_TYPES:
+        stb = tables.get(t)
+        if stb is None:
+            continue
+        for n in range(1, min(stb['rows'], 1000)):
+            c = stb['cells'][n]
+            make, lvl, row, dif = _int(c, 12), _int(c, 13), _int(c, 14), _int(c, 15)
+            if make <= 0 or row <= 0 or row not in recs:
+                continue
+            items.append((t * 1000 + n, _u16(make), _u16(lvl), _u16(row), _u16(dif)))
+    return items, recs
+
+
+def enc_craft(items, recs):
+    """the craft block bytes (layout in the module docstring); b'' when there is nothing to write"""
+    if not items and not recs:
+        return b''
+    if len(items) > MAX_CRAFT_ITEMS or len(recs) > MAX_CRAFT_RECIPES:
+        raise ValueError('ITEX craft block: too many entries')
+    out = bytearray(struct.pack('<4I', len(items), len(recs), 0, 0))
+    for it in sorted(items):
+        out += CRAFT_ITEM.pack(*it)
+    for row in sorted(recs):
+        out += CRAFT_REC.pack(row)
+        for code, qty, cls in recs[row]:
+            out += CRAFT_MAT.pack(code, qty, cls)
+        out += struct.pack('<I', 0)
+    return bytes(out)
+
+
+def enc_itemx(recs, grades, labels, abil, classes, jobs, craft=b''):
     """recs: record dicts; grades: tuples (see grade_rows); labels: list of str (LABELS order); abil: {ability type: str}; classes / jobs: {id: str}"""
     recs = sorted(recs, key=lambda r: r['code'])
     if len(recs) > MAX_RECS:
@@ -160,9 +227,10 @@ def enc_itemx(recs, grades, labels, abil, classes, jobs):
     abil_off = pos; pos += len(ab)
     cls_off = pos; pos += len(cb)
     job_off = pos; pos += len(jb)
+    craft_off = pos if craft else 0; pos += len(craft)
     text = bytes(blob.b) + b'\0' * (-len(blob.b) % 4)
-    hdr = HDR.pack(1, len(recs), REC_BYTES, rec_off, pos, len(text), grade_off, len(grades), label_off, len(labels), abil_off, na, cls_off, len(classes), job_off, len(jobs), 0, 0, 0, 0)
-    return hdr + bytes(body) + gb + bytes(lb) + bytes(ab) + bytes(cb) + bytes(jb) + text
+    hdr = HDR.pack(1, len(recs), REC_BYTES, rec_off, pos, len(text), grade_off, len(grades), label_off, len(labels), abil_off, na, cls_off, len(classes), job_off, len(jobs), craft_off, len(craft), 0, 0)
+    return hdr + bytes(body) + gb + bytes(lb) + bytes(ab) + bytes(cb) + bytes(jb) + bytes(craft) + text
 
 
 def dec_itemx(d):
@@ -207,7 +275,22 @@ def dec_itemx(d):
     for i in range(jn):
         k, o, l, _ = SPARSE.unpack_from(d, jo + i * 12)
         jobs[k] = txt(o, l)
-    return dict(recs=recs, grades=grades, labels=labels, abil=abil, classes=classes, jobs=jobs)
+    craft = None
+    co_, cn_ = h[16], h[17]
+    if co_ or cn_:
+        if co_ < HDR.size or cn_ < CRAFT_HDR or co_ + cn_ > len(d):
+            raise ValueError('bad ITEX craft block')
+        ni, nr = struct.unpack_from('<2I', d, co_)
+        if ni > MAX_CRAFT_ITEMS or nr > MAX_CRAFT_RECIPES or CRAFT_HDR + ni * 12 + nr * 40 > cn_:
+            raise ValueError('bad ITEX craft block counts')
+        items = [CRAFT_ITEM.unpack_from(d, co_ + CRAFT_HDR + i * 12) for i in range(ni)]
+        rbase = co_ + CRAFT_HDR + ni * 12
+        rec_ = {}
+        for i in range(nr):
+            o = rbase + i * 40
+            rec_[struct.unpack_from('<I', d, o)[0]] = [CRAFT_MAT.unpack_from(d, o + 4 + 8 * k) for k in range(4)]
+        craft = dict(items=items, recipes=rec_)
+    return dict(recs=recs, grades=grades, labels=labels, abil=abil, classes=classes, jobs=jobs, craft=craft)
 
 
 def _stb(vfs, name):
@@ -224,17 +307,21 @@ def _stl(vfs, name):
         return None
 
 
-def _keyed(stl, as_int=True):
-    """STL -> {key: first string of language 1}; keys that are not numbers are skipped when as_int"""
+def _keyed(stl, as_int=True, lang=1):
+    """STL -> {key: first string of the language}; keys that are not numbers are skipped when as_int"""
     out = {}
     if not stl or len(stl[2]) < 2:
         return out
     for k, (i, _o) in stl[1].items():
         if as_int and not k.strip().isdigit():
             continue
-        ent = stl[2][1][i]
-        out[int(k) if as_int else k] = ent[0].strip() if ent else ''
+        out[int(k) if as_int else k] = TX.stl_text(stl, k, 0, lang).strip()
     return out
+
+
+def _note_keyed(domain, en, ja):
+    for k, v in en.items():
+        TX.note(domain, k, 0, v, ja.get(k, ''))
 
 
 def build_section(vfs):
@@ -256,10 +343,16 @@ def build_section(vfs):
     grades = grade_rows(_stb(vfs, 'LIST_GRADE'))
     if not grades:
         warn.append('ITEX: LIST_GRADE.STB missing (no grade bonuses)')
-    lstr = _keyed(_stl(vfs, 'LIST_STRING'))
+    stl_str, stl_abil, stl_cls = _stl(vfs, 'LIST_STRING'), _stl(vfs, 'STR_ABILITY'), _stl(vfs, 'STR_ITEMTYPE')
+    lstr = _keyed(stl_str)
     labels = [lstr.get(k, '') for k in LABELS]
-    abil = _keyed(_stl(vfs, 'STR_ABILITY'))
-    classes = _keyed(_stl(vfs, 'STR_ITEMTYPE'))
+    abil = _keyed(stl_abil)
+    classes = _keyed(stl_cls)
+    ljs = _keyed(stl_str, lang=TX.JA)
+    for i, k in enumerate(LABELS):
+        TX.note(TX.D_LABEL, i, 0, labels[i], ljs.get(k, ''))
+    _note_keyed(TX.D_ABIL, abil, _keyed(stl_abil, lang=TX.JA))
+    _note_keyed(TX.D_ITEMTYPE, classes, _keyed(stl_cls, lang=TX.JA))
     jobs = {}
     cstb, cstl = _stb(vfs, 'LIST_CLASS'), _stl(vfs, 'LIST_CLASS_S')
     if cstb is not None and cstl is not None:
@@ -270,4 +363,9 @@ def build_section(vfs):
                 nm = stl_text(cstl, sid, 0)
                 if nm:
                     jobs[i] = nm
-    return [(TAG_ITEX, 1, len(recs), enc_itemx(recs, grades, labels, abil, classes, jobs))], warn
+                    TX.note(TX.D_JOBCLASS, i, 0, nm, stl_text(cstl, sid, 0, TX.JA))
+    citems, crecs = craft_rows(tables, _stb(vfs, 'LIST_PRODUCT'))
+    if not crecs:
+        warn.append('ITEX: LIST_PRODUCT.STB missing or empty (no craft block: making and the original refine materials are off)')
+    craft = enc_craft(citems, crecs)
+    return [(TAG_ITEX, 1, len(recs), enc_itemx(recs, grades, labels, abil, classes, jobs, craft))], warn

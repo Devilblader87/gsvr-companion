@@ -574,7 +574,8 @@ AVAT_ITEM = struct.Struct('<BBHIHHI')           # gender, slot, itemNumber, firs
 AVAT_CLIPMAP = struct.Struct('<4BHH')           # gender, action, weaponType, 0, clip, 0 = 8
 AVF_STARTER = 1
 SLOT_FACE, SLOT_HAIR, SLOT_CAP, SLOT_BODY, SLOT_HANDS, SLOT_FEET, SLOT_WEAPON, SLOT_BACK, SLOT_FACEITEM, SLOT_SUBWPN = range(10)
-SLOT_NAMES = ('face', 'hair', 'cap', 'body', 'hands', 'feet', 'weapon', 'back', 'faceitem', 'subweapon')
+SLOT_CART_BODY, SLOT_CART_ENGINE, SLOT_CART_LEG, SLOT_CART_ARMS = 10, 11, 12, 13           # vehicle parts (rose_carts.py): item number = LIST_PAT row
+SLOT_NAMES = ('face', 'hair', 'cap', 'body', 'hands', 'feet', 'weapon', 'back', 'faceitem', 'subweapon', 'cart body', 'cart engine', 'cart leg', 'cart arms')
 NO_JOINT = 0xFFFF
 
 

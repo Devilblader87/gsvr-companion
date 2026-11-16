@@ -188,7 +188,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 20, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
+PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 21, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 21: T3 PROP studio props item_generic (map model key: plant_01 / plant_cactus / plant_palm / snow_tree / tree_palm / egg ...) + op4mortar (mortar.mdl idle / fire), gearbox prop cap 24 -> 32 (prop_max); 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
 
 
 def version_for_mod(mod):
@@ -472,11 +472,15 @@ def map_gib_models(root, mod):
 # The map's decorative studio-model entities: `cycler` (CGenericCycler: the map `model` key), `cycler_prdroid`
 # (CCyclerProbe: models/prdroid.mdl), `xen_spore_small / _medium / _large` (CXenSpore: the skin-selected entry of
 # pModelNames = fungus(small) / fungus / fungus(large) [obs string_arrays CXenSpore::pModelNames]) and `xen_hair`
-# (CXenHair: models/hair.mdl). Every sequence is kept ("*": a cycler steps through all of them when shot) under its own
-# pose vertex budget. Only the mods whose profile sets props=True (valve, gearbox) carry them.
+# (CXenHair: models/hair.mdl); Opposing Force adds `item_generic` (CGenericItem: the map `model` key, its `sequencename` looked up by
+# name at runtime) and `op4mortar` (COp4Mortar: models/mortar.mdl, sequences idle / fire). Every sequence is kept ("*": a cycler steps
+# through all of them when shot) under its own pose vertex budget. Only the mods whose profile sets props=True (valve, gearbox) carry them.
 PROP_FIXED = {"cycler_prdroid": "models/prdroid.mdl", "xen_spore_small": "models/fungus(small).mdl",
-              "xen_spore_medium": "models/fungus.mdl", "xen_spore_large": "models/fungus(large).mdl", "xen_hair": "models/hair.mdl"}
-PROP_MAX_MODELS = 24           # prop models per pack (cycler / fixed first, then monster_generic ones, most-used first; the runtime has 8 prop rows per map)
+              "xen_spore_medium": "models/fungus.mdl", "xen_spore_large": "models/fungus(large).mdl", "xen_hair": "models/hair.mdl",
+              "op4mortar": "models/mortar.mdl"}
+PROP_MODEL_KEY = ("cycler", "item_generic")    # classes whose drawn model is the map's own `model` key
+PROP_MAX_MODELS = 24           # prop models per pack (cycler / item_generic / fixed first, then monster_generic ones, most-used first; the runtime has 8 prop rows
+                               # per map); a profile may raise it with prop_max (gearbox 32: its maps name 28 once item_generic / op4mortar count)
 PROP_POSE_VERTS = 12000        # pose vertex budget per prop model (key caps scale down like the Sven monsters)
 
 
@@ -494,7 +498,7 @@ def map_prop_models(root, mod):
             if not m:
                 continue
             cls = m.group(1).lower()
-            if cls in ("cycler", "monster_generic"):
+            if cls in PROP_MODEL_KEY or cls == "monster_generic":
                 mo = re.search(r'"model"\s*"([^"\\]*)"', body)
                 name = mo.group(1) if mo else ""
             else:
@@ -1003,7 +1007,7 @@ PROFILES["gearbox"] = dict(PROFILES["valve"], script_seqs=SCRIPT_SEQS, weapons=O
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
                            mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
                            # studio-prop skins at most 128 px: the pack sits at the 99 MB guard (the props push the tail sprite fexplo1 out)
-                           prop_tex_max=128)
+                           prop_tex_max=128, prop_max=32)   # prop_max: + item_generic / op4mortar models (28 named)
 
 
 # ───────────────────────── Blue Shift (--mod bshift) ─────────────────────────
@@ -2632,6 +2636,7 @@ class Builder:
             w, h, rgba, v = items[k]
             items[k] = [w // 2, h // 2, half_rgba(rgba, w, h), v]
             log(f"atlas budget: halved {self.textures[k][3]} → {w // 2}x{h // 2}")
+            self.budget_halved = getattr(self, "budget_halved", []) + [f"{self.textures[k][3]} {w}x{h}->{w // 2}x{h // 2}"]
         aw, ah, pos = placed
         img = bytearray(aw * ah * 4)
         rects = {}
@@ -2845,6 +2850,7 @@ class Builder:
             if budget < self.fx_texels:
                 log(f"pack-size guard: effect sprite budget cut from {self.fx_texels} to {budget} texels (--max-bytes {self.max_bytes})")
             kept, dropped = spr.spr2_select(self.fx_sprites, budget)
+            self.budget_fx = (self.fx_texels, budget, list(dropped))
             if dropped:
                 log(f"effect sprites over the {budget} texel budget, dropped (lowest priority first): {', '.join(dropped)}")
             if kept:
@@ -2869,6 +2875,13 @@ class Builder:
             for a in ext:
                 fh.write(a.tobytes())
         size = os.path.getsize(out)
+        # budget summary (one line each, also when nothing was cut): which view-only skins build_atlas halved to fit the atlas budget,
+        # and how far the pack-size guard cut the effect-sprite budget (dropped sprites by name)
+        hv = getattr(self, "budget_halved", [])
+        print(f"budget: atlas halved {len(hv)} texture(s){': ' + ', '.join(hv) if hv else ''}")
+        fx = getattr(self, "budget_fx", None)
+        if fx:
+            print(f"budget: effect sprites {fx[1]} of {fx[0]} texels, {len(fx[2])} dropped{': ' + ', '.join(fx[2]) if fx[2] else ''}")
         if size > 95_000_000:
             print(f"WARNING: pack is {size / 1e6:.1f} MB, close to the 100 MB cap of the companion / VRChat")
         print(f"{out}: {len(self.weapons)} weapons, {len(self.meshes)} meshes ({len(uv) // 2} verts, {len(idx) // 3} tris, "
@@ -3026,7 +3039,7 @@ def main(argv=None):
             bprog.progress("monsters", mdone, len(mons))
     if prof.get("props") and mons:
         # studio props after the monster table (their MON1 index is looked up by name, never by position)
-        props = [p for p in map_prop_models(a.game_root, a.mod) if p not in known][:PROP_MAX_MODELS]
+        props = [p for p in map_prop_models(a.game_root, a.mod) if p not in known][:prof.get("prop_max", PROP_MAX_MODELS)]
         for p in props:
             b.monster(p, (), ("*",), 0, PROP_POSE_VERTS, "prop_tex_max")
         log(f"studio props: {len(props)} map-named models ({', '.join(props)})")

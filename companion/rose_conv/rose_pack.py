@@ -18,7 +18,7 @@ COORDINATE DECISION (the one place where it is written down):
 import sys, os, re, math, json, hashlib, struct, argparse, collections
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import rosevfs, rosefmt as F, rosedds as D, rpg1 as P, rosechar as C, rose_chars as RC, rose_env, rose_audio as AU, rose_warp, rose_lobby, rose_revive
+import rosevfs, rosefmt as F, rosedds as D, rpg1 as P, rosechar as C, rose_chars as RC, rose_env, rose_audio as AU, rose_warp, rose_lobby, rose_revive, rose_text as TX
 
 TOOL_VERSION = 4
 # every section a full game zone writes with all options (docs/RPG1_PACK.md section 19); --no-chars writes ACTJ instead of the character sections, --lobby adds LOBY
@@ -130,7 +130,7 @@ def zone_row(vfs, zone_id):
         _, keys, langs = F.stl(vfs.read('3DDATA/STB/LIST_ZONE_S.STL'))
         sid = col(26).strip()
         if sid in keys:
-            name = langs[1][keys[sid][0]][0]
+            name = TX.stl_text((_, keys, langs), sid, 0, TX.EN) or name       # English, else the other languages, Korean last (rose_text.pick)
     except Exception:
         pass
     # LIST_ZONE col 4 (지하지형, "0: outdoor, 1: underground"): the dungeon floors (Goblin Cave 31 - 33) set it; their walk grid is sealed to the cave (seal_interior)
@@ -665,6 +665,7 @@ class Grid:
         self.reason = bytearray(self.w * self.h)         # 0 free, 1 outside data, 2 slope, 3 water, 4 object, 5 outside the cave (seal_interior)
         self.obj_cells = 0
         self.floor = {}                                  # cell -> {y in 0.1 m}: walkable object surfaces (flat enough, collision shape without NOT_MOVEABLE)
+        self.floor_c = {}                                # PIER FLOOR: cell -> {y in 0.1 m} of the same surfaces exactly under the cell CENTRE (the height the avatar stands at there)
         self.wall = {}                                   # cell -> {(steep, lo, hi, inner)}: collision geometry y-ranges in 0.1 m (inner = sample near the cell centre)
         self.slope = None                                # per cell terrain slope (finish_grid)
         self.floor_cells = 0; self.carved_cells = 0; self.void_cells = 0
@@ -722,6 +723,28 @@ class Grid:
                     if not (colbits & 32):
                         inner = abs(x / cs - gx - 0.5) < INNER and abs(z / cs - gz - 0.5) < INNER
                         self.wall.setdefault(ci, set()).add((not flat, lo, hi, inner))
+            if flat and want_floor:
+                self._centres(pa, pb, pc)
+
+    def _centres(self, pa, pb, pc):
+        """PIER FLOOR: every cell centre inside the XZ footprint of a walkable triangle gets the exact surface height there (floor_c). The edge samples of collect
+        spread over the whole cell, so one cell of a ramp / stair holds 3 m of heights and the median is no surface at all."""
+        cs = self.cs; w, h = self.w, self.h
+        d = (pb[2] - pc[2]) * (pa[0] - pc[0]) + (pc[0] - pb[0]) * (pa[2] - pc[2])
+        if abs(d) < 1e-9:
+            return
+        gx0 = max(0, int(math.floor(min(pa[0], pb[0], pc[0]) / cs - 0.5))); gx1 = min(w - 1, int(math.ceil(max(pa[0], pb[0], pc[0]) / cs - 0.5)))
+        gz0 = max(0, int(math.floor(min(pa[2], pb[2], pc[2]) / cs - 0.5))); gz1 = min(h - 1, int(math.ceil(max(pa[2], pb[2], pc[2]) / cs - 0.5)))
+        for gz in range(gz0, gz1 + 1):
+            z = (gz + 0.5) * cs
+            for gx in range(gx0, gx1 + 1):
+                x = (gx + 0.5) * cs
+                l1 = ((pb[2] - pc[2]) * (x - pc[0]) + (pc[0] - pb[0]) * (z - pc[2])) / d
+                l2 = ((pc[2] - pa[2]) * (x - pc[0]) + (pa[0] - pc[0]) * (z - pc[2])) / d
+                l3 = 1.0 - l1 - l2
+                if l1 < -1e-6 or l2 < -1e-6 or l3 < -1e-6:
+                    continue
+                self.floor_c.setdefault(gz * w + gx, set()).add(int(round((l1 * pa[1] + l2 * pb[1] + l3 * pc[1]) * 10)))
 
     def _rasterize_samples(self, vs, tris):
         """DUNGEON: the body band per sample point against the terrain under that point. In a cave the terrain drops by ~100 m into pits right next to the
@@ -759,6 +782,9 @@ class Grid:
 FLOOR_NY = 0.6              # |normal.y| of a walkable surface (up to ~53 degrees)
 INNER = 0.3                 # a collision sample blocks a floor cell only within this fraction of the cell around its centre (rails at the edge of a bridge do not)
 FLOOR_STEP = 1.4            # floor levels of neighbouring cells connect up to this many cell sizes of height difference (a ramp at FLOOR_NY)
+FLOOR_SINK = 2.0            # BRIDGE PATH: a floor level up to this far below the terrain of an object-blocked cell is a slab sunk into the ground (bridge ends): the terrain is the floor there
+FLOOR_CANOPY_MAX = 4.0      # ... but only up to this height: more is another storey of a building (Luxem Tower floors 8 m apart), not a canopy
+FLOOR_CANOPY = 1.0          # PIER FLOOR: the highest floor level of a cell floating more than this above the floor cells around it (a sail / canopy top over a deck) is not what the avatar stands on
 FLOOR_REACH = 80.0          # floors higher than this above the terrain are ignored (ZONES MORE: was 15; a bridge over a deep gorge floats 50 m above the ground, the chain rule below already drops roofs and towers)
 INTERIOR_FLOOR_REACH = 200.0   # DUNGEON: underground zones; the Goblin Cave bridges cross a pit whose terrain lies ~100 m below them (seal_interior already drops everything outside the cave)
 PASS_SLOPE = 3.0            # a required point may be linked through slope-blocked cells up to this rise / run (the original has no slope limit at all)
@@ -784,20 +810,67 @@ def floor_levels(ys):
     return [c[len(c) // 2] / 10.0 for c in out]
 
 
+def floor_levels_c(ys):
+    """PIER FLOOR: sorted heights (0.1 m units) of the surfaces exactly under a cell centre -> one height (m) per storey (a gap above 0.8 m starts another one);
+    the top surface of a storey (the underside of a plank is a walkable-looking triangle 0.6 m lower)."""
+    out = []; cur = [ys[0]]
+    for y in ys[1:]:
+        if y - cur[-1] > 8:
+            out.append(cur[-1]); cur = []
+        cur.append(y)
+    out.append(cur[-1])
+    return [y / 10.0 for y in out]
+
+
+def pick_floor_level(cand, best, heights, grid):
+    """PIER FLOOR: cells with several connected floor levels (deck + canopy / mast / upper storey over it) keep the highest level (the old rule: the floor ray of
+    the original hits the top surface) unless it floats between FLOOR_CANOPY and FLOOR_CANOPY_MAX above what the floor cells around stand on: then the level nearest to that
+    (median of the decided floor neighbours, 8-neighbourhood) wins. The avatar stood 2 m over a pier deck where a sail part had a flat top. A cell without a decided
+    floor neighbour waits for the next pass; the last resort is the highest level. best: cell -> level (in / out)."""
+    w, h = grid.w, grid.h
+    todo = sorted(ci for ci in cand if ci not in best)
+    for _pass in range(8):
+        if not todo:
+            break
+        rest = []
+        for ci in todo:
+            gx, gz = ci % w, ci // w
+            fl = []
+            for dz in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    a, b = gx + dx, gz + dz
+                    if (dx or dz) and 0 <= a < w and 0 <= b < h and (b * w + a) in best:
+                        fl.append(best[b * w + a])
+            if not fl:
+                rest.append(ci); continue
+            ref = sorted(fl)[len(fl) // 2]
+            top = max(cand[ci])
+            best[ci] = top if not (FLOOR_CANOPY < top - ref <= FLOOR_CANOPY_MAX) else min(cand[ci], key=lambda y: (abs(y - ref), -y))
+        todo = rest
+    for ci in todo:
+        best[ci] = max(cand[ci])
+
+
 def add_floors(grid, heights, water, max_wade, reach=FLOOR_REACH):
     """Walkable object surfaces (bridges, ramps, stairs, platforms): the original lets the player stand on any collision surface its floor ray hits, the terrain-only
     grid blocked the water / steep ground under them or the rails on them. A floor level of a cell becomes walkable when it is not deep under water, has no collision
     geometry at body height around the cell centre and is reachable from open ground through floor levels of neighbouring cells without a wall spanning the height
     step (a boulder or a roof is not). The cell then gets the floor height in HGHT. Returns the number of cells opened."""
     cs = grid.cs; w, h = grid.w, grid.h
-    nodes = []; by_cell = {}
+    nodes = []; by_cell = {}; ctag = []
     for ci in sorted(grid.floor):
         if heights[ci] == -32768:
             continue
         hc = heights[ci] / 100.0
         wt = water_top(water, (ci % w + 0.5) * cs, (ci // w + 0.5) * cs)
         walls = grid.wall.get(ci, ())
-        for y in floor_levels(sorted(grid.floor[ci])):
+        fcs = getattr(grid, 'floor_c', None)
+        cen = floor_levels_c(sorted(fcs[ci])) if fcs and ci in fcs else []
+        # PIER FLOOR: the levels exactly under the cell centre are the heights the avatar stands at; the old edge-sample levels stay as connection nodes only
+        # (a ramp foot or a bridge end that does not reach the centre) and decide the height of a cell without a centre level
+        for y, isc in [(v, True) for v in cen] + [(v, False) for v in floor_levels(sorted(grid.floor[ci])) if not any(abs(v - c) < 0.05 for c in cen)]:
+            if hc - FLOOR_SINK <= y < hc - 0.3 and not grid.cells[ci] and grid.reason[ci] == 4 and not any(c >= hc - 0.3 for c in cen):
+                y = hc                                   # BRIDGE PATH: the end of a deck / ramp slab sunk into the ground: the object block was the slab itself, the ground over it is the floor
             if y < hc - 0.3 or y > hc + reach:
                 continue
             if abs(y - hc) <= 0.3 and grid.cells[ci]:
@@ -806,7 +879,7 @@ def add_floors(grid, heights, water, max_wade, reach=FLOOR_REACH):
                 continue
             if any(inner and steep and wh - wl >= 6 and wl / 10.0 < y + 2.0 and wh / 10.0 > y + 0.5 for steep, wl, wh, inner in walls):      # risers of stairs (< 0.6 m) are no walls
                 continue
-            by_cell.setdefault(ci, []).append(len(nodes)); nodes.append((ci, y))
+            by_cell.setdefault(ci, []).append(len(nodes)); nodes.append((ci, y)); ctag.append(isc)
     parent = list(range(len(nodes)))
 
     def find(a):
@@ -844,13 +917,35 @@ def add_floors(grid, heights, water, max_wade, reach=FLOOR_REACH):
                         parent[ra] = rb
     good = set(find(k) for k in range(len(nodes)) if touch[k])
     opened = 0; best = {}
+    cand = {}; cand_e = {}
     for k, (ci, y) in enumerate(nodes):
-        if find(k) in good and (ci not in best or y > best[ci]):
-            best[ci] = y
+        if find(k) in good:
+            (cand if ctag[k] else cand_e).setdefault(ci, []).append(y)
+    for ci in cand_e:
+        if ci not in cand:
+            cand[ci] = cand_e[ci]
+    for ci in cand:
+        if len(cand[ci]) == 1:
+            best[ci] = cand[ci][0]
+    pick_floor_level(cand, best, heights, grid)
     for ci, y in best.items():
         if not grid.cells[ci]:
             grid.cells[ci] = 1; grid.reason[ci] = 0; opened += 1
         heights[ci] = int(round(y * 100))
+    # PIER FLOOR: a blocked cell inside a deck (barrel, mast post: a wall at body height) keeps the deck height in HGHT. The height field is interpolated between cell
+    # centres, so the terrain 6 m below the pier in that cell pulled the avatar down (or, with a canopy level, up) around it.
+    fcs = getattr(grid, 'floor_c', None) or {}
+    for ci in sorted(fcs):
+        if grid.cells[ci] or ci in best or grid.reason[ci] not in (3, 4) or heights[ci] == -32768:
+            continue
+        gx, gz = ci % w, ci // w
+        ys = sorted(best[cj] for cj in ((gz * w + gx + 1) if gx + 1 < w else -1, (gz * w + gx - 1) if gx > 0 else -1, ci + w if gz + 1 < h else -1, ci - w if gz > 0 else -1) if cj in best)
+        if len(ys) < 2:
+            continue
+        ref = ys[len(ys) // 2]
+        y = min(floor_levels_c(sorted(fcs[ci])), key=lambda v: abs(v - ref))
+        if abs(y - ref) <= 1.0:
+            heights[ci] = int(round(y * 100))
     grid.floor_cells = opened
     return opened
 
@@ -1078,7 +1173,10 @@ def npc_sidecar(vfs, ids):
         sid = c[40].strip() if len(c) > 40 else ''
         row['name'] = row['name_kr']
         if keys and sid in keys:
-            row['name'] = langs[1][keys[sid][0]][0]
+            cells = TX.stl_cells((None, keys, langs), sid, 0)
+            row['name'] = TX.pick(cells, TX.EN) or row['name_kr']
+            row['name_ja'] = TX.pick(cells, TX.JA) or row['name']
+            TX.note(TX.D_NPC, nid, 0, row['name'], row['name_ja'])
         if chr_:
             sk, mo, ef, npcs, _ok = chr_
             ch = npcs.get(nid)
@@ -1131,7 +1229,10 @@ class ItemNames:
         row = c[0]['cells'][n]
         sid = row[-1] if row else ''
         if c[1] and sid in c[1][1]:
-            return c[1][2][1][c[1][1][sid][0]][0]
+            cells = TX.stl_cells(c[1], sid, 0)
+            en = TX.pick(cells, TX.EN)
+            TX.note(TX.D_ITEM, code, 0, en, TX.pick(cells, TX.JA))
+            return en
         return row[0] or None
 
     def info(self, code):
@@ -1217,7 +1318,7 @@ def npc_summary(vfs, side, spawns, ifos_npcs, behaviour):
     for key, a in sorted(side['actors'].items(), key=lambda kv: int(kv[0])):
         nid = int(key)
         k = kinds.get(nid, dict(monster=True, spawn_points=set()))
-        row = dict(id=nid, name=a.get('name'), name_kr=a.get('name_kr'), level=a.get('level'), hp=a.get('hp'), attack=a.get('attack'), hit=a.get('hit'), defence=a.get('defence'),
+        row = dict(id=nid, name=a.get('name'), name_ja=a.get('name_ja'), name_kr=a.get('name_kr'), level=a.get('level'), hp=a.get('hp'), attack=a.get('attack'), hit=a.get('hit'), defence=a.get('defence'),
                    resistance=a.get('resistance'), avoid=a.get('avoid'), attack_speed=a.get('attack_speed'), attack_range_cm=a.get('attack_range'),
                    walk_speed_cm_s=a.get('walk_speed'), run_speed_cm_s=a.get('run_speed'), scale_pct=a.get('scale_pct'), exp=a.get('exp'),
                    money_drop_pct=a.get('money_drop_pct'), item_drop_pct=a.get('item_drop_pct'), drop_row=a.get('drop_row'), npc_type=a.get('npc_type'),
@@ -1300,6 +1401,7 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
             env=True, lightmaps=True, sky_px=1024, spawn_scatter=True, ui=False, audio=True, audio_opts=None, lobby=None):
     """zone: dict(id, name, zon, start, deco_zsc, cnst_zsc[, cells]). window = (bx0, by0, nx, ny) or 'all' (bounding box of every block) overrides center / size.
     -> (pack bytes, manifest dict, sidecar dict). The sidecar holds the actor table ('actors') and the runtime NPC summary ('summary')."""
+    TX.reset()          # the language overlay (TXJA / TXEN, docs/RPG1_PACK.md section 26) collects the texts the sections below read
     zon_path = rosevfs.norm(zone['zon'])
     zone_dir = zon_path.rsplit('/', 1)[0] + '/'
     zon = F.zon(vfs.read(zon_path))
@@ -1413,6 +1515,16 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
                 npc_conv[obj['id']].add(obj['quest'])
             spawns.append(dict(kind=P.KIND_NPC, npc=obj['id'], x=x, y=y, z=z, yaw=facing_yaw_deg(obj['q']), bx=b[0], by=b[1], basic=[], tactic=[],
                                interval=0, limit=0, range=0, tp=0))
+    import rose_skills      # lane SUMMONS: the npcs of the summon skills / summon capsules are actors of every zone (a summon needs its model; skeleton budget in rose_skills)
+    try:
+        summon_ids, summon_warn = rose_skills.zone_summon_ids(vfs, npc_ids)
+    except Exception as e:
+        summon_ids, summon_warn = [], ['SKDB summons: %s' % e]
+    for w_ in summon_warn:
+        log('summons: ' + w_)
+    if summon_ids:
+        log('summons: %d summon npcs added as actors' % len(summon_ids))
+        npc_ids.update(summon_ids)
     side = npc_sidecar(vfs, npc_ids)
     cb = None
     if chars:
@@ -1598,6 +1710,11 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
         sections += ui_sections
         for w_ in ui_info['warnings'][:5]:
             log('ui tables: ' + w_)
+    try:                    # TXJA / TXEN: Japanese + the English texts without a legacy home; optional, never fails the conversion (old runtimes ignore the tags and read English)
+        TX.global_texts(vfs, lambda nm: _stl_or_none(vfs, nm))
+        sections += TX.current().sections()
+    except Exception as e:
+        log('language overlay: %s' % e)
     pack = P.write_pack(sections)
     pinfo = P.read_pack(pack)
     char_bytes = None
@@ -1637,6 +1754,13 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
         skipped=dict(skipped), warnings=dict(ob.warn, **{('chars: ' + k): v for k, v in (cb.warn if cb else {}).items()}, **{('lit: ' + k): v for k, v in (lp.warn if lp else {}).items()}, **warns),
     )
     return pack, man, side
+
+
+def _stl_or_none(vfs, name):
+    try:
+        return F.stl(vfs.read('3DDATA/STB/%s.STL' % name))
+    except (KeyError, ValueError, struct.error, IndexError):
+        return None
 
 
 def slug(name):

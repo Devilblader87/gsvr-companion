@@ -1,6 +1,6 @@
 """ROSE client UI -> RPG1 1.4 sections UIAT (sprite atlas set) and UIDL (dialog layouts). Reads the player's own client READ-ONLY.
 
-  python3 -I tools/rose_ui.py <client dir> -o out/rose_ui.rpg1 [--base 800x600] [--sheets UI,ITEM1,SKILLICON,STATEICON,TARGETMARK] [--dialogs DlgInfo,DlgQuickBar]
+  python3 -I tools/rose_ui.py <client dir> -o out/rose_ui.rpg1 [--base 800x600] [--sheets UI,ITEM1,SKILLICON,STATEICON,TARGETMARK,CLANBACK,CLANCENTER] [--dialogs DlgInfo,DlgQuickBar]
 
 Inputs (docs/ROSE_UI.md): VFS `3DDATA/CONTROL/RES/<sheet>.TSI` + the DDS files they name, loose `3Ddata/Control/Xml/*.xml` (+ `UI_strID.id`, `EXUI_strID.id`),
 VFS `3DDATA/EFFECT/SPECIAL/DIGITNUMBER*.DDS`. Output: standalone UI pack (UIAT + UIDL only) and/or the two sections for `rose_pack.py --ui`.
@@ -25,7 +25,7 @@ NO_TEX = 0xFFFF
 
 # TSI sheets: (name, MODULEID used by the XML files). Module 2 and 10+ are unused by the client XML.
 SHEETS = (('UI', 0), ('ITEM1', 1), ('EXUI', 3), ('SKILLICON', 4), ('STATEICON', 5), ('SOKETJAM', 6), ('CLANBACK', 7), ('CLANCENTER', 8), ('TARGETMARK', 9))
-DEFAULT_SHEETS = ('UI', 'ITEM1', 'SKILLICON', 'STATEICON', 'TARGETMARK')
+DEFAULT_SHEETS = ('UI', 'ITEM1', 'SKILLICON', 'STATEICON', 'TARGETMARK', 'CLANBACK', 'CLANCENTER')   # CLANBACK / CLANCENTER (modules 7 / 8): the clan mark sprites, id = sprite index (background 1..16, foreground 1..19)
 MODULE_DIGITS = 100                      # code-defined damage digit strips (not a TSI)
 DIGIT_FILES = (('DIGITNUMBER01', 10), ('DIGITNUMBER02', 10), ('DIGITNUMBERMISS', 4))
 DIGIT_DIR = '3DDATA/EFFECT/SPECIAL/'

@@ -16,7 +16,10 @@ AVATAR_ACTIONS = (0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13)
 AVATAR_LOOP_ACTIONS = (0, 1, 2, 3, 5)
 ACTION_NAMES = {0: 'stop1', 1: 'stop2', 2: 'walk', 3: 'run', 4: 'sitting', 5: 'sit', 6: 'standup', 7: 'stop3', 8: 'attack', 9: 'attack2',
                 10: 'attack3', 11: 'hit', 12: 'fall', 13: 'die', 14: 'raise', 15: 'jump1', 16: 'jump2', 17: 'pickitem'}
-AVATAR_WEAPON_TYPES = (1, 0)                  # 1 = one-hand sword (LIST_WEAPON col 34), 0 = unarmed
+AVATAR_WEAPON_TYPES = (1, 0)                  # 1 = one-hand sword (LIST_WEAPON col 34), 0 = unarmed (the old pair; zone packs before WRAPPER_REV 5)
+# W13 CONTENT: weapon motion type (LIST_WEAPON column 34 = TYPE_MOTION column) per weapon item class (LIST_WEAPON column 4). The runtime table is GsvrRoseItems.WeaponMotionType; test_rose_conv pins both.
+WEAPON_CLASS_MOTION = {211: 1, 212: 3, 221: 5, 222: 6, 223: 8, 231: 10, 232: 12, 233: 9, 241: 6, 242: 14, 251: 16, 252: 7, 253: 12, 271: 11}
+WEAPON_MOTION_TYPES = tuple(sorted({0} | set(WEAPON_CLASS_MOTION.values())))          # 0 unarmed, 1 sword, 3 blunt, 5 two-hand sword, 6 spear / staff, 7 dual, 8 axe, 9 launcher, 10 bow, 11 crossbow, 12 gun, 14 wand, 16 katar
 # default item catalogue per slot (ZSC object index = item number); the starter items from INIT_AVATAR are added when missing
 # character creation (charedit lane): the open-source client's create screen offers 7 faces (numbers 1 + 7 i) and 5 hairs (numbers 5 i, i.e. 0 .. 20); they must be in the catalogue
 # so the lobby's create board and the saved characters can show them. A number the client's ZSC does not hold is skipped (mesh_object returns nothing), never an error.
@@ -231,7 +234,7 @@ class CharBuilder:
         return a
 
     # ------------------------------------------------------------ player avatar
-    def add_avatar(self, genders=(0, 1), catalogue=None, weapon_types=AVATAR_WEAPON_TYPES, actions=AVATAR_ACTIONS):
+    def add_avatar(self, genders=(0, 1), catalogue=None, weapon_types=WEAPON_MOTION_TYPES, actions=AVATAR_ACTIONS):
         v = self.vfs
         cat = catalogue or AVATAR_CATALOGUE
         tm = F.stb(v.read('3DDATA/STB/TYPE_MOTION.STB'))

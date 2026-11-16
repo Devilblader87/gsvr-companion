@@ -49,16 +49,33 @@ def _fake_install(root, stores=("ROOT.VFS", "DATA.VFS", "MAP.VFS"), xml=True, so
 class VersionAndTable(unittest.TestCase):
     def test_version_format(self):
         self.assertRegex(rose_conv.VERSION, r"^rv-[0-9a-f]{8}-\d+$")
+
+    def test_pack_version(self):
+        """ROSE w13: WRAPPER_REV 5 (weapon-class motions in every zone pack). ROSE w12 summons: WRAPPER_REV 4 (SKDB carries the magic item skills + summon npcs, every zone the summon actors: all packs rebuild once); Birth Island alone carries a per-pack revision."""
+        self.assertEqual(rose_conv.WRAPPER_REV, 5)
+        self.assertEqual(rose_conv.PACK_REV, {"birthisland": 2})
+        self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
+        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p2")
+        for n in rose_conv.PACKS:
+            if n != "birthisland":
+                self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION)
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)
+
+    def test_weapon_motion_table(self):
+        """W13: the weapon class -> motion type table the runtime also holds (GsvrRoseItems.WeaponMotionType); every motion type is baked for the avatar"""
+        import rose_chars
+        self.assertEqual(rose_chars.WEAPON_CLASS_MOTION, {211: 1, 212: 3, 221: 5, 222: 6, 223: 8, 231: 10, 232: 12, 233: 9, 241: 6, 242: 14, 251: 16, 252: 7, 253: 12, 271: 11})
+        self.assertEqual(rose_chars.WEAPON_MOTION_TYPES, (0, 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16))
+        self.assertTrue(set(rose_chars.AVATAR_WEAPON_TYPES) <= set(rose_chars.WEAPON_MOTION_TYPES))
 
     def test_packs_table(self):
         P = rose_conv.PACKS
-        self.assertEqual(set(P), {"birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "goblincaveb1", "goblincaveb2", "goblincaveb3", "junonpolis", "login", "avatar"})
+        self.assertEqual(set(P), {"birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "goblincaveb1", "goblincaveb2", "goblincaveb3", "junonpolis", "dolphinisland", "luna", "eldeon", "clanfield", "junonclanfield", "manasnowfields", "arumicvalley", "crystalsnowfields", "freezingplateau", "login", "avatar"})
         zones = {n: (s["zone"], s["all"]) for n, s in P.items() if s["kind"] == "zone"}
-        self.assertEqual(zones, {"birthisland": (20, False), "luxemtower": (21, True), "adventurersplain": (22, True), "breezyhills": (23, True),
+        self.assertEqual(zones, {"birthisland": (20, True), "luxemtower": (21, True), "adventurersplain": (22, True), "breezyhills": (23, True),
                                  "zant": (1, True), "elverloondesert": (24, True), "animalake": (25, True), "forestofwisdom": (26, True),
                                  "kenjibeach": (27, True), "gorgeofsilence": (28, True), "goblincaveb1": (31, True),
-                                 "goblincaveb2": (32, True), "goblincaveb3": (33, True), "junonpolis": (2, True)})
+                                 "goblincaveb2": (32, True), "goblincaveb3": (33, True), "junonpolis": (2, True), "dolphinisland": (3, True), "luna": (51, True), "eldeon": (61, True), "clanfield": (15, True), "junonclanfield": (11, True), "manasnowfields": (52, True), "arumicvalley": (53, True), "crystalsnowfields": (54, True), "freezingplateau": (55, True)})
         for n, s in P.items():
             self.assertIn(s["kind"], ("zone", "lobby", "avatar"))
             self.assertTrue(s["label"])
@@ -334,6 +351,105 @@ class BuildFlow(unittest.TestCase):
             with self.assertRaises(rose_conv.BuildError) as cm:
                 rose_conv.build("birthisland", d, self.out)
             self.assertIn("data.idx", str(cm.exception))
+
+
+class ItemTypes(unittest.TestCase):
+    """ITEMTYPES: ITEM carries the plain item types 11 / 12 / 13 (gems, materials, quest items); every code of DROP / SHOP / QUST / PRODUCT resolves to a name + icon"""
+
+    def setUp(self):
+        import rose_items
+        import rose_gameplay
+        import rose_shop
+        self.I, self.G, self.S = rose_items, rose_gameplay, rose_shop
+
+    def test_tables_cover_all_types(self):
+        self.assertEqual(sorted(self.I.TABLES), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+        self.assertEqual(self.I.TABLES[12], "LIST_NATURAL")
+
+    def test_plain_record(self):
+        cells = [""] * 19
+        cells[4], cells[5], cells[7], cells[8], cells[9], cells[10], cells[16], cells[17] = "429", "60", "1", "12", "1969", "211", "33", "44"
+        r = self.I.item_record(12171, cells, "Thin Bug Shell")
+        self.assertEqual((r["icon"], r["price"], r["weight"], r["cls"], r["field"], r["name"]), (1969, 60, 1, 429, 211, "Thin Bug Shell"))
+        self.assertEqual((r["job_mask"], r["job_class"], r["req"], r["add"], r["defence"]), (0, 0, [(0, 0), (0, 0)], [(0, 0), (0, 0)], 0))
+        recs, _s, _h = self.I.dec_item(self.I.enc_item([r]))
+        self.assertEqual((recs[0]["code"], recs[0]["icon"], recs[0]["name"]), (12171, 1969, "Thin Bug Shell"))
+
+    def _secs(self):
+        drop = self.G.enc_drop([], [dict(code=12171, icon=1969, type=12, price=60, weight=1, quality=12, name="x"), dict(code=12999, icon=0, type=12, price=0, weight=0, quality=0, name="")])
+        shop = self.S.enc_shop([], [dict(name="t", slots=[10001, 0, 12173])], [])
+        return {b"DROP": drop, b"SHOP": shop}
+
+    def test_reachable_and_missing(self):
+        reach = self.I.reachable_codes(self._secs())
+        self.assertEqual(reach["DROP"], {12171, 12999})
+        self.assertEqual(reach["SHOP"], {10001, 12173})
+        self.assertEqual(reach["QUST"], set())
+        recs = [self.I.item_record(c, [""] * 9 + ["5"], "n") for c in (10001, 12171)]
+        miss = self.I.missing_codes(reach, recs)
+        self.assertEqual(miss, {"DROP": [12999], "SHOP": [12173]})
+        recs += [self.I.item_record(c, [""] * 9 + ["5"], "n") for c in (12173, 12999)]
+        self.assertEqual(self.I.missing_codes(reach, recs), {})
+        nameless = [self.I.item_record(12171, [""] * 9 + ["5"], ""), self.I.item_record(12999, [""] * 9 + ["0"], "n")]
+        self.assertEqual(self.I.missing_codes(dict(DROP={12171, 12999}), nameless), {"DROP": [12171, 12999]})
+
+
+class Summons(unittest.TestCase):
+    """SUMMONS lane (docs/design/rose_summons.md): SKDB carries the use skills of magic items (no page) and the summon npc / gauge of summon skills; the zones carry the summon actors"""
+
+    def setUp(self):
+        import rose_skills
+        self.S = rose_skills
+
+    @staticmethod
+    def _row(**cells):
+        c = [""] * 72
+        for k, v in cells.items():
+            c[int(k[1:])] = str(v)
+        return c
+
+    def test_item_skill_without_page(self):
+        c = self._row(c2=1, c5=14, c16=76, c17=90, c28=9001)                      # a capsule's skill: type 14, no page (cell 4 empty), no icon, summon npc 9001
+        self.assertIsNone(self.S.skill_record(7001, c, ""))                      # not a player skill
+        npc = dict(rows=10000, cells={})
+        npc["cells"] = [[""] * 30 for _ in range(10000)]
+        npc["cells"][9001][21] = "30"
+        r = self.S.skill_record(7001, c, "", None, True, npc)
+        self.assertEqual((r["page"], r["flags"], r["type"], r["summon_npc"], r["summon_pts"], r["level"]), (0, self.S.FLAG_ITEM, 14, 9001, 30, 1))
+        p = self.S.skill_record(7301, self._row(c2=1, c4=1, c5=14, c51=11, c28=8601), "Hire", None, False, npc)
+        self.assertEqual((p["page"], p["flags"], p["summon_npc"], p["summon_pts"]), (1, 0, 8601, 0))
+        b = self.S.skill_record(7401, self._row(c2=1, c4=1, c5=8, c51=12, c21=38, c22=210), "", None, True)
+        self.assertEqual((b["flags"], b["summon_npc"]), (0, 0))                  # a scroll with a page is a normal row (no item flag)
+
+    def test_round_trip(self):
+        npc = dict(rows=10000, cells=[[""] * 30 for _ in range(10000)])
+        npc["cells"][9002][21] = "33"
+        recs = [self.S.skill_record(7002, self._row(c2=1, c5=14, c28=9002), "", None, True, npc),
+                self.S.skill_record(7101, self._row(c2=1, c4=1, c5=18, c51=13, c21=1, c22=333, c23=222), "Return", None, True)]
+        sk, _st = self.S.dec_skdb(self.S.enc_skdb(recs))
+        self.assertEqual(len(self.S.enc_skdb(recs)) - 48 >= 2 * self.S.REC_BYTES, True)
+        self.assertEqual((sk[0]["id"], sk[0]["summon_npc"], sk[0]["summon_pts"], sk[0]["flags"]), (7002, 9002, 33, self.S.FLAG_ITEM))
+        self.assertEqual((sk[1]["type"], sk[1]["add_type"][0], sk[1]["add_value"][0], sk[1]["add_rate"][0], sk[1]["summon_npc"]), (18, 1, 333, 222, 0))
+        self.assertEqual(self.S.REC.size, 136)
+
+    def test_item_skill_ids(self):
+        ui = dict(rows=4, cells=[[""] * 30 for _ in range(4)])
+        ui["cells"][1][4], ui["cells"][1][20] = "313", "7001"
+        ui["cells"][2][4], ui["cells"][2][20] = "314", "201"                     # a skill book: learnt, not fired
+        ui["cells"][3][4], ui["cells"][3][20] = "313", ""
+        self.assertEqual(self.S.item_skill_ids(ui), {7001})
+        self.assertEqual(self.S.item_skill_ids(None), set())
+
+    def test_summon_npc_list_and_budget(self):
+        sk = dict(rows=5, cells=[self._row() for _ in range(5)])
+        sk["cells"][1] = self._row(c5=14, c28=9001)                               # capsule skill (item skill)
+        sk["cells"][2] = self._row(c4=1, c5=14, c51=5, c28=8601)                  # player summon skill
+        sk["cells"][3] = self._row(c5=14, c28=9999)                               # monster-only row: no page, not an item skill
+        sk["cells"][4] = self._row(c4=1, c5=3, c51=5, c28=7777)                   # not a summon
+        self.assertEqual(self.S.summon_npc_list(sk, {1}), [8601, 9001])
+        skel = {1: 0, 2: 1, 9001: 0, 8601: 7, 8602: 8, 8603: None}
+        add, drop = self.S.pick_summon_actors({1, 2}, [9001, 8601, 8602, 8603], skel.get, max_skel=3)
+        self.assertEqual((add, drop), ([8601, 9001], [8602, 8603]))                  # 9001 shares skeleton 0; 8601 takes the last skeleton; 8602 over budget; 8603 has no model
 
 
 if __name__ == "__main__":

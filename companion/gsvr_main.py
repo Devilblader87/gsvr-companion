@@ -115,9 +115,34 @@ def rose_child_smoke(timeout=90):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def modules_smoke():
+    """frozen smoke: the module system is bundled and its ed25519 verifier works (RFC 8032 test 1)"""
+    try:
+        import ed25519, modules
+        seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+        good = ed25519.verify(ed25519.publickey(seed), b"", ed25519.sign(seed, b"")) and modules.MODULE_API >= 1
+        print("  %s modules / ed25519 bundled and working" % ("ok  " if good else "FAIL"))
+        return good
+    except Exception as e:                               # noqa: BLE001
+        print("  FAIL modules import: %r" % (e,))
+        return False
+
+
+def _activate_modules():
+    """Game modules (modules.py): off unless enabled in the GUI (gui.json modules_enabled / GSVR_MODULES=1). Runs before companion / gui import
+    rosebuild & co, in the GUI, the companion and the --run-rose-build child alike, so all of them see the same module versions.
+    Never fatal: on any problem the built-in copies run."""
+    try:
+        import modules
+        modules.activate()
+    except Exception:                                    # noqa: BLE001
+        pass
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     _utf8_streams()
+    _activate_modules()
     cli_default = os.path.basename(sys.executable).lower().startswith("gsvr-cli")
     if argv[:1] == ["--run-converter"]:
         if len(argv) < 2:
@@ -153,7 +178,7 @@ def main(argv=None):
     import gui
     if "--selftest" in argv:
         print("[rose_conv] frozen smoke")
-        smoke = rose_smoke()
+        smoke = rose_smoke() and modules_smoke()
         rc = gui.selftest()
         return rc if smoke else (rc or 1)
     gui.run_gui()

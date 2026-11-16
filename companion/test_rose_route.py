@@ -63,6 +63,15 @@ class Validate(unittest.TestCase):
         for n in ("", "A", "a" * 33, "a/b", "../x", "a.b", "a b", "a\n", "ä", "a-b", "..", None):
             self.assertFalse(rose.valid_name(n), repr(n))
 
+    def test_test_scenario(self):
+        f = os.path.join(self.d, "test_scenario.txt")
+        self.assertEqual(rose.test_scenario(self.d), "")                       # no file: no selection
+        for text, want in (("rosecombat\n", "rosecombat"), ("  roseparty  \r\nxx", "roseparty"), ("Rose Combat", ""), ("../x", ""), ("", ""), ("a" * 33, "")):
+            with open(f, "w") as fh:
+                fh.write(text)
+            self.assertEqual(rose.test_scenario(self.d), want, repr(text))
+        self.assertEqual(rose.test_scenario(None), "")
+
     def test_traversal(self):
         sub = os.path.join(self.d, "rose")
         os.makedirs(sub)

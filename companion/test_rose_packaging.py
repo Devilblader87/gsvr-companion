@@ -57,6 +57,21 @@ class RosePackaging(unittest.TestCase):
             txt = f.read()
         self.assertTrue(any(ln.startswith("miniaudio==") for ln in txt.splitlines()))
 
+    def test_spec_bundles_module_system(self):
+        """modules.py / ed25519.py are imported by gsvr_main + gui at startup: they must be hidden imports; the module's own files stay
+        built in (fallback) - rose_conv / rosebuild / rosefind remain in the spec lists"""
+        s = _spec()
+        comp = s.split("COMPANION_MODULES = ")[1].split("]")[0]
+        for m in ("modules", "ed25519", "rosebuild", "rosefind"):
+            self.assertIn('"%s"' % m, comp)
+        self.assertIn("ROSE_MODULES", s.split("hiddenimports=")[1])
+
+    def test_modules_off_by_default_and_no_key_fails_closed(self):
+        import modules
+        os.environ.pop("GSVR_MODULES", None)
+        self.assertFalse(modules.enabled(os.path.join(HERE, "nonexistent.json")))
+        self.assertEqual(modules.activate(root=os.path.join(HERE, "nonexistent_modules_dir")), {})
+
     def test_smoke_check(self):
         import gsvr_main
         self.assertTrue(gsvr_main.rose_smoke())

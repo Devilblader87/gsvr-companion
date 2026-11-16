@@ -4,7 +4,7 @@ The runtime (GoldSrcVR GsvrRoseItems) computes the player's attack / defence / h
 formulas, checks equip requirements and runs potions; everything it needs per item is in one fixed record. A pack without ITEM keeps the old placeholder stats.
 
 Source tables (read only, from the player's own client; column numbers = rosefmt.stb cell indices, the same numbers rose-offline's item_database.rs uses):
-  LIST_FACEITEM / CAP / BODY / ARMS / FOOT / BACK / JEWEL / WEAPON / SUBWPN (types 1..9, equipment) and LIST_USEITEM (type 10, consumables), names via LIST_*_S.STL (language 1);
+  LIST_FACEITEM / CAP / BODY / ARMS / FOOT / BACK / JEWEL / WEAPON / SUBWPN (types 1..9, equipment) and LIST_USEITEM (type 10, consumables), LIST_JEMITEM / LIST_NATURAL / LIST_QUESTITEM (types 11 / 12 / 13, gems, materials, quest items), names via LIST_*_S.STL (language 1);
   LIST_CLASS (job class -> job ids), LIST_STATUS (potion over-time effect), INIT_AVATAR (start stats / equipment / inventory per gender).
 
 Layout (little endian, 4-byte aligned):
@@ -30,7 +30,7 @@ Layout (little endian, 4-byte aligned):
     88 u32 consumables[5][2] (24..33 code, qty) ; 128 u32 materials[5][2] (34..43) ; 168 u32 money (44) ; 172 u32 zone (45) ; rest 0
     Codes that do not fit their place (wrong type for the slot, number >= 1000, quantity <= 0) are written as 0 with a warning.
 
-Rows: every row of the ten tables that has a string id plus every code INIT_AVATAR names. Item numbers >= 1000 cannot be written as a base1000 code (they would collide with the next type);
+Rows: every row of the tables that has a string id plus every code INIT_AVATAR names. Item numbers >= 1000 cannot be written as a base1000 code (they would collide with the next type);
 such rows are skipped with a counted warning.
 No text or table of the game is committed; everything is read at conversion time on the player's machine.
 """
@@ -50,7 +50,14 @@ assert REC.size == REC_BYTES, REC.size
 assert START.size <= START_BYTES
 
 TABLES = {1: 'LIST_FACEITEM', 2: 'LIST_CAP', 3: 'LIST_BODY', 4: 'LIST_ARMS', 5: 'LIST_FOOT', 6: 'LIST_BACK', 7: 'LIST_JEWEL', 8: 'LIST_WEAPON',
-          9: 'LIST_SUBWPN', 10: 'LIST_USEITEM'}
+          9: 'LIST_SUBWPN', 10: 'LIST_USEITEM', 11: 'LIST_JEMITEM', 12: 'LIST_NATURAL', 13: 'LIST_QUESTITEM', 14: 'LIST_PAT'}
+# types 11 / 12 / 13 (gems, materials = monster parts and ores, quest items; ITEMTYPES): plain stackable items. Only the common cells are carried (cell 4 class, 5 price, 7 weight, 8 quality, 9 icon, 10 field
+# model, last cell = string id); the equipment cells 16..37 mean something else there (a gem's ability pairs sit in cells 16..19, they live in ITEX) and are left 0.
+PLAIN_TYPES = (11, 12, 13)
+# type 14 = vehicle part (rose-data ItemType::Vehicle, LIST_PAT; carts and castle gear, docs/design/rose_carts.md). Its record fields, same bytes, different meaning:
+#   cls = cell 4 (511 cart body / 512 gear body / 521, 522 engine / 531 wheels, 532 leg / 551, 552 arms), req[0] = ability requirement cells 21 / 22 (skill requirement cells 19 / 20 are empty
+#   in every row of the 1.31 client and not carried), durability = cell 29, defence = cell 31 (max fuel, unused by the server), resistance = cell 32 (fuel use rate per 10 s of driving),
+#   c33 = cell 33 (move speed), motion = cell 40 (base motion index), attack = cell 35 (attack range), attack_speed = cell 36 (attack power), magic = cell 37 (attack speed), add = cells 24 / 25, 27 / 28
 # job ids in mask bit order: visitor, the four first jobs, the eight second jobs, the eight third jobs
 JOBS = (0, 111, 211, 311, 411, 121, 122, 221, 222, 321, 322, 421, 422, 131, 132, 231, 232, 331, 332, 431, 432)
 # two-handed weapon classes (rose-data ItemClass::is_two_handed_weapon)
@@ -112,13 +119,28 @@ def item_record(code, cells, name, class_stb=None, status_stb=None):
              req=[(0, 0), (0, 0)], add=[(0, 0), (0, 0)], durability=0, defence=0, resistance=0, c33=0, motion=0, attack=0, attack_speed=0, magic=0, flags=0,
              use_value=0, status_id=0, status_type=0, per_second=0, reapply=0, effect_id=0, field=max(0, _int(c, 10)), rare=0, hair=0, name=name or '')
     r['job_mask'] = job_mask(class_stb, r['job_class'])
-    if t == 10:
+    if t in PLAIN_TYPES:
+        r['job_class'] = r['job_mask'] = 0
+    elif t == 10:
         r['job_class'] = r['job_mask'] = 0      # consumables: cell 16 is no job class
         r['req'][0] = (_int(c, 17), _int(c, 18))
         r['add'][0] = (_int(c, 19), _int(c, 20))
         r['use_value'] = _int(c, 20)
         r['status_id'] = _int(c, 24)
         r['status_type'], r['per_second'], r['reapply'], r['effect_id'] = status_info(status_stb, r['status_id'])
+    elif t == 14:
+        r['job_class'] = r['job_mask'] = 0      # cell 16 is the vehicle type (21 cart, 31 castle gear), no job class; cell 68 (job requirement) does not exist in the 1.31 table
+        r['req'] = [(_int(c, 21), _int(c, 22)), (0, 0)]
+        r['add'] = [(_int(c, 24), _int(c, 25)), (_int(c, 27), _int(c, 28))]
+        r['durability'] = _int(c, 29)
+        r['rare'] = max(0, min(255, _int(c, 30)))
+        r['defence'] = _int(c, 31)
+        r['resistance'] = _int(c, 32)
+        r['c33'] = _int(c, 33)
+        r['motion'] = _int(c, 40)
+        r['attack'] = _int(c, 35)
+        r['attack_speed'] = _int(c, 36)
+        r['magic'] = max(0, min(255, _int(c, 37)))
     else:
         r['req'] = [(_int(c, 19), _int(c, 20)), (_int(c, 21), _int(c, 22))]
         r['add'] = [(_int(c, 24), _int(c, 25)), (_int(c, 27), _int(c, 28))]
@@ -283,3 +305,50 @@ def build_section(vfs, names):
     if not recs:
         return [], warn + ['ITEM: no item tables']
     return [(TAG_ITEM, 1, len(recs), enc_item(recs, starts, feet_default, unarmed_speed, unarmed_range))], warn
+
+
+# ------------------------------------------------------------------ coverage: every item a player can meet resolves to a name + icon
+def reachable_codes(secs):
+    """secs: {tag bytes: section data} of ONE zone pack -> {source: set of item codes} for DROP (drop item table), SHOP (tab slots),
+    QUST (quest item table, item conditions and rewards), PRODUCT (craft recipe materials, ITEX craft block). Missing / undecodable sections are skipped (old packs)."""
+    import rose_gameplay
+    import rose_quest
+    import rose_shop
+    import rose_itemx
+    out = {'DROP': set(), 'SHOP': set(), 'QUST': set(), 'PRODUCT': set()}
+    try:
+        _rows, items = rose_gameplay.dec_drop(secs[b'DROP'])
+        out['DROP'].update(i['code'] for i in items if i['code'] >= 1000)
+    except (KeyError, ValueError, struct.error):
+        pass
+    try:
+        out['SHOP'].update(c for c in rose_shop.dec_shop(secs[b'SHOP'])['slots'] if c >= 1000)
+    except (KeyError, ValueError, struct.error):
+        pass
+    try:
+        q = rose_quest.dec_qust(secs[b'QUST'])['tables']
+        out['QUST'].update(r[0] for r in q['qitem'] if r[0] >= 1000)
+        for r in q['cond']:
+            if r[0] == 4 and r[3] >= 1000:                  # (op, sub, a, b, c, d): quest item condition, b = item code
+                out['QUST'].add(r[3])
+        for r in q['rew']:
+            if r[0] == 1 and r[3] >= 1000:                  # item reward / removal
+                out['QUST'].add(r[3])
+            elif r[0] == 5 and r[1] == 2 and r[4] >= 1000:  # calculated item reward, c = item code
+                out['QUST'].add(r[4])
+    except (KeyError, ValueError, struct.error, IndexError):
+        pass
+    try:
+        cr = rose_itemx.dec_itemx(secs[b'ITEX'])['craft']
+        if cr:
+            for mats in cr['recipes'].values():
+                out['PRODUCT'].update(m[0] for m in mats if m[0] >= 1000)
+    except (KeyError, ValueError, struct.error):
+        pass
+    return out
+
+
+def missing_codes(reach, item_recs):
+    """reach: reachable_codes() result ; item_recs: dec_item() records -> {source: sorted codes without a name or without an icon in ITEM}"""
+    ok = set(r['code'] for r in item_recs if r['name'] and r['icon'] > 0)
+    return {src: sorted(c for c in codes if c not in ok) for src, codes in reach.items() if any(c not in ok for c in codes)}

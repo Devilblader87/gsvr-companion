@@ -146,6 +146,29 @@ override), `--prebuilt-dir DIR` + optional `--prebuilt-mod MOD` (see below), `--
 (default `%LOCALAPPDATA%\GSVR\cache`), `--converter tools/pack.py`, `--pack-cmd TEMPLATE`,
 `--build-timeout 600`, `--world-allow wrld_…,wrld_…`, `--http-log FILE`.
 
+### Linux / Steam Deck (Proton)
+
+VRChat runs inside Steam's Proton prefix and writes its logs there, not in the companion's own Wine prefix.
+The companion finds that folder itself (Wine detected via the `Z:` drive / `WINE*` variables / `HKCU\Software\Wine`):
+
+1. a folder set in the GUI ("VRChat log folder", Spiele tab) or `--vrchat-log-dir DIR` always wins;
+2. otherwise every Steam root is searched: `~/.steam/steam`, `~/.steam/debian-installation`, `~/.local/share/Steam`,
+   Flatpak `~/.var/app/com.valvesoftware.Steam/.local/share/Steam`, plus all libraries of their `libraryfolders.vdf`
+   (through `Z:\` under Wine), each for `steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat`;
+3. the folder whose newest `output_log_*.txt` is most recent is watched (re-checked every 5 s until a log exists).
+
+Run it with the same Proton/Wine as any Windows program (or from source: `python3 -I companion/companion.py` on Linux).
+If VRChat polls the companion but its log folder has no `output_log` or none written in the last 10 minutes, the GUI shows
+"VRChat log not found / not updating - set the VRChat log folder (Linux/Proton: steamapps/compatdata/438100/pfx/...)".
+Then enter the folder by hand, for example (adjust the Steam library path):
+
+```
+<Steam library>/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat
+# under Wine, via the Z: drive:  Z:\home\<you>\.local\share\Steam\steamapps\compatdata\438100\pfx\drive_c\users\steamuser\AppData\LocalLow\VRChat\VRChat
+```
+
+`status.json` only carries a yes/no (`log_ok`); no folder names leave the machine.
+
 ### Ports
 
 The port list has one source of truth, `PORT_CANDIDATES` in `companion.py`, mirrored by

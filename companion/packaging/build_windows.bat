@@ -27,6 +27,8 @@ echo compiled> "%VENV%\bootloader-compiled.txt"
 
 rem 1. stdlib self-tests from source first (headless, no window)
 "%VENV%\Scripts\python.exe" -I companion\selftest_update.py || goto :fail
+"%VENV%\Scripts\python.exe" -I companion\test_modules.py || goto :fail
+rem    game modules are NOT part of the app archives: build + sign them separately with companion\packaging\modtool.py (docs\design\companion_modules.md)
 
 rem 2. PyInstaller one-folder build
 "%VENV%\Scripts\python.exe" -m PyInstaller --noconfirm --clean --distpath "%BUILD%\dist" --workpath "%BUILD%\work" companion\packaging\gsvr.spec || goto :fail

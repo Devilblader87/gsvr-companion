@@ -122,7 +122,7 @@ class Child(unittest.TestCase):
         self.assertEqual(sorted(f["progress"] for f in b), [f["progress"] for f in b])
         self.assertTrue({"vfs", "terrain", "objects"} & {f["stage"] for f in b})
         sc = rosebuild.read_sidecar(self.rdir, A)
-        self.assertEqual((sc["conv"], sc["install"]), (stub.VERSION, rosebuild.fingerprint(stub, self.inst)))
+        self.assertEqual((sc["conv"], sc["install"]), (stub.pack_version(A), rosebuild.fingerprint(stub, self.inst)))   # birthisland: VERSION + its PACK_REV
         self.assertEqual(sc["warnings"], [])
         with open(rosebuild.pack_path(self.rdir, A), "rb") as fh:
             self.assertEqual(fh.read(), stub._pack_bytes(A))

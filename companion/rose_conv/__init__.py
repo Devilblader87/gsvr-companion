@@ -46,7 +46,13 @@ import rose_lobby                        # noqa: E402
 import rose_avatar_pack as RA            # noqa: E402
 import rose_ui                           # noqa: E402
 
-WRAPPER_REV = 1                          # bump when this file or lobby_default.json changes what a pack contains
+WRAPPER_REV = 5                          # bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
+# per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
+# birthisland 2: walk grid slope limit 2.0 (ROSE w11 leveling: at 1.0 the five arms of the island were separate walk components, 67 of 81 monster points unreachable from the start)
+PACK_REV = {"birthisland": 2}
+# per-zone walk grid slope limit (rise / run per cell) when it differs from the converter default 1.0. Birth Island: 1.75 still leaves 32 monster points unreachable, 2.0 connects all 81
+# (tools/rose_spawn_fixture.py, docs/design/rose_leveling.md); the other zones are connected at 1.0 (every monster point reachable from the start)
+ZONE_MAX_SLOPE = {20: 2.0}
 # sha256 of the upstream main() sources that _zone_bytes / _avatar_bytes mirror (test_rose_conv.py fails when a sync changes them)
 MIRRORED = {"rose_pack.main": "32af484d1d0a80dfdf4957d72910a1d4af932d422a857a47afb08923af8c5e37",
             "rose_avatar_pack.main": "e2539f0ba3ab644610d0d9a69fae4c3f992c1201e70e0152d7c5e2b3ab7428d3"}
@@ -62,6 +68,13 @@ def _read_source():
 
 SOURCE = _read_source()                  # full rose-vrchat commit hash of the copied converter
 VERSION = "rv-%s-%d" % (SOURCE[:8], WRAPPER_REV)
+
+
+def pack_version(name):
+    """the version a built pack of `name` is stamped with (sidecar "conv"): VERSION, plus "-p<rev>" when PACK_REV has a revision for it.
+    rosebuild compares this per pack, so bumping one PACK_REV entry rebuilds only that pack."""
+    rev = PACK_REV.get(name, 0)
+    return VERSION if not rev else "%s-p%d" % (VERSION, rev)
 LOBBY_DEFAULT = os.path.join(_HERE, "lobby_default.json")
 
 
@@ -80,7 +93,7 @@ def _zone(zone, label, all_blocks=True):
 
 # name -> spec; argv = the rose_pack.py / rose_avatar_pack.py arguments the deployed test packs (rose-vrchat out/w5) were made with
 PACKS = {
-    "birthisland": _zone(20, "Birth Island", all_blocks=False),         # 5x5 window around the start event
+    "birthisland": _zone(20, "Birth Island"),                           # the whole island (all blocks; a 5x5 window before PACK_REV birthisland 1, docs/design/rose_mobs_stream.md)
     "luxemtower": _zone(21, "Luxem Tower"),
     "adventurersplain": _zone(22, "Adventurer's Plain"),
     "breezyhills": _zone(23, "Breezy Hills"),
@@ -91,6 +104,15 @@ PACKS = {
     "kenjibeach": _zone(27, "Kenji Beach"),
     "gorgeofsilence": _zone(28, "Gorge of Silence"),
     "junonpolis": _zone(2, "Junon Polis"),
+    "dolphinisland": _zone(3, "Dolphin Island"),                         # WAVE 8: reached from zones 22 / 27 (move22_3); 0 monsters, no gates, quest NPC sends back
+    "luna": _zone(51, "Luna"),                                          # WAVE 8: Junon NPC 1118 gotoLunar (5000 Zuly); snow planet, own sky + lightmaps
+    "eldeon": _zone(61, "Eldeon"),                                       # WAVE 8: Junon NPC 1118 gotoEldeon (20000 Zuly); 53 MB
+    "manasnowfields": _zone(52, "Mana Snowfields"),                      # W10 ZONES: Luna gate LP01 (zone 52); gates 53 / 51
+    "arumicvalley": _zone(53, "Arumic Valley"),                          # W10 ZONES: Luna gate LP02
+    "crystalsnowfields": _zone(54, "Crystal Snowfields"),                # W10 ZONES: Luna gate LP03
+    "freezingplateau": _zone(55, "Freezing Plateau"),                    # W10 ZONES: Luna gate LP04
+    "clanfield": _zone(15, "Clan Field"),                                # CLAN FIELD: zone 15 (the clan hideout AGIT01) = Junon NPC Clan-033 target (needs clan skill 3431)
+    "junonclanfield": _zone(11, "Junon Clan Field"),                    # CLAN FIELD: zone 11 (JG08), the real Junon clan field; Clan-warp01..04 (reward 28) land here
     "goblincaveb1": _zone(31, "Goblin Cave (B1)"),                       # DUNGEON: the Goblin Cave floors (underground: rose_pack seals the walk grid to the cave)
     "goblincaveb2": _zone(32, "Goblin Cave (B2)"),
     "goblincaveb3": _zone(33, "Goblin Cave (B3)"),
@@ -343,7 +365,7 @@ def _zone_bytes(spec, install_dir, run):
         if not st:
             raise BuildError("zone %d has no start event" % zone_id)
         center = RP.Window(0, 0, 1).block_of_file(st[0][0], st[0][2])
-    pack, man, _side = RP.convert(vfs, zone, center, size, 2.5, 2, 1.0, 1.0,
+    pack, man, _side = RP.convert(vfs, zone, center, size, 2.5, 2, ZONE_MAX_SLOPE.get(zone_id, 1.0), 1.0,
                                   chars=True, avatar=True, anim_fps=RP.C.FPS_OUT, with_actj=False, window=window,
                                   atlas_mips=RP.ATLAS_MIPS, atlas_slot=RP.SLOT_PX, env=True, lightmaps=True, sky_px=1024, ui=spec["ui"],
                                   audio=True, audio_opts={},

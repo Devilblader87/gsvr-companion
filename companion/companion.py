@@ -305,6 +305,21 @@ class State:
                 out["fv"] = 2
             return out
 
+    def log_ok(self):
+        """False = the watched VRChat log folder has no fresh output_log although the world polls status.json
+        (UnityPlayer). A plain bool: status.json is public, no folder names."""
+        d = getattr(self.args, "vrchat_log_dir", None)
+        if time.time() - getattr(self, "unity_poll_t", 0) > 120:
+            return True                                 # nobody from VRChat asks: nothing to warn about
+        now = time.time()
+        c = getattr(self, "_log_ok_cache", None)
+        if c is None or now - c[0] > 5:
+            c = self._log_ok_cache = (now, logwatch.log_health(d)[0])
+        if not c[1] and not getattr(self, "_log_warned", False):
+            self._log_warned = True
+            log("WARNING: " + logwatch.LOG_WARNING)
+        return c[1]
+
     def status_json(self):
         rb = self.rosebuild.state(cached=True)            # outside self.lock; no disk IO (rows refreshed off the request path)
         with self.lock:
@@ -313,6 +328,7 @@ class State:
         d["rose"]["error"] = rosebuild.scrub(d["rose"].get("error"))      # status.json is public: no user folder names
         d["rose"]["text"] = rosebuild.scrub(d["rose"]["text"])
         d["rose_build"] = rosebuild.public_state(rb)
+        d["test_scenario"] = rose.test_scenario(getattr(self.args, "rose_dir", None))      # one-build test rounds (docs/testing.md); "" outside the test container
         return d
 
     def rose_update(self, name, fields):
@@ -336,7 +352,7 @@ class State:
                 "percent": st["percent"], "phase": st["phase"],
                 "ask": [k for k, v in self.ask.items() if v is None][:1],
                 "ping": self.ping, "world": self.world, "world_ok": self.world_ok,
-                "index_rev": self.index_rev, "log": self.args.vrchat_log_dir is not None,
+                "index_rev": self.index_rev, "log": self.args.vrchat_log_dir is not None, "log_ok": self.log_ok(),
                 "models": models.public(self.models),
                 "holo": holo.public(self.holo),
                 "rose": rose.public(self.rose),
@@ -726,6 +742,14 @@ class State:
         if not d:
             log("WARNING: no VRChat log dir (use --vrchat-log-dir); map requests from the world disabled")
             return
+        if getattr(self.args, "vrchat_log_auto", False) and not logwatch.newest_log(d):
+            while not stop.wait(5):                             # VRChat may start later: look again until a log shows up
+                nd = logwatch.default_log_dir()
+                if nd and logwatch.newest_log(nd):
+                    d = self.args.vrchat_log_dir = nd
+                    break
+                if nd and nd != d:
+                    d = self.args.vrchat_log_dir = nd
         log(f"watching VRChat logs in {d}")
         tailer = logwatch.MultiTailer(d) if getattr(self.args, "follow_all_logs", False) else logwatch.LogTailer(d)
         for line in tailer.lines(stop):
@@ -775,6 +799,8 @@ def make_handler(state):
             path = self.path.split("?", 1)[0]
             client = self.client_address[0]
             # status polls (the GUI every 2 s, the world's wait loop) are logged once per client/agent, not per request
+            if path == "/status.json" and "UnityPlayer" in ua:
+                state.unity_poll_t = time.time()
             if path not in QUIET_PATHS or _first_poll(client, ua, path):
                 log(f"HTTP {self.command} {self.path} from {client} Host={host or '-'} UA={ua}"
                     + (" (further polls of this path are not logged)" if path in QUIET_PATHS else ""))
@@ -1108,7 +1134,8 @@ def main(argv=None):
     ap.add_argument("--prebuilt-mod", help="with --prebuilt-dir: treat bare <map>.bin files as this mod (e.g. cstrike)")
     ap.add_argument("--mods", help="with --game-root: comma list of mods to allow (default: all present)")
     ap.add_argument("--steam-root", help="Steam install dir (default: auto-detect)")
-    ap.add_argument("--vrchat-log-dir", default=logwatch.default_log_dir())
+    ap.add_argument("--vrchat-log-dir", default=None,
+                    help="VRChat log folder (overrides auto-detection; Linux/Proton: .../steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat)")
     ap.add_argument("--follow-all-logs", action="store_true", help=argparse.SUPPRESS)  # tests only: two VRChat clients, follow every log
     ap.add_argument("--port", default="auto",
                     help="'auto' (default): first free of " + ",".join(map(str, PORT_CANDIDATES)) + "; or a fixed port")
@@ -1162,6 +1189,9 @@ def main(argv=None):
     if any(not 0 < p < 65536 for p in ports):
         ap.error("port out of range")
 
+    a.vrchat_log_auto = not a.vrchat_log_dir
+    if a.vrchat_log_auto:
+        a.vrchat_log_dir = logwatch.default_log_dir()
     log(f"GSVR companion {VERSION} (python {sys.version.split()[0]}, {sys.platform}, {runtime.install_kind()})")
     buildprog.TRACKER.set_history_file(os.path.join(a.cache_dir, "build_times.json"))     # status.json "build": eta of the last build
     srv, port = bind_server(ports)           # bind first: a port problem shows up at once, before the Steam scan

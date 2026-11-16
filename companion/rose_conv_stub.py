@@ -13,7 +13,14 @@ GSVR_ROSE_STUB_BURN=1.
 """
 import os, struct, threading, time
 
-VERSION = "rv-stub-1"
+VERSION = "rv-stub-3"
+PACK_REV = {"birthisland": 2}           # mirrors rose_conv: per-pack revision
+
+
+def pack_version(name):
+    rev = PACK_REV.get(name, 0)
+    return VERSION if not rev else "%s-p%d" % (VERSION, rev)
+
 STAGES = (("vfs", 2), ("terrain", 4), ("objects", 3), ("write", 1))
 STEP_S = float(os.environ.get("GSVR_ROSE_STUB_STEP_S", "0.01"))   # live tests slow it down to watch "building"
 BURN = os.environ.get("GSVR_ROSE_STUB_BURN", "") == "1"           # each step busy-loops (pure Python, holds the GIL) like rose_conv
@@ -35,7 +42,7 @@ class Cancelled(Exception):
 
 
 PACKS = {
-    "birthisland": {"kind": "zone", "zone": 20, "label": "Birth Island", "args": ["--zone", "20", "--ui"]},
+    "birthisland": {"kind": "zone", "zone": 20, "label": "Birth Island", "args": ["--zone", "20", "--all", "--ui"]},
     "luxemtower": {"kind": "zone", "zone": 21, "args": ["--zone", "21", "--all", "--ui"]},
     "adventurersplain": {"kind": "zone", "zone": 22, "args": ["--zone", "22", "--all", "--ui"]},
     "breezyhills": {"kind": "zone", "zone": 23, "args": ["--zone", "23", "--all", "--ui"]},
@@ -49,6 +56,15 @@ PACKS = {
     "goblincaveb2": {"kind": "zone", "zone": 32, "args": ["--zone", "32", "--all", "--ui"]},
     "goblincaveb3": {"kind": "zone", "zone": 33, "args": ["--zone", "33", "--all", "--ui"]},
     "junonpolis": {"kind": "zone", "zone": 2, "args": ["--zone", "2", "--all", "--ui"]},
+    "dolphinisland": {"kind": "zone", "zone": 3, "args": ["--zone", "3", "--all", "--ui"]},
+    "manasnowfields": {"kind": "zone", "zone": 52, "args": ["--zone", "52", "--all", "--ui"]},
+    "arumicvalley": {"kind": "zone", "zone": 53, "args": ["--zone", "53", "--all", "--ui"]},
+    "crystalsnowfields": {"kind": "zone", "zone": 54, "args": ["--zone", "54", "--all", "--ui"]},
+    "freezingplateau": {"kind": "zone", "zone": 55, "args": ["--zone", "55", "--all", "--ui"]},
+    "luna": {"kind": "zone", "zone": 51, "args": ["--zone", "51", "--all", "--ui"]},
+    "eldeon": {"kind": "zone", "zone": 61, "args": ["--zone", "61", "--all", "--ui"]},
+    "junonclanfield": {"kind": "zone", "zone": 11, "args": ["--zone", "11", "--all", "--ui"]},
+    "clanfield": {"kind": "zone", "zone": 15, "args": ["--zone", "15", "--all", "--ui"]},
     "login": {"kind": "lobby", "args": ["--lobby"]},
     "avatar": {"kind": "avatar", "args": []},
 }

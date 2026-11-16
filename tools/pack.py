@@ -116,6 +116,9 @@
 #   optional speech sentences (tools/sentences.py; valve / svencoop only): "SENT" count = sentences, the
 #     sentences.txt lines the map's scripted_sentence / "!NAME" ambients / talk monsters can say as word records
 #     (clip = index into SNDS, whose clip list then also holds the word wavs) + the sentence groups
+#   optional landmark PVS (tools/lpvs.py, T3 level transition stage 4): "LPVS" count = info_landmark entities; header H0 W headnode 0,
+#     then per landmark { entityIndex, flags, leaf, visibleLeaves, uint32 bits[W] } (bit 2n+s: child s of hull-0 node n is marked by
+#     the engine's PVSMark for that landmark's leaf); not written for --only-model
 #
 # Design choice (task item 3, option a): ONE mesh / ONE material / ONE draw call. GoldSrc textures tile, so UVs stay
 # in texture space and every vertex carries its atlas rect; the shader does frac() tiling inside the rect and
@@ -131,6 +134,14 @@ GUTTER = 8             # px around each atlas texture at mip 0 (→ 1 px at mip 
 MIPS = 4
 NEUTRAL = 128          # lightmap value meaning "1.0" after the shader's ×2 overbright
 HEADER = 64
+# Map pack revision: the ONE shared entry for every change of the map pack output (sections, layouts). Bump it by one with each change; the companion's
+# cache key for map packs is the sha1 over the converter's *.py files (companion/builder.py Converter._version), so this line changing is what rebuilds
+# every cached map pack. Parallel branches that both bump it conflict on this line on purpose: resolve to max + 1. Model packs have their own
+# per-mod PACK_REV in tools/modelpack.py.
+#   1  GSV3 baseline
+#   2  T3 level transition stage 4: optional section LPVS (landmark PVS marks, tools/lpvs.py)
+#   3  T3 light styles: optional section LSTY
+MAP_PACK_REV = 3
 
 # brush entities that are never drawn in GoldSrc (or are pure volumes)
 INVISIBLE_CLASSES = ("trigger_", "func_ladder", "func_buyzone", "func_bomb_target", "func_hostage_rescue",
@@ -1181,6 +1192,28 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
         lm.append((ms, mt, rgb is not None))
         blocks.append((w, h, rgb) if rgb is not None else (1, 1, None))
     LW, LH, light, origins, neutral, steps, pages = build_lightmap(blocks, log)
+    # light styles (tools/lightstyle.py): ids per face + extra style blocks; maps without any stay byte-identical (no LSTY)
+    import lightstyle
+    fids = [lightstyle.face_ids(f) if blocks[i][2] is not None else (0, 255, 255, 255) for i, f in enumerate(all_faces)]
+    styled = any(not lightstyle.is_plain(ids) for ids in fids)
+    sty_where, sty_step, SW, SH, sty_img, sty_verts = [None] * len(all_faces), 1, 0, 0, b"", []
+    if styled:
+        infos = []
+        for i, f in enumerate(all_faces):
+            w_, h_, rgb_ = blocks[i]
+            ex = lightstyle.extra_blocks(b, f, w_, h_) if rgb_ is not None else []
+            infos.append((w_, h_, ex) if ex else None)
+        try:
+            SW, SH, sty_img, sty_where, sty_step = lightstyle.layout(infos, pick_atlas, halve_block)
+        except ValueError as ex:
+            log(f"light styles: skipped ({ex}); the map keeps its style 0 lightmap only")
+            styled = False
+            SW = SH = 0
+            sty_img, sty_where, sty_step = b"", [None] * len(all_faces), 1
+    if styled:
+        log(f"light styles: {sum(1 for x in fids if not lightstyle.is_plain(x))} styled faces, "
+            f"{sum(1 for x in infos if x)} with extra blocks, style atlas {SW}x{SH}"
+            f"{' (half resolution)' if sty_step == 2 else ''}")
 
     mat_name_len, mat_max = mat_limits(mod)
     mats, mat_path = load_materials(materials_paths(path, game_root, mod), mat_name_len, mat_max)
@@ -1197,6 +1230,7 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
             ms, mt, lit = lm[face_no]
             ox, oy = origins[face_no]
             stp = steps[face_no]
+            f_ids, f_where = fids[face_no], sty_where[face_no]
             face_no += 1
             s_, t_, miptex, _ = b.texinfo[f[4]]
             _n, tw, th, _e = b.textures[miptex]
@@ -1215,6 +1249,11 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
                 else:
                     uv1 += [(neutral[0] + 0.5) / LW, (neutral[1] + 0.5) / LH]
                 rect += r
+                if styled:
+                    if f_where is not None:
+                        sty_verts.append(lightstyle.vertex_uv(f_where, sty_step, ss, tt, ms, mt, SW, SH) + (f_ids,))
+                    else:
+                        sty_verts.append((0.0, 0.0, 0.0, f_ids))
             letter = ord(material_of(b.textures[miptex][0], mats, mat_cache, mat_name_len))
             for i in range(1, len(poly) - 1):
                 groups[g] += [base, base + i, base + i + 1]
@@ -1229,6 +1268,8 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
                 uv0 += [0.0, 0.0]
                 uv1 += [(neutral[0] + 0.5) / LW, (neutral[1] + 0.5) / LH]
                 rect += [0.0, 0.0, 0.0, 0.0]
+                if styled:
+                    sty_verts.append((0.0, 0.0, 0.0, (0, 255, 255, 255)))
             for a_, b_, c_ in BOX_TRIS:
                 groups["C"] += [base + a_, base + b_, base + c_, base + a_, base + c_, base + b_]
                 gmat["C"] += bytes([ord("C"), ord("C")])
@@ -1340,7 +1381,7 @@ def from_bsp_v3(path, game_root, mod, max_tex, brushes, log, only_model=None):
                 atlas=(AW, AH, atlas), light=(LW, LH, light), ents=b.entities.encode("latin-1"),
                 ntex=len(texs), flags=(FLAG_LIGHT if has_light else 0) | (FLAG_LM_PAGES2 if pages > 1 else 0), stats=stats,
                 v3=dict(recs=out_recs, plan=plan, hnod=hnod, ents=ents_out, ekvs=ekvs), tmat=bytes(tmat) if mats else None,
-                rend=rend)
+                rend=rend, lsty=(SW, SH, sty_img, sty_verts) if styled else None)
 
 
 def write_v3(out, p):
@@ -1385,6 +1426,11 @@ def write_v3(out, p):
     if p.get("rend"):
         assert len(p["rend"]) == len(v3["recs"])
         secs.append((b"REND", b"".join(struct.pack("<2i", *w) for w in p["rend"]), len(p["rend"])))
+    if p.get("lsty"):
+        import lightstyle
+        SW_, SH_, img_, verts_ = p["lsty"]
+        assert len(verts_) == vc
+        secs.append((b"LSTY", lightstyle.section(SW_, SH_, img_, verts_), vc))
     if p.get("snds"):
         import sounds
         secs.append((b"SNDS", sounds.section(p["snds"]), len(p["snds"])))
@@ -1394,6 +1440,10 @@ def write_v3(out, p):
     if p.get("sent"):
         import sentences
         secs.append((b"SENT", sentences.section(p["sent"]), len(p["sent"])))
+    if p.get("lpvs"):
+        import lpvs
+        blob, n = lpvs.section(p["lpvs"])
+        secs.append((b"LPVS", blob, n))
     dir_off = core
     off = dir_off + 4 + 16 * len(secs)
     directory = struct.pack("<i", len(secs))
@@ -1675,6 +1725,14 @@ if __name__ == "__main__":
         except Exception as e:                       # noqa: BLE001 — without the section the runtime classifies itself, slower
             log(f"ceil: skipped ({e})")
         bprog.progress("ceil", 1, 1)
+    if a.format == 3 and a.bsp and not a.only_model:
+        # T3 stage 4: the PVS marks of every info_landmark (CChangeLevel::ChangeList walks the landmark PVS); same entity order as ENTS
+        import lpvs
+        from bsp30 import Bsp
+        try:
+            data["lpvs"] = lpvs.build(Bsp(a.bsp), entity_dicts(data["ents"].decode("latin-1", "replace")), log=log)
+        except Exception as e:                       # noqa: BLE001 — without the section the runtime keeps the 2048 u stand-in
+            log(f"lpvs: skipped ({e})")
     if a.format == 3 and a.bsp and not a.no_nav:
         import nav5
         np_ = a.nav or find_nav(a.bsp, a.game_root, a.mod)

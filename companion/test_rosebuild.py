@@ -104,7 +104,7 @@ class Builds(Base):
         self.assertEqual(stub.CALLS[0], A)
         self.assertEqual(sorted(stub.CALLS), sorted(stub.PACKS))   # background prebuild of the rest after the first build
         sc = rosebuild.read_sidecar(self.rdir, A)
-        self.assertEqual(sc["conv"], stub.VERSION)
+        self.assertEqual(sc["conv"], stub.pack_version(A))      # birthisland has a per-pack revision (PACK_REV)
         self.assertEqual(sc["install"], rosebuild.fingerprint(stub, self.inst))
         self.assertEqual(sc["bytes"], os.path.getsize(rosebuild.pack_path(self.rdir, A)))
         self.assertIn("T", sc["built"])
@@ -132,11 +132,74 @@ class Builds(Base):
         self.assertEqual(sorted(p["progress"] for p in b), [p["progress"] for p in b])   # never goes back
         self.assertTrue({"vfs", "terrain", "objects"} <= {p["stage"] for p in b})
 
+    def test_first_contact_order(self):
+        """W10 FIRST LOAD: the background prebuild builds lobby, avatar, start zone first, then the rest in PACKS order"""
+        self.assertEqual(rosebuild.start_zone(stub), A)
+        self.assertEqual(rosebuild.first_contact(stub), ["login", "avatar", A])
+        order = rosebuild.prebuild_order(stub, list(stub.PACKS))
+        self.assertEqual(order[:3], ["login", "avatar", A])
+        self.assertEqual(sorted(order), sorted(stub.PACKS))
+        rest = [n for n in stub.PACKS if n not in ("login", "avatar", A)]
+        self.assertEqual(order[3:], rest)
+        self.assertEqual(rosebuild.warm_after(stub, "login"), ["avatar", A])
+        self.assertEqual(rosebuild.warm_after(stub, "avatar"), [A])
+        self.assertEqual(rosebuild.warm_after(stub, A), [])
+        self.assertEqual(rosebuild.warm_after(stub, B), [])
+        self.m.set_install(self.inst)
+        self.assertTrue(self.m.wait_idle(20))
+        self.assertEqual(stub.CALLS[:3], ["login", "avatar", A])
+        self.assertEqual(sorted(stub.CALLS), sorted(stub.PACKS))
+
+    def test_warm_up_after_lobby_request(self):
+        """W10 FIRST LOAD: a request for the lobby pack queues avatar + start zone right behind it (built while the player is in the lobby);
+        the avatar request queues the start zone; a zone request queues nothing; asking again does not reorder or log twice"""
+        stub.HOLD = threading.Event()
+        self.m.set_install(self.inst, prebuild=False)
+        self.assertEqual(self.m.request("login")["state"], "building")
+        self.assertTrue(until(lambda: self.m.cur is not None and self.m.cur["name"] == "login"))
+        self.assertEqual(self.m.state()["queue"][:2], ["avatar", A])
+        self.m.request("login")                                     # the world logs the request again: no change
+        self.assertEqual("\n".join(self.logs).count("[rose] warm-up after login: avatar, " + A + " next"), 1)
+        stub.HOLD.set()
+        self.assertTrue(until(lambda: (self.last("login") or {}).get("state") == "ready"))
+        self.assertTrue(self.m.wait_idle(30))
+        self.assertEqual(stub.CALLS[:3], ["login", "avatar", A])
+        self.assertEqual(self.m.pack_state(A), "fresh")
+        self.assertEqual(self.m.request("avatar")["state"], "ready")    # built in the background meanwhile: served at once
+        self.assertEqual(self.m.request(A)["state"], "ready")
+
+    def test_warm_up_skips_fresh_and_zone_requests(self):
+        self.m.set_install(self.inst, prebuild=False)
+        self.m.request(A)                                           # a zone request: no warm-up
+        self.assertNotIn("warm-up", "\n".join(self.logs))
+        self.assertTrue(self.m.wait_idle(30))                       # (the first on-demand build starts the background prebuild of the rest)
+        n0 = len(stub.CALLS)
+        self.assertEqual(self.m.request("avatar")["state"], "ready")    # fresh: no build, no warm-up of the fresh start zone
+        self.assertTrue(self.m.wait_idle(10))
+        self.assertEqual(len(stub.CALLS), n0)
+
     def test_install_known_starts_prebuild(self):
         self.m.set_install(self.inst)
         self.assertTrue(self.m.wait_idle(20))
         self.assertEqual(sorted(stub.CALLS), sorted(stub.PACKS))
         self.assertEqual(self.updates, [])                       # background builds do not touch the slot
+
+    def test_pack_rev_rebuilds_only_that_pack(self):
+        """ROSE w8: bumping one PACK_REV entry makes only that pack stale (the others keep their sidecar version = VERSION)."""
+        self.m.set_install(self.inst, prebuild=True)
+        self.m.request(A)
+        self.assertTrue(self.m.wait_idle(30))
+        self.m.queue.clear()
+        self.assertEqual({n: self.m.pack_state(n) for n in (A, B, C)}, {A: "fresh", B: "fresh", C: "fresh"})
+        self.assertEqual(rosebuild.read_sidecar(self.rdir, B)["conv"], stub.VERSION)
+        old = dict(stub.PACK_REV)
+        try:
+            stub.PACK_REV[A] = old.get(A, 0) + 1
+            self.assertEqual({n: self.m.pack_state(n) for n in (A, B, C)}, {A: "stale", B: "fresh", C: "fresh"})
+        finally:
+            stub.PACK_REV.clear()
+            stub.PACK_REV.update(old)
+        self.assertEqual(self.m.pack_state(A), "fresh")
 
     def test_stale_rules(self):
         self.m.set_install(self.inst, prebuild=False)
@@ -232,7 +295,7 @@ class Builds(Base):
     def test_join_background_build(self):
         stub.HOLD = threading.Event()
         self.m.set_install(self.inst)                         # prebuild: the first PACKS entry runs in the background
-        first = list(stub.PACKS)[0]
+        first = rosebuild.prebuild_order(stub, list(stub.PACKS))[0]     # W10: the lobby pack first
         self.assertTrue(until(lambda: self.m.cur is not None and self.m.cur["name"] == first))
         self.assertEqual(self.m.cur["kind"], "background")
         self.assertEqual(self.m.request(first)["state"], "building")
@@ -244,7 +307,7 @@ class Builds(Base):
     def test_preempt_background(self):
         stub.HOLD = threading.Event()
         self.m.set_install(self.inst)
-        first = list(stub.PACKS)[0]
+        first = rosebuild.prebuild_order(stub, list(stub.PACKS))[0]     # W10: the lobby pack first
         self.assertNotEqual(first, B)
         self.assertTrue(until(lambda: self.m.cur is not None and self.m.cur["name"] == first))
         self.assertTrue(os.path.exists(rosebuild.pack_path(self.rdir, first) + ".part"))

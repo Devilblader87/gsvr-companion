@@ -14,74 +14,146 @@ REQ = re.compile(r"\[GSVR-REQ\]\s+(.*?)\s*$")
 WORLD = re.compile(r"Joining (wrld_[0-9A-Za-z\-]+)")
 
 
-VRC_SUB = ("steamapps", "compatdata", "438100", "pfx", "drive_c", "users", "steamuser", "AppData", "LocalLow", "VRChat", "VRChat")
-STEAM_SUBS = ((".steam", "steam"), (".steam", "debian-installation"), (".steam", "root"), (".local", "share", "Steam"),
-              (".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"), ("snap", "steam", "common", ".local", "share", "Steam"))
+VRC_APPID = "438100"
+PROTON_REL = ("steamapps", "compatdata", VRC_APPID, "pfx", "drive_c", "users", "steamuser",
+              "AppData", "LocalLow", "VRChat", "VRChat")
+LINUX_STEAM_ROOTS = (".steam/steam", ".steam/debian-installation", ".local/share/Steam",
+                     ".var/app/com.valvesoftware.Steam/.local/share/Steam")
+STALE_S = 600                  # no output_log written for 10 min while the world polls us = wrong folder
+LOG_WARNING = ("VRChat log not found / not updating - set the VRChat log folder "
+               "(Linux/Proton: steamapps/compatdata/438100/pfx/...)")
+
+
+def is_wine():
+    """Windows Python under Wine/Proton: WINE env vars, HKCU\\Software\\Wine, or Z:\\ = the host's /."""
+    if sys.platform != "win32":
+        return False
+    if os.environ.get("WINEPREFIX") or os.environ.get("WINELOADER") or os.environ.get("WINEDLLPATH"):
+        return True
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Wine"))
+        return True
+    except (ImportError, OSError):
+        pass
+    return os.path.isdir("Z:\\home") and os.path.isdir("Z:\\etc")
+
+
+def host_root():
+    """Where the host (Linux) file system is visible: Z:\\ under Wine, / natively."""
+    return "Z:\\" if sys.platform == "win32" else "/"
+
+
+def _host(zroot, posix):
+    """POSIX absolute path -> path this process can open (through the Z: drive under Wine)."""
+    return os.path.join(zroot, *[x for x in posix.replace("\\", "/").split("/") if x])
+
+
+def _vdf_libraries(steam_root, zroot):
+    out = []
+    try:
+        import vdf
+        data = vdf.load(os.path.join(steam_root, "steamapps", "libraryfolders.vdf"))
+    except (OSError, ValueError, ImportError):
+        return out
+    for k, v in (data.get("libraryfolders") or {}).items():
+        if not k.isdigit():
+            continue
+        p = v.get("path") if isinstance(v, dict) else v
+        if p:
+            p = str(p)
+            out.append(_host(zroot, p) if p.startswith("/") else p)     # POSIX path in the VDF -> via Z:
+    return out
+
+
+def _home_dirs(zroot, home_env):
+    homes = []
+    if home_env:
+        homes.append(_host(zroot, home_env) if home_env.startswith("/") else home_env)
+    try:
+        homes += [os.path.join(zroot, "home", n) for n in sorted(os.listdir(os.path.join(zroot, "home")))]
+    except OSError:
+        pass
+    seen, out = set(), []
+    for h in homes:
+        k = os.path.normcase(os.path.normpath(h))
+        if k not in seen and os.path.isdir(h):
+            seen.add(k)
+            out.append(h)
+    return out
+
+
+def proton_candidates(zroot=None, home_env=None, extra_roots=()):
+    """VRChat log dirs a Linux/Proton install could use, in search order: the Steam roots under the home dirs
+    (~/.steam/steam, ~/.steam/debian-installation, ~/.local/share/Steam, Flatpak), extra_roots, and every library
+    of their libraryfolders.vdf. Only Steam roots/libraries that exist (have steamapps/) yield a candidate."""
+    zroot = host_root() if zroot is None else zroot
+    if home_env is None:
+        home_env = os.environ.get("HOME", "")
+    queue = []
+    for h in _home_dirs(zroot, home_env):
+        queue += [os.path.join(h, *r.split("/")) for r in LINUX_STEAM_ROOTS]
+    queue += list(extra_roots)
+    out, seen = [], set()
+    while queue:
+        r = queue.pop(0)
+        k = os.path.normcase(os.path.normpath(r))
+        if k in seen:
+            continue
+        seen.add(k)
+        if os.path.isdir(os.path.join(r, "steamapps")):
+            out.append(os.path.join(r, *PROTON_REL))
+            queue += _vdf_libraries(r, zroot)
+    return out
 
 
 def _newest_mtime(d):
     try:
         f = newest_log(d)
-        return os.path.getmtime(f) if f else -1.0
+        return os.path.getmtime(f) if f else None
     except OSError:
-        return -1.0
+        return None
 
 
-def _library_roots(steam_root):
-    """steam_root plus the extra libraries from libraryfolders.vdf ("path" lines)"""
-    out = [steam_root]
-    vdf = os.path.join(steam_root, "steamapps", "libraryfolders.vdf")
-    try:
-        with open(vdf, encoding="utf-8", errors="replace") as fh:
-            for m in re.finditer(r'"path"\s+"([^"]+)"', fh.read()):
-                p = m.group(1).replace("\\\\", "\\")
-                if p not in out:
-                    out.append(p)
-    except OSError:
-        pass
-    return out
+def pick_best(cands):
+    """The candidate whose newest output_log is most recent; else the first existing dir; else None."""
+    best, best_t = None, None
+    for d in cands:
+        t = _newest_mtime(d)
+        if t is not None and (best_t is None or t > best_t):
+            best, best_t = d, t
+    if best:
+        return best
+    return next((d for d in cands if os.path.isdir(d)), None)
 
 
-def proton_log_candidates(homes, to_local=lambda p: p):
-    """VRChat log dirs inside Steam's Proton prefix (app 438100) for each home dir; to_local maps a POSIX path to this
-    process's view (Wine: "/home/x" -> "Z:\\home\\x")."""
-    seen, out = set(), []
-    for h in homes:
-        for sub in STEAM_SUBS:
-            root = to_local(os.path.join(h, *sub))
-            for lib in _library_roots(root):
-                lib = to_local(lib) if lib.startswith("/") else lib
-                d = os.path.join(lib, *VRC_SUB)
-                if d not in seen and os.path.isdir(d):
-                    seen.add(d); out.append(d)
-    return out
-
-
-def _wine_z(p):
-    return "Z:" + p.replace("/", "\\")
-
-
-def default_log_dir():
-    """Windows: %USERPROFILE%\\AppData\\LocalLow\\VRChat\\VRChat. Under Wine/Proton (the companion in its own prefix, 2026-11-15
-    Linux report) that is the companion's prefix, not VRChat's: also look in Steam's Proton prefix of VRChat (compatdata/438100)
-    through the Z: drive, and take the folder whose newest output_log is the most recent. Native Linux: the same search."""
-    cands = []
+def default_log_dir(zroot=None, home_env=None, wine=None, extra_roots=(), override=None):
+    """override (GUI field / --vrchat-log-dir) wins. Plain Windows: %USERPROFILE%\\AppData\\LocalLow\\VRChat\\VRChat.
+    Under Wine and on native Linux: pick_best over proton_candidates (+ the Wine prefix's own folder)."""
+    if override:
+        return override
+    wine = is_wine() if wine is None else wine
+    own = None
     if sys.platform == "win32":
-        base = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-        cands.append(os.path.join(base, "AppData", "LocalLow", "VRChat", "VRChat"))
-        if os.path.isdir("Z:\\home"):               # Wine maps / to Z:
-            homes = []
-            try:
-                homes = ["/home/" + n for n in os.listdir("Z:\\home")]
-            except OSError:
-                pass
-            cands += proton_log_candidates(homes, _wine_z)
-    else:
-        cands += proton_log_candidates([os.path.expanduser("~")])
-    live = [d for d in cands if os.path.isdir(d)]
-    if not live:
-        return cands[0] if cands else None
-    return max(live, key=_newest_mtime)
+        own = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "AppData", "LocalLow", "VRChat", "VRChat")
+        if not wine and zroot is None:
+            return own
+    elif zroot is None and sys.platform != "linux":
+        return None      # macOS: no VRChat PC; pass --vrchat-log-dir
+    cands = proton_candidates(zroot, home_env, extra_roots) + ([own] if own else [])
+    return pick_best(cands) or own
+
+
+def log_health(log_dir, now=None):
+    """-> (ok, reason): ok when an output_log was written within STALE_S"""
+    if not log_dir:
+        return False, "no folder"
+    t = _newest_mtime(log_dir)
+    if t is None:
+        return False, "no output_log"
+    if (time.time() if now is None else now) - t > STALE_S:
+        return False, "output_log not updating"
+    return True, ""
 
 
 def newest_log(log_dir):

@@ -31,6 +31,22 @@ def public(slot):
     return {k: v for k, v in slot.items() if k not in ("path", "key") and (building or k not in BUILD_KEYS)}
 
 
+TEST_FILE = "test_scenario.txt"
+
+
+def test_scenario(rose_dir):
+    """status.json "test_scenario": the one-build test selection (tools/vrctest_round.sh): the first line of <rose dir>/test_scenario.txt when it
+    is a valid scenario name ([a-z0-9_]{1,32}), else "". Only the test container ever has that file; a world acts on it only in a test build
+    (GsvrRoseTestSelect.armed, refused by GsvrUploadGuard for uploads)."""
+    try:
+        with open(os.path.join(rose_dir, TEST_FILE), "rb") as fh:
+            raw = fh.read(64)
+    except (OSError, TypeError):
+        return ""
+    name = raw.decode("ascii", "ignore").strip().split("\n")[0].strip()
+    return name if NAME_RE.match(name) else ""
+
+
 def valid_name(name):
     return isinstance(name, str) and NAME_RE.match(name) is not None
 

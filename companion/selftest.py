@@ -581,6 +581,10 @@ def war3_test(work, war3_root):
     r = unittest.TextTestRunner(verbosity=0).run(unittest.defaultTestLoader.loadTestsFromModule(test_csshare))
     check(r.wasSuccessful(), "CS-SHARE: BSP entity / wad / sky parser (hostile input), stock content never packed or written, "
                              "bundle rules shared with the relay, host upload -> guest install into cstrike_downloads")
+    import test_modules                      # game modules: ed25519, signed manifest, hashes, loader, rollback, no downgrade
+    r = unittest.TextTestRunner(verbosity=0).run(unittest.defaultTestLoader.loadTestsFromModule(test_modules))
+    check(r.wasSuccessful(), "MODULES: ed25519 vectors, signed manifest + sha256 chain, loader overrides built-in only when enabled, "
+                             "rollback, no downgrade / replay, hostile zips, tampered cache falls back")
     import test_relay
     r = unittest.TextTestRunner(verbosity=0).run(unittest.defaultTestLoader.loadTestsFromModule(test_relay))
     check(r.wasSuccessful(), "MAP-RELAY: relay service (limits, TTL, eviction, rate limits, no listing, admin delete)")
