@@ -53,6 +53,9 @@ WRAPPER_REV = 6                          # bump when this file or lobby_default.
 # per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
 # birthisland 2: walk grid slope limit 2.0 (ROSE w11 leveling: at 1.0 the five arms of the island were separate walk components, 67 of 81 monster points unreachable from the start)
 PACK_REV = {"birthisland": 2}
+# 0.9.47g: a 2x2 fully transparent DXT3 collision texture (castlegate01coll / guroomdaricoll[2]: alpha 0 = invisible in the original) is now packed as RGBA32 instead of an
+# opaque 4x4 loader stand-in (solid untextured boxes in the Junon gate): the 9 zones that use one rebuild (tools/rose_patches/tiny_dxt_alpha.patch)
+PACK_REV.update({n: 1 for n in ("junonpolis", "adventurersplain", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "dolphinisland")})
 # per-zone walk grid slope limit (rise / run per cell) when it differs from the converter default 1.0. Birth Island: 1.75 still leaves 32 monster points unreachable, 2.0 connects all 81
 # (tools/rose_spawn_fixture.py, docs/design/rose_leveling.md); the other zones are connected at 1.0 (every monster point reachable from the start)
 ZONE_MAX_SLOPE = {20: 2.0}
@@ -131,8 +134,10 @@ for _n, _s in PACKS.items():
     if _s["kind"] != "avatar":
         PACK_REV[_n] = PACK_REV.get(_n, 0) + BONT_REV
 del _n, _s
-PACK_REV["avatar"] = 3          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
+PACK_REV["avatar"] = 4          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
+#                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform
+#                                     animations, cast effects on the motion frame events, the party level-up effect)
 
 
 # ------------------------------------------------------------------ install check

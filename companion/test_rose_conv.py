@@ -54,17 +54,35 @@ class VersionAndTable(unittest.TestCase):
     def test_pack_version(self):
         """ROSE w13: WRAPPER_REV 5 (weapon-class motions in every zone pack). ROSE w12 summons: WRAPPER_REV 4 (SKDB carries the magic item skills + summon npcs, every zone the summon actors: all packs rebuild once).
         LOAD PACKAGE 5: every zone + the login pack one revision more (BONT, the pre-baked bone texture), the avatar pack (no clips) keeps its version; Birth Island had 2 already.
-        ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py). fx11: avatar 3 (EFCT version 2: effect meshes, dummy bones, statuses). w15 skilltips: WRAPPER_REV 6 (SKDB skill descriptions)."""
+        ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py). fx11: avatar 3 (EFCT version 2: effect meshes, dummy bones, statuses). w15 skilltips: WRAPPER_REV 6 (SKDB skill descriptions).
+        w17-fx: avatar 4 (EFCT version 3: full resolution textures, per-part materials, transform animations, cast frame events)."""
         self.assertEqual(rose_conv.WRAPPER_REV, 6)
         self.assertEqual(rose_conv.BONT_REV, 1)
-        self.assertEqual(rose_conv.PACK_REV, dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=3))
+        tiny = ("junonpolis", "adventurersplain", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "dolphinisland")
+        self.assertEqual(rose_conv.PACK_REV, dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=4, **{n: 2 for n in tiny}))   # 0.9.47g: tiny transparent DXT as RGBA32
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
         self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p3")
-        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p3")          # ROSE w14: QGLB global quest texts + EFCT effects
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p4")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3)
         for n in rose_conv.PACKS:
-            if n not in ("birthisland", "avatar"):
+            if n not in ("birthisland", "avatar") + tiny:
                 self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p1")
+        self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p2")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)
+
+    def test_tiny_dxt_keeps_alpha(self):
+        """0.9.47g: a 2x2 DXT3 texture (Unity cannot create block-compressed < 4x4; the loader's stand-in is OPAQUE) is packed as RGBA32 with its alpha: the fully transparent
+        collision texture of the Junon gate must not turn into a solid box. Synthetic data only."""
+        import rosedds
+        blk = bytes(8) + struct.pack("<HHI", 0xFFFF, 0x0000, 0)          # DXT3 block: alpha 0 everywhere, colour 0 = white
+        out = rosedds.to_pack_texture(dict(w=2, h=2, fmt="DXT3", levels=[blk]))
+        self.assertEqual(out[0], rosedds.FMT_RGBA32)
+        self.assertEqual((out[1], out[2]), (2, 2))
+        self.assertEqual(out[3][0], bytes([255, 255, 255, 0]) * 4)
+        opaque = struct.pack("<HHI", 0xF800, 0x0000, 0)                  # DXT1 1x1, red, 2 mip levels (1x1 only has one)
+        out = rosedds.to_pack_texture(dict(w=1, h=1, fmt="DXT1", levels=[opaque]))
+        self.assertEqual((out[0], out[3][0]), (rosedds.FMT_RGBA32, bytes([255, 0, 0, 255])))
+        big = rosedds.to_pack_texture(dict(w=4, h=4, fmt="DXT3", levels=[blk]))          # 4x4 and larger keep the block format (DXT3 -> DXT5)
+        self.assertEqual(big[0], rosedds.FMT_DXT5)
 
     def test_weapon_motion_table(self):
         """W13: the weapon class -> motion type table the runtime also holds (GsvrRoseItems.WeaponMotionType); every motion type is baked for the avatar"""
@@ -621,11 +639,13 @@ def _fx_ptl(tex="FX/A.DDS", keys=(), loops=1, num=4, coords=1, src=5, dst=2, lif
     return b
 
 
-def _fx_eft(ptls=(), meshes=(), rot=(0.0, 90.0, 0.0)):
-    """synthetic EFT (rose-file-readers eft.rs): particle parts [(ptl path, pos, delay ms)], mesh parts [(mesh, anim, tex, src, dst)]; rot = (pitch, yaw, roll) of every part"""
+def _fx_eft(ptls=(), meshes=(), rot=(0.0, 90.0, 0.0), panim=None):
+    """synthetic EFT (rose-file-readers eft.rs): particle parts [(ptl path, pos, delay ms)], mesh parts [(mesh, anim, tex, src, dst)]; rot = (pitch, yaw, roll) of every part;
+    panim = {particle part index: (use flag, transform animation path, repeat)} (w17-fx)"""
     b = _s32("name") + struct.pack("<I", 0) + _s32("") + struct.pack("<I", 0) + struct.pack("<I", len(ptls))
-    for path, pos, delay in ptls:
-        b += _s32("n") + _s32("u") + bytes(4) + _s32(path) + struct.pack("<I", 0) + _s32("NULL") + struct.pack("<I", 0) + bytes(4)
+    for pi, (path, pos, delay) in enumerate(ptls):
+        use, apath, arep = (panim or {}).get(pi, (0, "NULL", 0))
+        b += _s32("n") + _s32("u") + bytes(4) + _s32(path) + struct.pack("<I", use) + _s32(apath) + struct.pack("<I", arep) + bytes(4)
         b += struct.pack("<3f", *pos) + struct.pack("<3f", *rot) + bytes(4) + struct.pack("<II", delay, 0)
     b += struct.pack("<I", len(meshes))
     for mesh, anim, tex, src, dst in meshes:
@@ -787,9 +807,11 @@ class Effects(unittest.TestCase):
         self.assertEqual(x["skills"][0][:16], (10, 1, 0, 0, 0, 3, E.NO_DUMMY, E.NO_DUMMY, E.NO_DUMMY, 3, 1, 2, E.NO_DUMMY, 0, 0, 1500))
         self.assertEqual(len(x["keys"]), 3)
         self.assertEqual(x["keys"][0][0], 1)                                         # sorted by time: size (0) before the alpha fade (1 s) and velocity (1 s)
-        fmt, w, h, lv, nb, cell, cols, cells = x["atlas"]
-        self.assertEqual((fmt, w, h, lv, cell, cols, cells), (2, 256, 128, 4, 128, 16, 2))
+        fmt, w, h, lv, nb, _z0, _z1, cells = x["atlas"]
+        self.assertEqual((fmt, w, h, lv, cells), (2, 256, 160, 4, 2))                # w17-fx: 256 x 128 at full size + the 8 x 8 scaled up to 32 x 32 below it
+        self.assertEqual(x["cells"], [(0, 128, 32, 32), (0, 0, 256, 128)])
         self.assertEqual(nb, sum(max(1, (w >> k) // 4) * max(1, (h >> k) // 4) * 16 for k in range(4)))
+        self.assertEqual(x["skills"][0][20:24], (0, E.CAST_NEVER, E.CAST_NEVER, E.CAST_NEVER))   # no motion tables: the cast starts with the cast
         h0 = E.HDR.unpack_from(d, 0)
         self.assertEqual(h0[17] + h0[18], len(d))
         self.assertEqual(h0[17] % 4, 0)
@@ -804,16 +826,57 @@ class Effects(unittest.TestCase):
         self.assertEqual(a.add("fx/a.dds"), 0)                                       # case-insensitive VFS paths, one cell each
         self.assertEqual(a.add("FX/C.DDS"), 1)
         self.assertIsNone(a.add("FX/NOPE.DDS"))
-        w, h, levels = a.encode()
-        self.assertEqual((w, h, len(levels)), (256, 128, 4))
+        w, h, levels, rects = a.encode()
+        self.assertEqual((w, h, len(levels)), (256, 160, 4))
+        self.assertEqual(rects, [(0, 128, 32, 32), (0, 0, 256, 128)])               # w17-fx: the 256 x 128 keeps its size (was a 128 px cell)
         px = rosedds.decode_dxt("DXT5", levels[0], w, h)
-        self.assertEqual(tuple(px[0:4]), (255, 0, 0, 255))                            # cell 0 red
-        o = (64 * w + 128 + 64) * 4
-        self.assertEqual(tuple(px[o:o + 3]), (0, 0, 255))                            # cell 1 blue (scaled 256 x 128 -> 128 x 128)
+        o = (130 * w + 2) * 4
+        self.assertEqual(tuple(px[o:o + 4]), (255, 0, 0, 255))                        # cell 0 red
+        o = (64 * w + 200) * 4
+        self.assertEqual(tuple(px[o:o + 3]), (0, 0, 255))                            # cell 1 blue
         self.assertLess(abs(px[o + 3] - 128), 3)
         small = E.Atlas(self.read, max_cells=1)
         small.add("FX/A.DDS")
         self.assertIsNone(small.add("FX/C.DDS"))                                    # full
+
+    def test_w17_atlas_full_resolution_blocks_copied(self):
+        """w17-fx: a DXT5 texture's blocks land in the atlas unchanged (every level it has; missing levels box-filtered), a DXT1 4-colour block keeps its colour block with
+        an opaque alpha block, a DXT1 3-colour block with transparency keeps the transparent pixels; > TEX_MAX = its first mip level that fits; packing stays block aligned"""
+        import rosedds
+        E = self.E
+        lv0 = bytes(range(16)) * 64                                                     # 32 x 32 DXT5 = 64 blocks
+        lv1 = bytes(range(16, 32)) * 16
+        dds5 = rosedds.make_dds(rosedds.FMT_DXT5, 32, 32, [lv0, lv1])
+        t = E.cell_tex(rosedds.parse_dds(dds5))
+        self.assertEqual((t["w"], t["h"], len(t["levels"])), (32, 32, E.ATLAS_LEVELS))
+        self.assertEqual(t["levels"][0], lv0)
+        self.assertEqual(t["levels"][1], lv1)
+        self.assertEqual(len(t["levels"][3]), 16)                                       # 4 x 4 px: one block
+        four = struct.pack("<HHI", 0xF800, 0x001F, 0x55555555)                         # c0 > c1: 4-colour block
+        three = struct.pack("<HHI", 0x001F, 0xF800, 0xFFFFFFFF)                        # c0 <= c1, every index 3: transparent black
+        self.assertEqual(E._dxt1_block_to_dxt5(four), b"\xff\xff" + bytes(6) + four)
+        px = rosedds.decode_dxt("DXT5", E._dxt1_block_to_dxt5(three), 4, 4)
+        self.assertEqual(px[3::4], bytes(16))                                           # alpha 0 kept
+        big = rosedds.make_dds(rosedds.FMT_DXT1, 1024, 64, [four * (256 * 16), four * (128 * 8), four * (64 * 4), four * (32 * 2), four * (16 * 1)])
+        t = E.cell_tex(rosedds.parse_dds(big))
+        self.assertEqual((t["w"], t["h"]), (512, 32))                                   # 1024 > TEX_MAX: mip 1
+        self.assertEqual(t["levels"][0][8:16], four)
+        w, h, pos = E.pack_cells([(64, 64), (32, 32), (32, 64), (512, 512)], 2048)
+        self.assertEqual(w % 4, 0); self.assertEqual(h % 32, 0)
+        for (x, y), (sw, sh) in zip(pos, [(64, 64), (32, 32), (32, 64), (512, 512)]):
+            self.assertEqual((x % 32, y % 32), (0, 0))
+            self.assertLessEqual(x + sw, w); self.assertLessEqual(y + sh, h)
+        rects = [(x, y, sw, sh) for (x, y), (sw, sh) in zip(pos, [(64, 64), (32, 32), (32, 64), (512, 512)])]
+        for i, r in enumerate(rects):                                                   # no overlaps
+            for q in rects[i + 1:]:
+                self.assertTrue(r[0] + r[2] <= q[0] or q[0] + q[2] <= r[0] or r[1] + r[3] <= q[1] or q[1] + q[3] <= r[1])
+        self.files["FX/BIG.DDS"] = rosedds.make_dds(rosedds.FMT_DXT5, 256, 256, [bytes(16) * 4096])
+        a = E.Atlas(self.read, width=256, max_h=128)
+        a.add("FX/BIG.DDS"); a.add("FX/A.DDS")
+        w, h, levels, rects = a.encode()
+        self.assertLessEqual(h, 128)
+        self.assertEqual(a.halved, 1)                                                   # did not fit: the largest texture one level down
+        self.assertEqual(rects[0][2:], (128, 128))
 
     def test_broken_floats_never_reach_the_section(self):
         """a PTL with NaN / inf values: the section carries only finite floats (the runtime never sees NaN)"""
@@ -847,7 +910,7 @@ class Effects(unittest.TestCase):
         self.assertIn("rose_effects.build_section(vfs, log=log)", src)
         self.assertNotIn("log('effects: %s' % e)", src)                                # not swallowed: an import / table error fails the avatar build
         self.assertLess(src.index("rose_effects.build_section"), src.index("info = dict("))
-        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p3")
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p4")
 
     def test_fx11_meshes_vertex_animation(self):
         """fx11: an EFT mesh part becomes real geometry (effect frame (-x, z, -y), metres) + its ZMO vertex animation as RGBAHalf texels (frame-major: frame f vertex v at
@@ -870,7 +933,7 @@ class Effects(unittest.TestCase):
         x = E.dec_efct(d)
         self.assertEqual(x["vat"][:2], (E.VAT_W, 1))
         self.assertEqual(x["vat"][3], E.VAT_W * 8)
-        self.assertEqual(list(x["idx"]), [0, 1, 2])
+        self.assertEqual(list(x["idx"]), [0, 2, 1])                                  # w17-fx: winding reversed (the axis swap is a reflection)
         self.assertEqual(x["meshes"][0][:2], (0, 3))
         h = E.HDR.unpack_from(d, 0)
         self.assertEqual(h[27] % 4, 0); self.assertEqual(h[30] % 4, 0)
@@ -900,7 +963,7 @@ class Effects(unittest.TestCase):
             E.parse_zmo_vertex(b"ZMO0002\0" + struct.pack("<III", 10, 50, 1) + struct.pack("<II", 2, 0))           # data past the end
         e = E.parse_eft(self.files["FX/RING.EFT"])["meshes"][0]
         self.assertEqual((e["two"], e["atest"], e["ztest"], e["zwrite"], e["alpha"]), (1, 0, 1, 0, 1))
-        self.assertEqual(E.blend_mode(5, 6, 0), E.MODE_OPAQUE)
+        self.assertEqual(E.blend_mode(2, 1), E.MODE_OPAQUE)
 
     def test_fx11_status_item_levelup_tables(self):
         E = self.E
@@ -925,6 +988,123 @@ class Effects(unittest.TestCase):
         self.assertTrue(b.add_file(1, "FX/MANY.EFT"))
         self.assertEqual(b.files[1]["count"], 64)                                   # the retail maximum (w14 kept 16)
         self.assertGreaterEqual(b.warn.get("emitters above the per-effect budget", 0), 1)
+
+    def test_w17_blend_modes_and_mesh_flags(self):
+        """w17-fx: the original's blend factors per part (srcCode x 3 + dstCode), the blend op (reverse subtract / max: their own materials), alpha disabled, lighting
+        for a mesh with normals (rose-offline effect_mesh_material: zone map ambient), z test / z write / two sided kept per part"""
+        E = self.E
+        self.assertEqual(E.blend_mode(5, 2), E.SRC_ALPHA * 3 + E.DST_ONE)            # additive
+        self.assertEqual(E.blend_mode(3, 2), E.SRC_COLOR * 3 + E.DST_ONE)            # src colour, one (28 retail particle parts)
+        self.assertEqual(E.blend_mode(2, 2), E.SRC_ONE * 3 + E.DST_ONE)
+        self.assertEqual(E.blend_mode(3, 6), E.SRC_COLOR * 3 + E.DST_INVALPHA)
+        self.assertEqual(E.blend_mode(2, 1), E.MODE_OPAQUE)
+        self.assertEqual(E.blend_mode(5, 4), E.MODE_ADD)                              # inv src colour ("screen") drawn additive (approximation)
+        self.assertEqual((E.blend_op_flags(1), E.blend_op_flags(3), E.blend_op_flags(5), E.blend_op_flags(2)), (0, E.MF_REVSUB, E.MF_MAX, 0))
+        nz = _fx_zms([(1.0, 2.0, 3.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)], [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], [(0, 1, 2)])
+        nz = nz[:8] + struct.pack("<I", 2 | 4 | 128) + nz[12:]                         # + normals: 3 vec3 after the positions
+        cut = 8 + 4 + 24 + 4 + 36
+        self.files["FX/LIT.ZMS"] = nz[:cut] + struct.pack("<9f", *([0.0, 0.0, 1.0] * 3)) + nz[cut:]
+        eft = bytearray(_fx_eft([], [("FX/LIT.ZMS", "", "FX/C.DDS", 3, 2)]))
+        i = eft.index(struct.pack("<8I", 1, 1, 0, 1, 0, 3, 2, 1))
+        eft[i:i + 32] = struct.pack("<8I", 0, 0, 1, 0, 1, 3, 2, 3)                     # alpha off, one sided, alpha test, no z test, z write, reverse subtract
+        self.files["FX/LIT.EFT"] = bytes(eft)
+        b = E.Builder(self.read)
+        self.assertTrue(b.add_file(1, "FX/LIT.EFT"))
+        e = b.emitters[0]
+        self.assertEqual(b.meshes[0]["flags"] & E.MESH_NORMALS, E.MESH_NORMALS)
+        self.assertEqual(e["mode"], E.SRC_COLOR * 3 + E.DST_ONE)
+        self.assertEqual(e["mflags"], E.MF_ZWRITE | E.MF_ATEST | E.MF_LIT | E.MF_NOALPHA | E.MF_REVSUB)
+        self.files["FX/OP.PTL"] = _fx_ptl(src=5, dst=2)
+        seq = E.parse_ptl(self.files["FX/OP.PTL"])
+        self.assertEqual(seq[0]["op"], 1)
+
+    def test_w17_transform_animation_tracks(self):
+        """w17-fx: an EFT part's transform animation (ZMO bone 0: position cm, rotation w x y z, scale) -> 8 floats per frame in the effect-part frame + 2 RGBAHalf texels;
+        an emitter with a limited repeat ends with its animation (rose-offline effect_system), an endless one stays endless"""
+        E = self.E
+        q = (math.cos(math.radians(45)), 0.0, 0.0, math.sin(math.radians(45)))       # w x y z: 90 degrees about file z (up)
+        zmo = b"ZMO0002\0" + struct.pack("<III", 10, 2, 3) + struct.pack("<6I", 2, 0, 4, 0, 1024, 0)
+        zmo += struct.pack("<3f4ff", 100.0, 200.0, 300.0, *q, 2.0) + struct.pack("<3f4ff", 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        z = E.parse_zmo_transform(zmo)
+        self.assertEqual((z["fps"], z["nf"], len(z["pos"]), z["rot"], z["scale"]), (10, 2, 2, None, None))   # 3 channels all on bone 0: by channel index (rose-offline)
+        zmo2 = b"ZMO0002\0" + struct.pack("<III", 10, 2, 2) + struct.pack("<4I", 2, 0, 4, 0)
+        zmo2 += struct.pack("<3f4f", 100.0, 200.0, 300.0, *q) + struct.pack("<3f4f", 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        z = E.parse_zmo_transform(zmo2)
+        fr = E.track_frames(z)
+        self.assertEqual(fr[0][:4], [-1.0, 3.0, -2.0, 1.0])                           # (-x, z, -y) / 100, no scale channel = 1
+        self.assertAlmostEqual(fr[0][5], -math.sqrt(0.5), places=5)                    # about file z (up) = about Unity y, mirrored: (x, -z, y, w)
+        self.assertAlmostEqual(fr[0][7], math.sqrt(0.5), places=5)
+        self.assertEqual(fr[1][4:], [0.0, 0.0, 0.0, 1.0])
+        with self.assertRaises(ValueError):
+            E.parse_zmo_transform(b"ZMO0002\0" + struct.pack("<III", 10, 5, 1) + struct.pack("<II", 2, 0))
+        self.files["FX/T.ZMO"] = zmo2
+        self.files["FX/E.PTL"] = _fx_ptl(loops=0)
+        eft = _fx_eft([("FX/A.PTL", (0, 0, 0), 0), ("FX/E.PTL", (0, 0, 0), 0)], panim={0: (0xCDCDCD01, "FX\\T.ZMO", 3), 1: (0xCDCDCD01, "FX\\T.ZMO", 0)})
+        self.files["FX/T.EFT"] = eft
+        p = E.parse_eft(self.files["FX/T.EFT"])["particles"]
+        self.assertEqual((p[0]["tanim"], p[0]["trep"], p[1]["trep"]), ("FX/T.ZMO", 3, 0))
+        self.assertEqual(E._tanim(0, "FX/T.ZMO"), "")
+        self.assertEqual(E._tanim(0xCDCDCD00, "NULL"), "")
+        b = E.Builder(self.read)
+        self.assertTrue(b.add_file(1, "FX/T.EFT"))
+        self.assertEqual(len(b.tracks), 1)                                             # one track for both parts (cached)
+        self.assertEqual(b.tracks[0]["flags"], 1 | 2)
+        self.assertEqual((b.emitters[0]["track"], b.emitters[0]["trep"], b.emitters[1]["trep"]), (0, 3, 0))
+        self.assertEqual(b.files[1]["flags"] & 1, 1)                                   # the endless part (no limited animation) keeps the effect endless
+        self.assertEqual(len(b.track_data), 16)
+        self.assertEqual(struct.unpack_from("<4e", b.vat, 0), (-1.0, 3.0, -2.0, 1.0))
+        x = E.dec_efct(E.enc_efct(b, []))
+        self.assertEqual(x["tracks"][0][:3], (0, 2, 10))
+        self.assertEqual(x["emitters"][0][37:39], (0, 3))
+        self.assertEqual(x["emitters"][1][37:39], (0, 0))
+        b2 = E.Builder(self.read)
+        self.files["FX/T1.EFT"] = _fx_eft([("FX/E.PTL", (0, 0, 0), 0)], panim={0: (1, "FX\\T.ZMO", 3)})
+        self.assertTrue(b2.add_file(2, "FX/T1.EFT"))
+        self.assertEqual(b2.files[2]["flags"] & 1, 0)
+        self.assertAlmostEqual(b2.files[2]["dur"], 0.2 * 3)                            # the limited animation (2 frames at 10 fps, 3 passes) ends the part
+
+    def test_w17_cast_timing_motion_events(self):
+        """w17-fx: casting effect k starts at the EFFECT_SKILL_CASTING_k frame event (44 / 64 / 74 / 84) of the skill's casting motion (ms after the cast start, at its speed),
+        its repeat motion (after one casting pass) or its action motion (CAST_FIRE | ms after the fire); no such event = never; no motions = with the cast"""
+        E = self.E
+
+        def zmo(fps, nf, events):
+            ev = [0] * nf
+            for f, e in events:
+                ev[f] = e
+            body = b"ZMO0002\0" + struct.pack("<III", fps, nf, 0)
+            off = len(body)
+            return body + struct.pack("<H", nf) + struct.pack("<%dH" % nf, *ev) + struct.pack("<I", off) + b"EZMO"
+        self.files["M/CAST.ZMO"] = zmo(30, 31, [(15, 44)])
+        self.files["M/REP.ZMO"] = zmo(30, 10, [(3, 64)])
+        self.files["M/ACT.ZMO"] = zmo(30, 20, [(6, 74)])
+        tm = _fx_stb({5: {0: 1, 1: 1}, 6: {0: 2}, 7: {0: 3}})
+        fm = _fx_stb({1: {0: "M\\CAST.ZMO"}, 2: {0: "M\\REP.ZMO"}, 3: {0: "M\\ACT.ZMO"}})
+        cells = _fx_stb({1: {52: 5, 53: 50, 54: 6, 68: 7, 69: 200}})["cells"][1]
+        at = E.cast_timing(cells, self.read, tm, fm, {})
+        self.assertEqual(at[0], 1000)                                                  # frame 15 at 30 fps, speed 50 %
+        self.assertEqual(at[1], round((31 / 30.0 / 0.5 + 3 / 30.0 / 0.5) * 1000))       # after one casting pass
+        self.assertEqual(at[2], E.CAST_FIRE | 100)                                     # action motion frame 6 at 30 fps, 200 %
+        self.assertEqual(at[3], E.CAST_NEVER)
+        self.assertEqual(E.cast_timing(cells, self.read, None, None, {}), [0, 0, 0, 0])
+        self.assertEqual(E.cast_timing(_fx_stb({1: {52: 9}})["cells"][1], self.read, tm, fm, {}), [0, 0, 0, 0])   # no motion for it: with the cast
+        sk = _fx_stb({10: {4: 1, 5: 3, 51: 7, 56: 1, 57: 3, 59: 2, 52: 5, 53: 50, 54: 6, 68: 7, 69: 200}})
+        skills, _n, _w, b = E.build_tables(self.read, self.fe, self.le, sk, type_motion=tm, file_motion=fm)
+        self.assertEqual(skills[0]["cast"][:2], [1, 2])
+        self.assertEqual(skills[0]["cast_at"][:2], [1000, at[1]])
+        x = E.dec_efct(E.enc_efct(b, skills))
+        self.assertEqual(x["skills"][0][20:24], (1000, at[1], E.CAST_NEVER, E.CAST_NEVER))
+
+    def test_w17_party_levelup(self):
+        E = self.E
+        self.files["3DDATA/EFFECT/PARTY_UP_01.EFT"] = _fx_eft([("FX/A.PTL", (0, 0, 0), 0)])
+        _s, _n, _w, b = E.build_tables(self.read, self.fe, self.le, self.sk)
+        self.assertEqual(b.partyup, E.PARTY_UP_ID)
+        fe2 = _fx_stb({1: {1: "FX\\CAST.EFT"}, 297: {1: "3DDATA\\EFFECT\\PARTY_UP_01.EFT"}})
+        _s, _n, _w, b2 = E.build_tables(self.read, fe2, self.le, self.sk)
+        self.assertEqual(b2.partyup, 297)
+        x = E.dec_efct(E.enc_efct(b2, _s))
+        self.assertEqual(x["partyup"], 297)
 
 
 def zlib_crc(b):

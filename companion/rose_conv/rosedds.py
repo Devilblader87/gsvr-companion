@@ -248,6 +248,14 @@ def to_pack_texture(dds):
     DXT1 stays DXT1, DXT3/DXT5 become DXT5 (Unity has no DXT3), raw becomes RGBA32."""
     w, h = dds['w'], dds['h']
     f = dds['fmt']; lv = dds['levels']
+    if f != 'RGBA' and (w < 4 or h < 4):
+        # Unity cannot create a block-compressed texture below 4x4: the loader used an OPAQUE stand-in, so a fully transparent 2x2 DXT3 collision texture
+        # (Junon castlegate01coll.dds, alpha 0 = invisible in the original) drew as a solid untextured box. Raw RGBA32 keeps the colour and the alpha.
+        out = []; lw, lh = w, h
+        for x in lv:
+            out.append(decode_dxt(f, x, lw, lh))
+            lw = max(1, lw // 2); lh = max(1, lh // 2)
+        return FMT_RGBA32, w, h, out
     if f == 'DXT1':
         return FMT_DXT1, w, h, lv
     if f == 'DXT5':
