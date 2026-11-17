@@ -604,8 +604,8 @@ class Tool(Base):
     def test_git_pack_uses_head_not_working_tree(self):
         try:
             files = modtool.git_files("rose")
-        except SystemExit:
-            self.skipTest("no git checkout here (synced tree)")
+        except (SystemExit, FileNotFoundError, OSError):
+            self.skipTest("no git checkout / no git binary here (synced tree, Wine build)")
         self.assertIn("rosebuild.py", files)
         self.assertIn("rose_conv/VERSION_SOURCE", files)
         self.assertTrue(all(f == "rosebuild.py" or f == "rosefind.py" or f.startswith("rose_conv/") for f in files))

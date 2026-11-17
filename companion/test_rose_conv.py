@@ -4,6 +4,7 @@
 """
 import hashlib
 import inspect
+import math
 import json
 import os
 import re
@@ -53,13 +54,13 @@ class VersionAndTable(unittest.TestCase):
     def test_pack_version(self):
         """ROSE w13: WRAPPER_REV 5 (weapon-class motions in every zone pack). ROSE w12 summons: WRAPPER_REV 4 (SKDB carries the magic item skills + summon npcs, every zone the summon actors: all packs rebuild once).
         LOAD PACKAGE 5: every zone + the login pack one revision more (BONT, the pre-baked bone texture), the avatar pack (no clips) keeps its version; Birth Island had 2 already.
-        ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py)."""
-        self.assertEqual(rose_conv.WRAPPER_REV, 5)
+        ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py). fx11: avatar 3 (EFCT version 2: effect meshes, dummy bones, statuses). w15 skilltips: WRAPPER_REV 6 (SKDB skill descriptions)."""
+        self.assertEqual(rose_conv.WRAPPER_REV, 6)
         self.assertEqual(rose_conv.BONT_REV, 1)
-        self.assertEqual(rose_conv.PACK_REV, dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=2))
+        self.assertEqual(rose_conv.PACK_REV, dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=3))
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
         self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p3")
-        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p2")          # ROSE w14: QGLB global quest texts + EFCT effects
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p3")          # ROSE w14: QGLB global quest texts + EFCT effects
         for n in rose_conv.PACKS:
             if n not in ("birthisland", "avatar"):
                 self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p1")
@@ -111,7 +112,7 @@ class VersionAndTable(unittest.TestCase):
         self.assertIn("rose_pack.py", listed)
         for name, h in listed.items():
             self.assertEqual(_sha(os.path.join(HERE, name)), h, "%s edited locally: change rose-vrchat and run tools/sync_rose_converter.sh" % name)
-        own = {"__init__.py", "rose_qglob.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
+        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
         extra = [f for f in os.listdir(HERE) if f.endswith(".py") and f not in listed and f not in own]
         self.assertEqual(extra, [], "unlisted modules in rose_conv/")
 
@@ -456,6 +457,83 @@ class Summons(unittest.TestCase):
         self.assertEqual((add, drop), ([8601, 9001], [8602, 8603]))                  # 9001 shares skeleton 0; 8601 takes the last skeleton; 8602 over budget; 8603 has no model
 
 
+class SkillTips(unittest.TestCase):
+    """ROSE w15 SKILLTIPS (rose_skilltips.py): description table appended to SKDB (header words 10 / 11), JA via TXJA D_SKILL sub 1"""
+
+    def setUp(self):
+        import rose_skills
+        import rose_skilltips
+        self.S, self.T = rose_skills, rose_skilltips
+
+    def _rec(self, sid):
+        c = [""] * 72
+        c[2], c[4], c[5], c[51] = "1", "1", "3", "9"
+        return self.S.skill_record(sid, c, "Skill %d" % sid)
+
+    def test_clean_desc(self):
+        self.assertEqual(self.T.clean_desc("Shoot a poison arrow.<br>Poison too. \x00"), "Shoot a poison arrow.\nPoison too.")
+        self.assertEqual(self.T.clean_desc("a<BR/>\n<br />b"), "a\nb")
+        self.assertEqual(self.T.clean_desc("   "), "")
+
+    def test_cut_utf8(self):
+        b = "a\u3042\u3044".encode("utf-8")
+        self.assertEqual(self.T.cut_utf8(b, 5), "a\u3042".encode("utf-8"))
+        self.assertEqual(self.T.cut_utf8(b, 3), b"a")
+        self.assertEqual(self.T.cut_utf8(b, 99), b)
+
+    def test_round_trip_keeps_jobs_and_dedups(self):
+        recs = [self._rec(302), self._rec(301), self._rec(500)]
+        d0 = self.S.enc_skdb(recs, (), [(1, "Soldier")])
+        d = self.T.append_table(d0, [(302, "Same text."), (301, "Same text."), (500, "Other<br>line"), (9, ""), (0, "x")])
+        self.assertEqual(self.T.dec_descs(d), {301: "Same text.", 302: "Same text.", 500: "Other\nline"})
+        self.assertEqual(self.S.dec_jobs(d), [(1, "Soldier")])
+        self.assertEqual([r["id"] for r in self.S.dec_skdb(d)[0]], [301, 302, 500])
+        self.assertEqual(d.count(b"Same text."), 1)
+        h = self.S.HDR.unpack_from(d, 0)
+        self.assertEqual((h[10], h[11] % 4, len(d) % 4), (3, 0, 0))
+
+    def test_no_table(self):
+        d = self.S.enc_skdb([self._rec(301)])
+        self.assertEqual(self.T.append_table(d, []), d)
+        self.assertEqual(self.T.append_table(d, [(301, "  ")]), d)
+        self.assertEqual(self.T.dec_descs(d), {})
+        self.assertEqual(self.T.dec_descs(b"short"), {})
+
+    def test_bad_table_reads_as_none(self):
+        d = bytearray(self.T.append_table(self.S.enc_skdb([self._rec(301)]), [(301, "Hello")]))
+        self.assertEqual(self.T.dec_descs(bytes(d)), {301: "Hello"})
+        h = list(self.S.HDR.unpack_from(d, 0))
+        h[11] = len(d) + 100
+        self.S.HDR.pack_into(d, 0, *h)
+        self.assertEqual(self.T.dec_descs(bytes(d)), {})
+
+    def test_build_with_descs_japanese_overlay(self):
+        import rose_text as TX
+        T, S = self.T, self.S
+        row = [""] * 72
+        c = [""] * 72
+        c[2], c[4], c[5], c[51], c[71] = "1", "1", "3", "9", "K1"
+        sk = dict(rows=2, cells=[row, c])
+        data = S.enc_skdb([S.skill_record(1, c, "Heavy Attack")])
+        orig = (S._stb, T.stl_descs)
+        try:
+            S._stb = lambda vfs, n: sk
+            T.stl_descs = lambda vfs, lang=TX.EN: {"K1": "Bash a target." if lang == TX.EN else "J1"}
+            TX.reset()
+            secs, _w = T.build_with_descs(lambda v: ([(S.TAG_SKDB, 1, 1, data)], []), None)
+            self.assertEqual(T.dec_descs(secs[0][3]), {1: "Bash a target."})
+            self.assertEqual(TX.current().d[(TX.D_SKILL, 1, 1)], ("Bash a target.", "J1"))
+            self.assertEqual(S.dec_skdb(secs[0][3])[0][0]["name"], "Heavy Attack")
+        finally:
+            S._stb, T.stl_descs = orig
+
+    def test_installed(self):
+        import rose_conv
+        self.assertIsNot(self.S.build_section, None)
+        self.assertEqual(self.S.build_section.__name__, "build_section")
+        self.assertIsNotNone(self.T._orig)
+
+
 class PrebakedBones(unittest.TestCase):
     """LOAD PACKAGE 5: BONT (rose_conv/rose_bont.py), the bone texture pre-baked like GsvrRpg1Actors.StepBones. The bit-exact comparison with the
     compiled runtime runs in tools/usharp_offline/bont_check.py (check.sh); here: layout, header, lazy marking, guards, the rose_pack hook."""
@@ -543,16 +621,37 @@ def _fx_ptl(tex="FX/A.DDS", keys=(), loops=1, num=4, coords=1, src=5, dst=2, lif
     return b
 
 
-def _fx_eft(ptls=(), meshes=()):
-    """synthetic EFT (rose-file-readers eft.rs): particle parts [(ptl path, pos, delay ms)], mesh parts [(mesh, anim, tex, src, dst)]"""
+def _fx_eft(ptls=(), meshes=(), rot=(0.0, 90.0, 0.0)):
+    """synthetic EFT (rose-file-readers eft.rs): particle parts [(ptl path, pos, delay ms)], mesh parts [(mesh, anim, tex, src, dst)]; rot = (pitch, yaw, roll) of every part"""
     b = _s32("name") + struct.pack("<I", 0) + _s32("") + struct.pack("<I", 0) + struct.pack("<I", len(ptls))
     for path, pos, delay in ptls:
         b += _s32("n") + _s32("u") + bytes(4) + _s32(path) + struct.pack("<I", 0) + _s32("NULL") + struct.pack("<I", 0) + bytes(4)
-        b += struct.pack("<3f", *pos) + struct.pack("<3f", 0.0, 90.0, 0.0) + bytes(4) + struct.pack("<II", delay, 0)
+        b += struct.pack("<3f", *pos) + struct.pack("<3f", *rot) + bytes(4) + struct.pack("<II", delay, 0)
     b += struct.pack("<I", len(meshes))
     for mesh, anim, tex, src, dst in meshes:
         b += _s32("n") + _s32("u") + bytes(4) + _s32(mesh) + _s32(anim) + _s32(tex) + struct.pack("<8I", 1, 1, 0, 1, 0, src, dst, 1)
         b += struct.pack("<I", 0) + _s32("NULL") + struct.pack("<I", 0) + bytes(4) + struct.pack("<3f", 0, 0, 0) + struct.pack("<3f", 0, 0, 0) + bytes(4) + struct.pack("<III", 0, 2, 0)
+    return b
+
+
+def _fx_zms(pts, uvs, tris):
+    """synthetic ZMS0008 (rosefmt.zms layout): positions (metres, file axes) + uv1 + triangles"""
+    b = b"ZMS0008\0" + struct.pack("<I", 2 | 128) + struct.pack("<6f", *([0.0] * 6)) + struct.pack("<H", 0) + struct.pack("<H", len(pts))
+    for p_ in pts:
+        b += struct.pack("<3f", *p_)
+    for u in uvs:
+        b += struct.pack("<2f", *u)
+    b += struct.pack("<H", len(tris)) + b"".join(struct.pack("<3H", *t) for t in tris)
+    return b + struct.pack("<H", 0) + struct.pack("<H", 0) + struct.pack("<H", 0)
+
+
+def _fx_zmo(fps, frames, chans):
+    """synthetic ZMO0002 vertex animation: chans = [(type, vertex, [values per frame])] (2 position xyz cm, 32 uv, 16 alpha)"""
+    b = b"ZMO0002\0" + struct.pack("<III", fps, frames, len(chans)) + b"".join(struct.pack("<II", t, i) for t, i, _ in chans)
+    for f in range(frames):
+        for t, _i, vals in chans:
+            v = vals[f]
+            b += struct.pack("<%df" % (len(v) if isinstance(v, tuple) else 1), *(v if isinstance(v, tuple) else (v,)))
     return b
 
 
@@ -589,18 +688,24 @@ class Effects(unittest.TestCase):
             "FX/C.DDS": _fx_dds((0, 0, 255, 128), 256, 128),
             "FX/CAST.EFT": _fx_eft([("FX/A.PTL", (100.0, 200.0, 300.0), 500)]),
             "FX/HIT.EFT": _fx_eft([("FX/A.PTL", (0, 0, 0), 0), ("FX/B.PTL", (0, 0, 0), 0)]),
-            "FX/RING.EFT": _fx_eft([], [("FX/NOPE.ZMS", "", "FX/C.DDS", 5, 6)]),
+            "FX/RING.EFT": _fx_eft([], [("FX/RING.ZMS", "FX/RING.ZMO", "FX/C.DDS", 5, 6)]),
+            "FX/RING.ZMS": _fx_zms([(1.0, 2.0, 3.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)], [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], [(0, 1, 2)]),
+            "FX/RING.ZMO": _fx_zmo(10, 2, [(2, 0, [(100.0, 200.0, 300.0), (200.0, 400.0, 600.0)]), (16, 1, [0.5, 0.25])]),
+            "FX/NOMESH.EFT": _fx_eft([], [("FX/NOPE.ZMS", "", "FX/C.DDS", 5, 6)]),
+            "3DDATA/EFFECT/LEVELUP_01.EFT": _fx_eft([("FX/A.PTL", (0, 0, 0), 0)]),
             "FX/BAD.EFT": b"\x01\x00",
         }
         self.read = self.files.__getitem__
-        self.fe = _fx_stb({1: {1: "FX\\CAST.EFT"}, 2: {1: "FX\\HIT.EFT"}, 3: {1: "FX\\RING.EFT"}, 4: {1: "FX\\BAD.EFT"}, 5: {1: "FX\\GONE.EFT"}})
+        self.fe = _fx_stb({1: {1: "FX\\CAST.EFT"}, 2: {1: "FX\\HIT.EFT"}, 3: {1: "FX\\RING.EFT"}, 4: {1: "FX\\BAD.EFT"}, 5: {1: "FX\\GONE.EFT"}, 6: {1: "FX\\NOMESH.EFT"}})
         self.le = _fx_stb({1: {9: 2, 11: 3, 15: 1500}, 2: {9: 4}})
-        self.sk = _fx_stb({10: {4: 1, 5: 3, 51: 7, 56: 1, 71: 1},                   # cast 1, bullet effect 1 -> bullet file 3 + hit normal 2 (no own hit)
+        self.sk = _fx_stb({10: {4: 1, 5: 3, 51: 7, 56: 1, 57: 3, 71: 1, 72: 1, 75: 999, 11: 2},   # cast 1 on dummy 3, bullet effect 1 (from dummy 1) -> bullet file 3 + hit 2; status 2
                            11: {4: 1, 5: 3, 51: 7, 74: 2, 77: 3},                    # own hit file 2, hit dummy 3
                            12: {4: 1, 5: 3, 51: 7, 56: 4, 59: 5, 71: 2},             # only broken / missing files -> no record
                            13: {5: 3, 56: 1}})                                       # monster skill (no page / icon): still in the table
         self.npc = _fx_stb({7: {33: 1, 34: 1}, 8: {33: 2}})
         self.wpn = _fx_stb({3: {38: 1, 39: 1}})
+        self.st = _fx_stb({2: {10: 2, 15: 1}, 3: {10: 0, 5: 2}, 4: {10: 6}})        # status 2: step 2 / end 1; status 3 applies status 2; status 4 only a mesh-less effect
+        self.ui = _fx_stb({7: {22: 1, 24: 3}, 8: {22: 6}})                          # item 7: use effect 1, potion status 3 (-> the step effect of status 2)
 
     def test_parse_roundtrip(self):
         e = self.E.parse_eft(self.files["FX/CAST.EFT"])
@@ -609,7 +714,7 @@ class Effects(unittest.TestCase):
         self.assertEqual(e["particles"][0]["delay"], 500)
         self.assertEqual(e["particles"][0]["yaw"], 90.0)
         m = self.E.parse_eft(self.files["FX/RING.EFT"])["meshes"]
-        self.assertEqual((m[0]["tex"], m[0]["src"], m[0]["dst"], m[0]["repeat"], m[0]["anim"]), ("FX/C.DDS", 5, 6, 2, ""))
+        self.assertEqual((m[0]["tex"], m[0]["src"], m[0]["dst"], m[0]["repeat"], m[0]["anim"]), ("FX/C.DDS", 5, 6, 2, "FX/RING.ZMO"))
         p = self.E.parse_ptl(self.files["FX/A.PTL"])
         self.assertEqual((p[0]["num"], p[0]["coords"], p[0]["cols"], p[0]["dst"], len(p[0]["keys"])), (4, 1, 2, 2, 3))
         with self.assertRaises((ValueError, struct.error)):
@@ -657,15 +762,19 @@ class Effects(unittest.TestCase):
         skills, npcs, weapons, b = E.build_tables(self.read, self.fe, self.le, self.sk, self.npc, self.wpn)
         by = {s["id"]: s for s in skills}
         self.assertEqual(sorted(by), [10, 11, 13])
-        self.assertEqual((by[10]["cast"], by[10]["bullet"], by[10]["hit"], by[10]["speed"]), ([1, 0], 3, 2, 1500))
-        self.assertEqual((by[11]["hit"], by[11]["hit_dummy"], by[11]["bullet"]), (2, 3, 0))
+        self.assertEqual((by[10]["cast"], by[10]["bullet"], by[10]["hit"], by[10]["speed"]), ([1, 0, 0, 0], 3, 2, 1500))
+        self.assertEqual((by[10]["cast_dummy"][0], by[10]["bullet_dummy"], by[10]["hit_bone"]), (3, 1, E.NO_DUMMY))      # 999 = the actor root
+        self.assertEqual((by[11]["hit"], by[11]["hit_dummy"], by[11]["bullet"]), (2, [3, 0], 0))
         self.assertEqual([(n["id"], n["hit"], n["die"]) for n in npcs], [(7, 2, 1)])   # npc 8: LIST_EFFECT 2 hits with the broken file 4 -> nothing
         self.assertEqual([(w["id"], w["hit"], w["bullet"], w["speed"]) for w in weapons], [(3, 2, 3, 1500)])
-        self.assertEqual(sorted(f for f, r in b.files.items() if r), [1, 2, 3])
+        self.assertEqual(sorted(f for f, r in b.files.items() if r), [1, 2, 3, E.LEVELUP_ID])          # + the level-up effect (fx11)
+        self.assertIsNone(b.files.get(6))                                             # a mesh part without its ZMS is not drawable
         self.assertEqual(b.files[2]["count"], 1)                                      # FX/B.PTL has no texture: skipped
         self.assertEqual(b.warn.get("particle texture missing"), 1)
         ring = b.emitters[b.files[3]["first"]]
-        self.assertEqual((ring["kind"], ring["mode"], ring["mrep"], ring["cell"]), (1, E.MODE_ALPHA, 2.0, 1))
+        self.assertEqual((ring["kind"], ring["mode"], ring["mrep"], ring["cell"], ring["mesh"]), (1, E.MODE_ALPHA, 2.0, 1, 0))
+        self.assertAlmostEqual(ring["mdur"], 0.2)                                   # 2 frames at 10 fps
+        self.assertAlmostEqual(b.files[3]["dur"], 0.4)                              # x 2 repeats
         cast = b.emitters[b.files[1]["first"]]
         self.assertEqual(cast["pos"], (-1.0, 3.0, -2.0))
         self.assertAlmostEqual(cast["delay"], 0.5)
@@ -673,9 +782,9 @@ class Effects(unittest.TestCase):
         self.assertAlmostEqual(b.files[1]["dur"], 0.5 + 0.4 + 2.0, places=5)
         d = E.enc_efct(b, skills, npcs, weapons)
         x = E.dec_efct(d)
-        self.assertEqual([f[0] for f in x["files"]], [1, 2, 3])
+        self.assertEqual([f[0] for f in x["files"]], [1, 2, 3, E.LEVELUP_ID])
         self.assertEqual([s[0] for s in x["skills"]], [10, 11, 13])
-        self.assertEqual(x["skills"][0][:7], (10, 1, 0, 3, 2, 0, 1500))
+        self.assertEqual(x["skills"][0][:16], (10, 1, 0, 0, 0, 3, E.NO_DUMMY, E.NO_DUMMY, E.NO_DUMMY, 3, 1, 2, E.NO_DUMMY, 0, 0, 1500))
         self.assertEqual(len(x["keys"]), 3)
         self.assertEqual(x["keys"][0][0], 1)                                         # sorted by time: size (0) before the alpha fade (1 s) and velocity (1 s)
         fmt, w, h, lv, nb, cell, cols, cells = x["atlas"]
@@ -738,7 +847,84 @@ class Effects(unittest.TestCase):
         self.assertIn("rose_effects.build_section(vfs, log=log)", src)
         self.assertNotIn("log('effects: %s' % e)", src)                                # not swallowed: an import / table error fails the avatar build
         self.assertLess(src.index("rose_effects.build_section"), src.index("info = dict("))
-        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p2")
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p3")
+
+    def test_fx11_meshes_vertex_animation(self):
+        """fx11: an EFT mesh part becomes real geometry (effect frame (-x, z, -y), metres) + its ZMO vertex animation as RGBAHalf texels (frame-major: frame f vertex v at
+        base + f x vertices + v, x y z alpha; cm -> m; vertices without a channel keep their rest position / alpha 1)"""
+        E = self.E
+        skills, npcs, weapons, b = E.build_tables(self.read, self.fe, self.le, self.sk)
+        self.assertEqual(len(b.meshes), 1)
+        m = b.meshes[0]
+        self.assertEqual((m["vcount"], m["icount"], m["flags"], m["frames"], m["fps"], m["vpos"], m["vuv"]), (3, 3, 1 | 4, 2, 10, 0, 0xFFFFFFFF))
+        self.assertEqual(b.verts[0][:3], (-1.0, 3.0, -2.0))
+        self.assertEqual(b.verts[2][3:], (0.0, 1.0))
+        self.assertEqual(b.vat_texels, 6)
+        tex = [struct.unpack_from("<4e", b.vat, 8 * i) for i in range(6)]
+        self.assertEqual(tex[0], (-1.0, 3.0, -2.0, 1.0))                             # frame 0 vertex 0: 100 / 200 / 300 cm
+        self.assertEqual(tex[3], (-2.0, 6.0, -4.0, 1.0))                             # frame 1 vertex 0
+        self.assertEqual(tex[1], (0.0, 0.0, 0.0, 0.5))                               # vertex 1: rest position, alpha track
+        self.assertEqual(tex[4][3], 0.25)
+        self.assertEqual(tex[5][:3], (0.0, 0.0, -1.0))                               # vertex 2 rest (0, 1, 0) -> (-0, 0, -1)
+        d = E.enc_efct(b, skills)
+        x = E.dec_efct(d)
+        self.assertEqual(x["vat"][:2], (E.VAT_W, 1))
+        self.assertEqual(x["vat"][3], E.VAT_W * 8)
+        self.assertEqual(list(x["idx"]), [0, 1, 2])
+        self.assertEqual(x["meshes"][0][:2], (0, 3))
+        h = E.HDR.unpack_from(d, 0)
+        self.assertEqual(h[27] % 4, 0); self.assertEqual(h[30] % 4, 0)
+        bad = bytearray(d)
+        struct.pack_into("<H", bad, h[27], 7)                                        # an index past the mesh
+        with self.assertRaises(ValueError):
+            E.dec_efct(bytes(bad))
+        self.assertIsNone(E.Builder(self.read).mesh("FX/NOPE.ZMS", "")[0])
+        self.files["FX/BADANIM.ZMO"] = b"ZMO0002\0" + struct.pack("<III", 10, 0, 0)
+        mi, dur = E.Builder(self.read).mesh("FX/RING.ZMS", "FX/BADANIM.ZMO")
+        self.assertEqual((mi, dur), (0, 0.0))                                        # a broken animation: the static mesh
+
+    def test_fx11_part_rotation_and_parse(self):
+        E = self.E
+        self.assertEqual(E.part_quat(0, 0, 0), (0.0, 0.0, 0.0, 1.0))
+        q = E.part_quat(0, 90.0, 0)
+        self.assertAlmostEqual(q[1], -math.sqrt(0.5), places=6); self.assertAlmostEqual(q[3], math.sqrt(0.5), places=6)      # the original's yaw is mirrored (frame mirrored in x)
+        q = E.part_quat(90.0, 0, 0)
+        self.assertAlmostEqual(q[0], math.sqrt(0.5), places=6)                                                             # pitch about x unchanged
+        q = E.part_quat(0, 0, 90.0)
+        self.assertAlmostEqual(q[2], -math.sqrt(0.5), places=6)                                                            # roll mirrored
+        z = E.parse_zmo_vertex(self.files["FX/RING.ZMO"])
+        self.assertEqual((z["fps"], z["nf"], sorted(z["pos"]), sorted(z["alpha"])), (10, 2, [0], [1]))
+        with self.assertRaises(ValueError):
+            E.parse_zmo_vertex(b"ZMO0002\0" + struct.pack("<III", 10, 2, 1) + struct.pack("<II", 7, 0))
+        with self.assertRaises(ValueError):
+            E.parse_zmo_vertex(b"ZMO0002\0" + struct.pack("<III", 10, 50, 1) + struct.pack("<II", 2, 0))           # data past the end
+        e = E.parse_eft(self.files["FX/RING.EFT"])["meshes"][0]
+        self.assertEqual((e["two"], e["atest"], e["ztest"], e["zwrite"], e["alpha"]), (1, 0, 1, 0, 1))
+        self.assertEqual(E.blend_mode(5, 6, 0), E.MODE_OPAQUE)
+
+    def test_fx11_status_item_levelup_tables(self):
+        E = self.E
+        skills, npcs, weapons, b = E.build_tables(self.read, self.fe, self.le, self.sk, status_stb=self.st, useitem_stb=self.ui)
+        self.assertEqual([(x["id"], x["step"], x["end"]) for x in b.statuses], [(2, 2, 1)])           # status 3 / 4 have no drawable effect of their own
+        self.assertEqual([(x["id"], x["use"], x["status"]) for x in b.items], [(7, 1, 2)])           # potion status 3 -> the step effect of the status it applies (2)
+        by = {s["id"]: s for s in skills}
+        self.assertEqual(by[10]["status"], [2, 0])
+        self.assertEqual(b.levelup, E.LEVELUP_ID)                                                    # LEVELUP_01.EFT is not in FILE_EFFECT: the reserved file id
+        x = E.dec_efct(E.enc_efct(b, skills))
+        self.assertEqual((x["statuses"], x["items"], x["levelup"]), ([(2, 2, 1, 0)], [(7, 1, 2, 0)], E.LEVELUP_ID))
+        self.assertIn(E.LEVELUP_ID, [f[0] for f in x["files"]])
+        fe2 = _fx_stb({1: {1: "FX\\CAST.EFT"}, 9: {1: "3DDATA\\EFFECT\\LEVELUP_01.EFT"}})
+        _s, _n, _w, b2 = E.build_tables(self.read, fe2, self.le, self.sk)
+        self.assertEqual(b2.levelup, 9)                                                              # its FILE_EFFECT row when there is one
+
+    def test_fx11_emitter_cap_64(self):
+        E = self.E
+        self.files["FX/MANY.PTL"] = _fx_ptl()
+        self.files["FX/MANY.EFT"] = _fx_eft([("FX/MANY.PTL", (0, 0, 0), 0)] * 70)
+        b = E.Builder(self.read)
+        self.assertTrue(b.add_file(1, "FX/MANY.EFT"))
+        self.assertEqual(b.files[1]["count"], 64)                                   # the retail maximum (w14 kept 16)
+        self.assertGreaterEqual(b.warn.get("emitters above the per-effect budget", 0), 1)
 
 
 def zlib_crc(b):

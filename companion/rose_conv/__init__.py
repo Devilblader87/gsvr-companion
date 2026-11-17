@@ -45,8 +45,11 @@ import rose_pack as RP                   # noqa: E402
 import rose_lobby                        # noqa: E402
 import rose_avatar_pack as RA            # noqa: E402
 import rose_ui                           # noqa: E402
+import rose_skilltips                    # noqa: E402
 
-WRAPPER_REV = 5                          # bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
+rose_skilltips.install()                 # ROSE w15: SKDB description table + TXJA skill descriptions (companion-owned, the vendored rose_skills.py stays as it is)
+
+WRAPPER_REV = 6                          # bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
 # per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
 # birthisland 2: walk grid slope limit 2.0 (ROSE w11 leveling: at 1.0 the five arms of the island were separate walk components, 67 of 81 monster points unreachable from the start)
 PACK_REV = {"birthisland": 2}
@@ -128,7 +131,8 @@ for _n, _s in PACKS.items():
     if _s["kind"] != "avatar":
         PACK_REV[_n] = PACK_REV.get(_n, 0) + BONT_REV
 del _n, _s
-PACK_REV["avatar"] = 2          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds
+PACK_REV["avatar"] = 3          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
+#                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 
 
 # ------------------------------------------------------------------ install check

@@ -26,8 +26,8 @@ The ROSE world is alpha: the first build takes about 1 minute per zone and zone 
 world still take 1.5 to 2.5 minutes (neighbour zones are preloaded in the background, so most
 gate trips are much faster).
 
-Zones built by the companion (0.9.44): Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, the Goblin Cave dungeon (B1-B3), Junon Polis, Dolphin Island, the Junon Clan Field and the clan hideout; on Luna the Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields and Freezing Plateau; on Eldeon the Refuge Xita.
-Original skill and spell effects from your own client, second job change and level cap 250, party heals and resurrection, a who-is-where list. Monsters spawn across the whole map like the original, summon capsules call a helper that fights for you, bows/guns use ammo, every weapon class has its own animations, all NPCs and most quests run. The world has co-op up to 4, parties (with party voice), clans and a global chat.
+Zones built by the companion (0.9.45): Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, the Goblin Cave dungeon (B1-B3), Junon Polis, Dolphin Island, the Junon Clan Field and the clan hideout; on Luna the Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields and Freezing Plateau; on Eldeon the Refuge Xita.
+Original skill and spell effects with 3D effect models from your own client, skill tooltips, the original 3 x 30 bag, second job change and level cap 250, party heals and resurrection, a who-is-where list. Monsters spawn across the whole map like the original, summon capsules call a helper that fights for you, bows/guns use ammo, every weapon class has its own animations, all NPCs and most quests run. The world has co-op up to 4, parties (with party voice), clans and a global chat.
 
 ### Linux / Steam Deck (Proton)
 
