@@ -25,6 +25,8 @@ Fixed URL set (VRCUrls can't be built at runtime, so the world bakes these in, p
   GET /pack/hologram.bin  mod hub map-hologram bundle (GSPV) for the last `holo=` request (companion/holo.py)
   GET /pack/rose.rpg1     ready ROSE pack (RPG1) of the last `rose=` request (companion/rose.py; 503 before ready, 404 file missing)
   GET /rose/state         GUI only (header X-GSVR-Rose: 1, else 403): the full rosebuild.state() incl. the install path
+status.json "host": {ram_total_mb, ram_free_mb, cpu_pct} = rounded numbers of this PC (-1 unknown; companion/hostinfo.py), the ROSE
+                          world sizes its hidden neighbour zones from them (docs/design/rose_preload_adaptive.md)
 status.json "build": [{kind: map|models|hologram|war3, mod, name, pct 0-100, eta_s (-1 unknown), state}] = the converter runs in progress
 (empty list when idle; companion/buildprog.py parses the converters' "@progress" stdout lines; old worlds ignore the field).
 Requests from the world arrive as VRChat log lines:
@@ -45,7 +47,7 @@ Requests from the world arrive as VRChat log lines:
 import argparse, errno, http.server, json, os, queue, re, socket, struct, sys, threading, time, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I drops the script dir from sys.path
-import builder, buildprog, csshare, games as games_mod, holo, logwatch, mapshare, models, prebuilt, rose, rosebuild, runtime, steam, war3   # noqa: E402
+import builder, buildprog, csshare, games as games_mod, holo, hostinfo, logwatch, mapshare, models, prebuilt, rose, rosebuild, runtime, steam, war3   # noqa: E402
 from version import VERSION                                        # noqa: E402  (single source of truth)
 
 APP = "gsvr-companion"          # status.json "app": the world + GUI accept a status only with this value
@@ -329,6 +331,7 @@ class State:
         d["rose"]["text"] = rosebuild.scrub(d["rose"]["text"])
         d["rose_build"] = rosebuild.public_state(rb)
         d["test_scenario"] = rose.test_scenario(getattr(self.args, "rose_dir", None))      # one-build test rounds (docs/testing.md); "" outside the test container
+        d["host"] = hostinfo.HOST.public()                 # ADAPTIVE PRELOAD memory guard (docs/design/rose_preload_adaptive.md): 3 rounded numbers, cached 5 s, outside self.lock
         return d
 
     def rose_update(self, name, fields):
