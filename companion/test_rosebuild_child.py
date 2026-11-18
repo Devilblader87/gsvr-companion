@@ -390,14 +390,14 @@ class GuiPoll(unittest.TestCase):
         rb2 = dict(rb, current={"name": "luxemtower", "progress": 0.22, "eta_s": 40}, queue=["zant"],
                    packs=dict(packs, luxemtower={"state": "stale"}))
         t = gui.rose_status_text(dict(base, rose_build=rb2, rose={"state": "idle", "all_ready": False}))
-        self.assertEqual(t, "found: <home>/ROSE — building luxemtower 22% (background)  noch 40 s, 1 queued")
+        self.assertEqual(t, "found: <home>/ROSE — building luxemtower 22% (background)  40 s left, 1 queued")
         t = gui.rose_status_text(dict(base, rose_build=rb2, rose={"state": "building", "name": "zant", "progress": 0.5}))
         self.assertTrue(t.startswith("found: <home>/ROSE — building zant 50%"), t)
         t = gui.rose_status_text(dict(base, rose_build=dict(rb, current=None, packs=dict(packs, zant={"state": "missing"})),
                                       rose={"state": "idle", "all_ready": False}))
         self.assertTrue(t.endswith("%d/%d zones ready" % (len(packs) - 1, len(packs))), t)
         t = gui.rose_status_text(dict(base, rose_build=dict(rb, install=None, install_ok=False), rose={}))
-        self.assertEqual(t, "folder not found - set it in the Spiele tab")
+        self.assertEqual(t, "folder not found - set it in the Games tab")
         t = gui.rose_status_text(dict(base, rose_build=dict(rb, install_ok=False, install_reason="no data.idx"), rose={}))
         self.assertTrue(t.startswith("folder not usable: <home>/ROSE (no data.idx)"), t)
         self.assertNotIn("ROSE Online", dict(gui.status_rows(base)))   # an old companion without ROSE: no line

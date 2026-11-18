@@ -721,14 +721,24 @@ class Manager:
             gen = self.gen
         return self._prebuild(gen, force=force)
 
-    def cancel(self):
-        """Stop the running build and drop the queue (no requeue). The on-demand slot gets an error."""
+    def cancel(self, batch_only=False):
+        """Stop the running build and drop the queue (no requeue). The on-demand slot gets an error.
+        batch_only (first-run Cancel): only the background batch (running non-demand builds + queue); an on-demand build the
+        world waits for keeps running."""
         with self.cv:
-            names = [c["name"] for c in self.running if c["kind"] == "demand"] + ([self.demand] if self.demand else [])
-            for c in self.running:
-                c["requeue"] = False
-                c["cancel"].set()
-            self.demand, self.queue, self.forced = None, [], set()
+            if batch_only:
+                names = []
+                for c in self.running:
+                    if c["kind"] != "demand":
+                        c["requeue"] = False
+                        c["cancel"].set()
+                self.queue, self.forced = [], set()
+            else:
+                names = [c["name"] for c in self.running if c["kind"] == "demand"] + ([self.demand] if self.demand else [])
+                for c in self.running:
+                    c["requeue"] = False
+                    c["cancel"].set()
+                self.demand, self.queue, self.forced = None, [], set()
         for name in dict.fromkeys(names):
             self._notify(name, {"state": "error", "size": 0, "path": None, "error": f"ROSE build of {name} cancelled"})
 
@@ -1085,8 +1095,8 @@ def request(name):
     return _m().request(name)
 
 
-def cancel():
-    return _m().cancel()
+def cancel(batch_only=False):
+    return _m().cancel(batch_only=batch_only)
 
 
 def stop():

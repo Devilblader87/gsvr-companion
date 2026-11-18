@@ -7,12 +7,11 @@ source: steam-manifest | manual | registry | install-folder | non-steam-scan | n
 """
 import os
 
+import i18n
 import steam
 import war3
 
 SETTING_HL, SETTING_W3 = "hl_root", "war3_root"
-HINT_HL = "Nicht gefunden - Steam-Version installieren oder mit 'Aendern...' den Ordner mit hl.exe waehlen."
-HINT_W3 = "Nicht gefunden - mit 'Aendern...' den Warcraft-III-Ordner waehlen."
 
 
 def _same(a, b):
@@ -38,9 +37,9 @@ def games_section(own, war3_manual=None, war3_maps=None, nonsteam=None):
             cand = next((c for c in (nonsteam or []) if mod in c.get("mods", [])), None)
             if cand:
                 g.update(root=cand["root"], source="non-steam-scan", mods=list(cand.get("mods", [])),
-                         hint="Ordner gefunden, Besitz nicht pruefbar - mit 'Aendern...' bestaetigen.")
+                         hint=i18n.tr("g.hint_unconfirmed"))
             else:
-                g["hint"] = HINT_HL
+                g["hint"] = i18n.tr("g.hint_hl")
         out.append(g)
     e = own.get(war3.MOD)
     if e is not None:
@@ -60,7 +59,7 @@ def games_section(own, war3_manual=None, war3_maps=None, nonsteam=None):
             if maps:
                 g["maps_root"] = maps[0]
         else:
-            g["hint"] = HINT_W3
+            g["hint"] = i18n.tr("g.hint_w3")
         out.append(g)
     return out
 

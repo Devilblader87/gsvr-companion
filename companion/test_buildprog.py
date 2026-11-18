@@ -219,17 +219,17 @@ class GuiRows(unittest.TestCase):
     def test_fmt_eta(self):
         self.assertEqual(gui.fmt_eta(-1), "")
         self.assertEqual(gui.fmt_eta(None), "")
-        self.assertEqual(gui.fmt_eta(0), "noch 1 s")
-        self.assertEqual(gui.fmt_eta(42), "noch 42 s")
-        self.assertEqual(gui.fmt_eta(60), "noch ca. 1 Min")
-        self.assertEqual(gui.fmt_eta(95), "noch ca. 2 Min")
+        self.assertEqual(gui.fmt_eta(0), "1 s left")
+        self.assertEqual(gui.fmt_eta(42), "42 s left")
+        self.assertEqual(gui.fmt_eta(60), "about 1 min left")
+        self.assertEqual(gui.fmt_eta(95), "about 2 min left")
 
     def test_rows(self):
         st = {"build": [{"kind": "models", "mod": "cstrike", "name": "cstrike", "pct": 62, "eta_s": 70, "state": "building"},
                         {"kind": "map", "mod": "valve", "name": "c1a0", "pct": 250, "eta_s": -1, "state": "building"},
                         {"kind": "hologram", "mod": "valve", "name": "valve", "pct": "x"}, "junk"]}
-        self.assertEqual(gui.build_rows(st), [("Modelle: cstrike", 62, "noch ca. 1 Min"), ("Karte: c1a0", 100, ""),
-                                              ("Hologramm: valve", 0, "")])
+        self.assertEqual(gui.build_rows(st), [("Models: cstrike", 62, "about 1 min left"), ("Map: c1a0", 100, ""),
+                                              ("Hologram: valve", 0, "")])
 
     def test_rows_idle_and_old_companion(self):
         self.assertEqual(gui.build_rows({"build": []}), [])

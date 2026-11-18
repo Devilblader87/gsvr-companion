@@ -13,6 +13,13 @@ CONFIG_KEY = "rose_install"
 SCAN_BUDGET_S = 3.0
 SCAN_DEPTH = 2
 INDEX_FILE = "data.idx"
+# folder / program names of the known ROSE Online clients (SearchMMO, jROSE, iROSE, Seven Hearts ...): lower-case substrings
+NAME_HINTS = ("rose", "searchmmo", "sevenhearts", "7hearts", "ローズ")
+
+
+def name_matches(name):
+    n = (name or "").lower()
+    return any(h in n for h in NAME_HINTS)
 
 
 def local_check(path):
@@ -54,7 +61,7 @@ def _registry_dirs(reg):
             for sub in reg.subkeys(hive, key):
                 k = key + "\\" + sub
                 name = reg.read(hive, k, "DisplayName") or ""
-                if "rose" not in name.lower():
+                if not name_matches(name):
                     continue
                 for val in ("InstallLocation", "InstallDir", "DisplayIcon"):
                     v = (reg.read(hive, k, val) or "").strip().strip('"')
@@ -74,7 +81,7 @@ def _steam_dirs(steam_roots):
             common = os.path.join(lib, "steamapps", "common")
             try:
                 for n in sorted(os.listdir(common)):
-                    if "rose" in n.lower():
+                    if name_matches(n):
                         out.append(os.path.join(common, n))
             except OSError:
                 pass
@@ -86,12 +93,13 @@ def _common_dirs(env):
     pats = []
     for pf in (env.get("ProgramFiles"), env.get("ProgramFiles(x86)"), env.get("ProgramW6432")):
         if pf:
-            pats.append(os.path.join(pf, "*ROSE*"))
-    pats += [os.path.join(sd, "Program Files*", "*ROSE*"), os.path.join(sd, "Games", "*ROSE*")]
+            pats += [os.path.join(pf, "*ROSE*"), os.path.join(pf, "*SearchMMO*")]
+    pats += [os.path.join(sd, "Program Files*", "*ROSE*"), os.path.join(sd, "Games", "*ROSE*"),
+             os.path.join(sd, "Program Files*", "*SearchMMO*"), os.path.join(sd, "SearchMMO*")]
     if env.get("LOCALAPPDATA"):
         pats.append(os.path.join(env["LOCALAPPDATA"], "*ROSE*"))
     home = env.get("USERPROFILE") or os.path.expanduser("~")
-    pats.append(os.path.join(home, "Games", "*ROSE*"))
+    pats += [os.path.join(home, "Games", "*ROSE*"), os.path.join(home, "Desktop", "*ROSE*")]
     out = []
     for p in pats:
         out += sorted(glob.glob(p))
@@ -114,7 +122,7 @@ def _drive_scan(drives, deadline, max_depth, now):
                 continue
             if not os.path.isdir(p):
                 continue
-            if "rose" in n.lower():
+            if name_matches(n):
                 out.append(p)
             elif depth < max_depth:
                 walk(p, depth + 1)
@@ -158,13 +166,29 @@ def candidates(configured=None, registry=None, steam_roots=None, env=None, drive
     return out
 
 
+def child_dirs(path, limit=24):
+    """the direct sub-folders of a candidate (bounded; [] when unreadable) - installers often add a game sub-folder"""
+    try:
+        names = sorted(os.listdir(path))[:200]
+    except OSError:
+        return []
+    out = [os.path.join(path, n) for n in names if os.path.isdir(os.path.join(path, n))]
+    return out[:limit]
+
+
 def find(configured=None, with_reasons=False, **kw):
     """Ordered, validated ROSE install folders (strings); with_reasons=True -> [(path, how, reason)]."""
-    res = []
+    res, seen = [], set()
     for p, how in candidates(configured=configured, **kw):
-        ok, reason = check(p)
-        if ok:
-            res.append((p, how, reason))
+        for q in [p] + child_dirs(p):                   # "C:\\SearchMMO" holds the game one folder deeper
+            k = os.path.normcase(os.path.normpath(q))
+            if k in seen:
+                continue
+            seen.add(k)
+            ok, reason = check(q)
+            if ok:
+                res.append((q, how, reason))
+                break
     return res if with_reasons else [p for p, _h, _r in res]
 
 

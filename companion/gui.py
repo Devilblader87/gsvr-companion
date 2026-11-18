@@ -21,7 +21,8 @@ import collections, json, os, queue, shutil, socket, subprocess, sys, threading,
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                            # -I drops the script dir from sys.path
-import cachedir, companion, games, logwatch, modules, rosefind, runtime, steam, updater                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+import cachedir, companion, firstrun, firstrun_ui, games, i18n, logwatch, modules, rosefind, runtime, steam, updater, worlds                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+from i18n import tr                                                                   # noqa: E402
 from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION                    # noqa: E402
 
 REPO = os.path.dirname(HERE)                                        # source checkout root (test data in work/)
@@ -33,7 +34,8 @@ DEFAULT_SETTINGS = {"worlds": DEFAULT_WORLDS, "extra": "", "war3_root": "", "war
                     "relay_url": "https://w3relay.heimserver.me", "map_autodownload": "on",
                     "update_base": DEFAULT_UPDATE_BASE, "update_token": "",
                     "auto_update_check": True, "prereleases": True, "auto_start": True,
-                    "cache_dir": "", "rose_install": "", "vrchat_log_dir": ""}                             # "" = default cache folder
+                    "cache_dir": "", "rose_install": "", "vrchat_log_dir": "",
+                    "lang": "auto", "first_run_done": False, "view": "simple"}                             # "" = default cache folder
 
 
 def settings_path():
@@ -71,11 +73,11 @@ def rose_live_text(d):
         return ""
     s = d.get("state")
     if s == "building":
-        return "building %s %d%%" % (d.get("name", "?"), int(round(100 * float(d.get("progress") or 0))))
+        return tr("rose.building", n=d.get("name", "?"), pct=int(round(100 * float(d.get("progress") or 0))))
     if s == "ready" and d.get("all_ready"):
-        return "all zones ready"
+        return tr("rose.all_ready")
     if s == "error":
-        return "error: %s" % (d.get("text") or d.get("error") or "?")
+        return tr("rose.error", why=d.get("text") or d.get("error") or "?")
     return ""
 
 
@@ -103,6 +105,7 @@ class Controller:
         self.update_info = None          # last updater.check_for_update() result
         self.update_error = None
         self._tail = collections.deque(maxlen=40)
+        self.fresh_install = not os.path.isfile(settings_path())     # no gui.json yet = first start on this PC -> first-run screen
         self.load_settings()
 
     # ---- settings ----
@@ -184,6 +187,12 @@ class Controller:
             a += extra.split()
         return a + self.extra_args
 
+    def child_env(self):
+        """the companion process gets the GUI's language (its status.json hint texts come from i18n)"""
+        env = dict(os.environ)
+        env["GSVR_LANG"] = i18n.lang()
+        return env
+
     def start(self):
         if self.running():
             self.log("[gui] companion already running (pid %d)" % self.proc.pid)
@@ -195,7 +204,7 @@ class Controller:
         try:
             self.proc = subprocess.Popen(argv, cwd=runtime.install_root(), stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
-                                         encoding="utf-8", errors="replace", bufsize=1, creationflags=NO_WINDOW)
+                                         env=self.child_env(), encoding="utf-8", errors="replace", bufsize=1, creationflags=NO_WINDOW)
         except OSError as e:
             self.log("[gui] ERROR: could not start companion: %s" % e)
             self.proc = None
@@ -467,16 +476,12 @@ def _slot(d, name_key="map"):
     return s
 
 
-KIND_DE = {"map": "Karte", "models": "Modelle", "hologram": "Hologramm", "war3": "Karte (WC3)"}
+KINDS = ("map", "models", "hologram", "war3")
 
 
 def fmt_eta(eta_s):
-    """seconds left (-1 / None = unknown) -> "noch ca. 1 Min" / "noch 40 s" / ""."""
-    if eta_s is None or eta_s < 0:
-        return ""
-    if eta_s < 60:
-        return "noch %d s" % max(1, int(eta_s))
-    return "noch ca. %d Min" % int((eta_s + 30) // 60)
+    """seconds left (-1 / None = unknown) -> "about 1 min left" / "40 s left" / "" (current language)"""
+    return i18n.format_eta(eta_s)
 
 
 def build_rows(st):
@@ -485,7 +490,7 @@ def build_rows(st):
     for j in (st or {}).get("build") or ():
         if not isinstance(j, dict):
             continue
-        what = KIND_DE.get(j.get("kind"), str(j.get("kind") or "?"))
+        what = tr("kind." + j["kind"]) if j.get("kind") in KINDS else str(j.get("kind") or "?")
         who = j.get("name") if j.get("kind") in ("map", "war3") else j.get("mod")
         try:
             pct = max(0, min(100, int(j.get("pct", 0))))
@@ -499,16 +504,12 @@ def build_rows(st):
 def headline(st, running, fatal):
     """→ (lamp colour, one-line text) for the top of the window."""
     if running and st:
-        return "green", "Running — 127.0.0.1:%s" % st.get("port", "?")
+        return "green", tr("head.running", port=st.get("port", "?"))
     if running:
-        return "orange", "Starting…"
+        return "orange", tr("head.starting")
     if fatal:
-        return "red", "Could not start — see the Status tab"
-    return "grey", "Stopped"
-
-
-SOURCE_DE = {"steam-manifest": "Steam", "registry": "Registry", "install-folder": "Standardordner",
-             "non-steam-scan": "Ordner-Suche (unbestaetigt)", "manual": "manuell", "none": "-"}
+        return "red", tr("head.fatal")
+    return "grey", tr("head.stopped")
 
 
 def game_rows(gs):
@@ -518,14 +519,14 @@ def game_rows(gs):
         if g.get("found"):
             folder = g.get("root", "")
             if g.get("version"):
-                folder += "   (Version %s)" % g["version"]
+                folder += "   " + tr("g.version", v=g["version"])
             if g.get("maps_root"):
-                folder += "   Maps: %s" % g["maps_root"]
+                folder += "   " + tr("g.maps", p=g["maps_root"])
         elif g.get("root"):
             folder = "%s - %s" % (g["root"], g.get("hint", ""))
         else:
-            folder = "nicht gefunden - " + (g.get("hint") or "")
-        rows.append((g.get("id", ""), g.get("name", "?"), folder, SOURCE_DE.get(g.get("source"), g.get("source", "-")),
+            folder = tr("g.not_found", hint=g.get("hint") or "")
+        rows.append((g.get("id", ""), g.get("name", "?"), folder, firstrun.how_text(g.get("source") or "none"),
                      bool(g.get("found"))))
     return rows
 
@@ -541,61 +542,61 @@ def rose_status_text(st):
     slot = (st or {}).get("rose") if isinstance((st or {}).get("rose"), dict) else {}
     install = full.get("install") or rb.get("install")
     if not rb.get("conv"):
-        where = "converter not bundled (ready packs only)"
+        where = tr("rose.conv_missing")
     elif not install:
-        where = "folder not found - set it in the Spiele tab"
+        where = tr("rose.no_folder")
     elif not rb.get("install_ok"):
-        where = "folder not usable: %s (%s)" % (install, rb.get("install_reason") or "?")
+        where = tr("rose.bad_folder", p=install, why=rb.get("install_reason") or "?")
     else:
-        where = "found: %s" % install
+        where = tr("rose.found", p=install)
     cur = rb.get("current") if isinstance(rb.get("current"), dict) else None
     packs = rb.get("packs") if isinstance(rb.get("packs"), dict) else {}
     if slot.get("state") == "building":
-        prog = "building %s %d%%" % (slot.get("name") or "?", int(round(100 * float(slot.get("progress") or 0))))
+        prog = tr("rose.building", n=slot.get("name") or "?", pct=int(round(100 * float(slot.get("progress") or 0))))
         eta = fmt_eta(slot.get("eta_s") if isinstance(slot.get("eta_s"), (int, float)) else None)
         prog += ("  " + eta) if eta else ""
     elif cur:
-        prog = "building %s %d%% (background)" % (cur.get("name") or "?", int(round(100 * float(cur.get("progress") or 0))))
+        prog = tr("rose.building_bg", n=cur.get("name") or "?", pct=int(round(100 * float(cur.get("progress") or 0))))
         eta = fmt_eta(cur.get("eta_s") if isinstance(cur.get("eta_s"), (int, float)) else None)
         prog += ("  " + eta) if eta else ""
     elif slot.get("all_ready"):
-        prog = "all zones ready"
+        prog = tr("rose.all_ready")
     elif packs and rb.get("install_ok"):
-        prog = "%d/%d zones ready" % (sum(1 for p in packs.values() if isinstance(p, dict) and p.get("state") == "fresh"),
-                                      len(packs))
+        prog = tr("rose.some_ready", a=sum(1 for p in packs.values() if isinstance(p, dict) and p.get("state") == "fresh"),
+                  b=len(packs))
     else:
         prog = ""
     queued = len(rb.get("queue") or ())
-    if prog.startswith("building") and queued:
-        prog += ", %d queued" % queued
+    if (slot.get("state") == "building" or cur) and queued:
+        prog += tr("rose.queued", n=queued)
     return where + (" — " + prog if prog else "")
 
 
 def status_rows(st, foreign=()):
     """status.json → [(label, value)] for the Status tab (foreign = candidate ports used by other programs)."""
-    notes = [("Note", "Port %d: used by another program (not the GSVR companion) — skipped" % p) for p in sorted(foreign)]
+    notes = [(tr("row.note"), tr("v.foreign_port", p=p)) for p in sorted(foreign)]
     if st is None:
-        return [("Companion", "not reachable on 127.0.0.1 (ports %s)" % ", ".join(map(str, companion.PORT_CANDIDATES)))] + notes
+        return [(tr("row.companion"), tr("v.unreachable", ports=", ".join(map(str, companion.PORT_CANDIDATES))))] + notes
     own = st.get("ownership", {})
     owned = [m for m, ok in sorted(own.items()) if ok]
-    rows = [("Companion", "%s — %s" % (st.get("companion", "?"), st.get("state"))),
-            ("Port", "127.0.0.1:%s" % st.get("port", "?")),
-            ("Games found", ", ".join(owned) if owned else "none (is Steam + the game installed?)"),
-            ("VRChat world", "%s %s" % (st.get("world") or "(not in a world yet)",
-                                        ("✔ allowed" if st.get("world_ok") else "✖ not allowed") if st.get("world") else "")),
-            ("Last map request", _slot({"map": st.get("map"), "state": st.get("state"), "size": st.get("size"),
+    rows = [(tr("row.companion"), "%s — %s" % (st.get("companion", "?"), st.get("state"))),
+            (tr("row.port"), "127.0.0.1:%s" % st.get("port", "?")),
+            (tr("row.games"), ", ".join(owned) if owned else tr("v.no_games")),
+            (tr("row.world"), "%s %s" % (st.get("world") or tr("v.no_world"),
+                                         (tr("v.allowed") if st.get("world_ok") else tr("v.not_allowed")) if st.get("world") else "")),
+            (tr("row.lastreq"), _slot({"map": st.get("map"), "state": st.get("state"), "size": st.get("size"),
                                         "seconds": st.get("seconds"), "error": st.get("error")})
              + (("   req %s" % st["req"]) if st.get("req") else "")),
-            ("Prefetch", _slot(st.get("next"))),
-            ("Weapon models", _slot(st.get("models"), "mod")),
-            ("Map holograms", _slot(st.get("holo"), "mod"))]
+            (tr("row.prefetch"), _slot(st.get("next"))),
+            (tr("row.models"), _slot(st.get("models"), "mod")),
+            (tr("row.holo"), _slot(st.get("holo"), "mod"))]
     rose_txt = rose_status_text(st)
     if rose_txt:
-        rows.insert(3, ("ROSE Online", rose_txt))
+        rows.insert(3, (tr("row.rose"), rose_txt))
     if st.get("log") is False:
-        rows.append(("Note", "no VRChat log folder found — map requests from the world can't arrive"))
+        rows.append((tr("row.note"), tr("v.no_log")))
     elif st.get("log_ok") is False:
-        rows.append(("Warning", logwatch.LOG_WARNING))
+        rows.append((tr("row.warning"), logwatch.LOG_WARNING))
     return rows + notes
 
 
@@ -608,13 +609,21 @@ def describe(st, foreign=()):
 def run_gui():
     import tkinter as tk
     from tkinter import ttk, messagebox, filedialog
+    from tkinter import font as tkfont
 
     c = Controller()
+    i18n.set_lang(os.environ.get("GSVR_LANG") or i18n.resolve(c.settings.get("lang", "auto")))
     threading.Thread(target=lambda: updater.cleanup_old(retries=20), daemon=True).start()   # *.gsvr-old of the last update
     root = tk.Tk()
     root.title("GSVR Companion %s" % VERSION)
     root.geometry("780x520")
     root.minsize(620, 420)
+    UIF = i18n.pick_font(tkfont.families(root), i18n.lang()) or "Segoe UI"       # Segoe UI has no Japanese glyphs
+    for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkTooltipFont"):
+        try:
+            tkfont.nametofont(fname).configure(family=UIF)
+        except tk.TclError:
+            pass
     ui_q = queue.Queue()                 # Tk may only be touched from the main thread → background results go here
 
     def bg(fn):                          # run blocking actions off the UI thread
@@ -682,18 +691,24 @@ def run_gui():
     # ---- top: big Start/Stop + headline ----
     top = ttk.Frame(root, padding=(10, 10, 10, 4))
     top.pack(fill="x")
-    btn_toggle = tk.Button(top, text="Start", width=9, font=("Segoe UI", 16, "bold"))
+    btn_toggle = tk.Button(top, text=tr("m.start"), width=9, font=(UIF, 16, "bold"))
     btn_toggle.pack(side="left")
-    lamp = tk.Label(top, text="●", fg="grey", font=("Segoe UI", 22))
+    lamp = tk.Label(top, text="●", fg="grey", font=(UIF, 22))
     lamp.pack(side="left", padx=(14, 4))
-    head_lbl = tk.Label(top, text="Stopped", font=("Segoe UI", 13), anchor="w")
+    head_lbl = tk.Label(top, text=tr("head.stopped"), font=(UIF, 13), anchor="w")
     head_lbl.pack(side="left", fill="x", expand=True)
+    lang_var = tk.StringVar(value=i18n.LANG_NAMES[i18n.lang()])
+    lang_cb = ttk.Combobox(top, textvariable=lang_var, values=[i18n.LANG_NAMES[l] for l in i18n.LANGS], state="readonly", width=9)
+    lang_cb.pack(side="right")
+    ttk.Label(top, text=tr("m.language") + ": ").pack(side="right")
+    btn_easy = ttk.Button(top, text=tr("fr.easy"))
+    btn_easy.pack(side="right", padx=(0, 12))
 
     # ---- update banner (hidden until an update is found) ----
     banner = tk.Frame(root, background="#fff4c2", padx=10, pady=6)
     banner_lbl = tk.Label(banner, text="", background="#fff4c2", anchor="w", justify="left")
     banner_lbl.pack(side="left", fill="x", expand=True)
-    btn_install = ttk.Button(banner, text="Install")
+    btn_install = ttk.Button(banner, text=tr("d.install"))
     btn_install.pack(side="right")
 
     # ---- build progress (hidden while idle): one bar per running converter job (status.json "build") ----
@@ -732,19 +747,55 @@ def run_gui():
         else:
             prog_frame.pack_forget()
 
+    # ---- Worlds tab: one row per GSVR world (traffic light, state, Open world, Help + a one-line hint) ----
+    wd_tab = scrollable(tr("tab.worlds"), 10)
+    ttk.Label(wd_tab, text=tr("w.title"), font=(UIF, 14, "bold")).grid(row=0, column=0, sticky="w")
+    wd_frame = ttk.Frame(wd_tab)
+    wd_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+    wd_tab.columnconfigure(0, weight=1)
+    wd_state = {"sig": None}
+
+    def worlds_draw(st=None):
+        st = st if st is not None else last_status.get("st")
+        gs = (gm_state.get("val") or ([], False))[0]
+        rows = firstrun.world_rows(firstrun.entries_from_view(gs, rose_found["path"]), st, c.running())
+        sig = [(r["key"], r["light"], r["state"], r["hint"], r["can_open"]) for r in rows]
+        if sig == wd_state["sig"]:
+            return
+        wd_state["sig"] = sig
+        for w in wd_frame.winfo_children():
+            w.destroy()
+        for i, r in enumerate(rows):
+            cell = ttk.Frame(wd_frame)
+            cell.grid(row=i, column=0, sticky="we", pady=6)
+            wd_frame.columnconfigure(0, weight=1)
+            tk.Label(cell, text="\u25cf", fg=firstrun_ui.LIGHTS[r["light"]], font=(UIF, 20)).grid(row=0, column=0, rowspan=2, padx=(0, 8))
+            ttk.Label(cell, text=r["name"], font=(UIF, 11, "bold")).grid(row=0, column=1, sticky="w")
+            ttk.Label(cell, text=r["state"]).grid(row=0, column=2, sticky="w", padx=12)
+            bf = ttk.Frame(cell)
+            bf.grid(row=0, column=3, sticky="e")
+            cell.columnconfigure(2, weight=1)
+            if r["can_open"]:
+                ttk.Button(bf, text=tr("w.open"), command=lambda u=r["url"]: firstrun_ui.open_world(root, u)).pack(side="left")
+                ttk.Button(bf, text=tr("fr.copy_link"), command=lambda u=r["url"]: firstrun_ui.copy_to_clipboard(root, u)).pack(side="left", padx=4)
+            if r["help"]:
+                ttk.Button(bf, text=tr("w.help"), command=lambda k=r["help"]: firstrun_ui.help_dialog(root, k)).pack(side="left")
+            ttk.Label(cell, text=r["hint"], foreground="#555" if r["light"] != "red" else "#a00", wraplength=620,
+                      justify="left").grid(row=1, column=1, columnspan=3, sticky="w")
+
     # ---- Status tab ----
-    st_tab = scrollable("Status", 10)
+    st_tab = scrollable(tr("tab.status"), 10)
     fatal_lbl = tk.Label(st_tab, text="", fg="#c00000", justify="left", anchor="w", font=("Consolas", 9, "bold"))
     fatal_lbl.grid(row=0, column=0, columnspan=2, sticky="we")
     rows_frame = ttk.Frame(st_tab)
     rows_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
     row_widgets = []
-    ttk.Label(st_tab, text="VRChat: Settings → \"Allow Untrusted URLs\" must be ON.  Then join the GSVR world.",
+    ttk.Label(st_tab, text=tr("m.vrc_hint"),
               foreground="#555").grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
     st_upd = ttk.Frame(st_tab)                               # always visible (the Settings tab can be taller than the window)
     st_upd.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
-    ttk.Label(st_upd, text="Version %s" % VERSION, foreground="#555").pack(side="left", padx=(0, 10))
-    st_btn_check = ttk.Button(st_upd, text="Nach Updates suchen", command=lambda: check_now())
+    ttk.Label(st_upd, text=tr("m.version", v=VERSION), foreground="#555").pack(side="left", padx=(0, 10))
+    st_btn_check = ttk.Button(st_upd, text=tr("m.check_updates"), command=lambda: check_now())
     st_btn_check.pack(side="left")
     st_tab.columnconfigure(0, weight=1)
     st_tab.rowconfigure(1, weight=1)
@@ -752,7 +803,7 @@ def run_gui():
     def show_rows(rows):
         while len(row_widgets) < len(rows):
             i = len(row_widgets)
-            k = ttk.Label(rows_frame, font=("Segoe UI", 10, "bold"))
+            k = ttk.Label(rows_frame, font=(UIF, 10, "bold"))
             v = ttk.Label(rows_frame, wraplength=560, justify="left")
             k.grid(row=i, column=0, sticky="nw", padx=(0, 12), pady=2)
             v.grid(row=i, column=1, sticky="nw", pady=2)
@@ -766,15 +817,14 @@ def run_gui():
                 v.configure(text="")
 
     # ---- Spiele tab (GAME-FOLDERS): game | folder | source | Aendern... / Zuruecksetzen ----
-    gm_tab = scrollable("Spiele", 8)
+    gm_tab = scrollable(tr("tab.games"), 8)
     gm_tab_scroll = gm_tab.scroll_bar
     #                                   # 2nd tab (Status first); insert(1, …) needs an existing tab 1
     gm_frame = ttk.Frame(gm_tab)
     gm_frame.grid(row=0, column=0, sticky="nsew")
     gm_note = ttk.Label(gm_tab, text="", foreground="#555", wraplength=700, justify="left")
     gm_note.grid(row=1, column=0, sticky="w", pady=(8, 0))
-    ttk.Label(gm_tab, text="Nur mit eigener, legal erworbener Kopie. Ohne Steam kann der Besitz nicht gepr\u00fcft werden. "
-              "Ein manueller Half-Life-Ordner gilt f\u00fcr alle GoldSrc-Spiele (Half-Life, Counter-Strike, Sven Co-op ...).",
+    ttk.Label(gm_tab, text=tr("g.legal"),
               foreground="#555", wraplength=700, justify="left").grid(row=2, column=0, sticky="w", pady=(4, 0))
     gm_tab.columnconfigure(0, weight=1)
 
@@ -828,7 +878,7 @@ def run_gui():
         ttk.Checkbutton(mod_box, text="Module verwenden (signierte Zusatzpakete von GitHub; sonst l\u00e4uft die eingebaute Version)",
                         variable=mod_on, command=mod_toggle).grid(row=0, column=0, columnspan=6, sticky="w")
         for i, h in enumerate(("Modul", "L\u00e4uft", "Installiert", "Verf\u00fcgbar", "")):
-            ttk.Label(mod_box, text=h, font=("Segoe UI", 10, "bold")).grid(row=1, column=i, sticky="w", padx=(0, 10))
+            ttk.Label(mod_box, text=h, font=(UIF, 10, "bold")).grid(row=1, column=i, sticky="w", padx=(0, 10))
         for i, r in enumerate(modules.rows(), 2):
             av = mod_info["avail"].get(r["name"]) or {}
             ttk.Label(mod_box, text=r["title"]).grid(row=i, column=0, sticky="w", padx=(0, 10))
@@ -850,23 +900,21 @@ def run_gui():
         ttk.Label(mod_box, text=mod_info["msg"], foreground="#555").grid(row=99, column=0, columnspan=6, sticky="w", pady=(4, 0))
     mod_draw()
     gm_state = {"rows": None, "val": None}
-    ROSE_HOW_DE = {"registry": "Registry", "steam": "Steam", "common folder": "Ordner-Suche", "drive scan": "Ordner-Suche",
-                   "configured": "manuell"}
-    ROSE_MISSING = "nicht gefunden - ROSE Online installieren oder mit 'Ändern...' den Ordner mit data.idx wählen"
+    ROSE_HOW = {"registry": "registry", "steam": "steam", "common folder": "common", "drive scan": "scan", "configured": "configured"}
 
     def rose_row():
         """-> ("rose", "ROSE Online", folder, source, found) for the Spiele table (detection runs off the Tk thread)."""
         if rose_found["path"]:
-            return ("rose", "ROSE Online", rose_found["path"], ROSE_HOW_DE.get(rose_found["how"], rose_found["how"] or "-"), True)
+            return ("rose", tr("game.rose"), rose_found["path"], firstrun.how_text(ROSE_HOW.get(rose_found["how"], "none")), True)
         if rose_found["busy"]:
-            return ("rose", "ROSE Online", "Suche l\u00e4uft ...", "-", True)
+            return ("rose", tr("game.rose"), tr("g.searching"), "-", True)
         typed = rose_var.get().strip()
         if typed:
-            return ("rose", "ROSE Online", "%s - ung\u00fcltig (data.idx nicht gefunden)" % typed, "manuell", False)
-        return ("rose", "ROSE Online", ROSE_MISSING, "-", False)
+            return ("rose", tr("game.rose"), tr("g.rose_invalid", p=typed), firstrun.how_text("configured"), False)
+        return ("rose", tr("game.rose"), tr("g.hint_rose"), "-", False)
 
     def rose_change():
-        d = filedialog.askdirectory(initialdir=rose_var.get() or None, title="ROSE-Online-Ordner w\u00e4hlen (mit data.idx)")
+        d = filedialog.askdirectory(initialdir=rose_var.get() or None, title=tr("fr.pick_title", game=tr("game.rose")))
         if not d:
             return
 
@@ -883,18 +931,18 @@ def run_gui():
         key = c.set_game_folder(gid, path)
         (war3_var if key == "war3_root" else hl_var).set(path or "")
         gm_state["rows"] = None
-        gm_note.configure(text="Gespeichert. " + ("Companion neu starten (Stop / Start), damit der Ordner gilt." if c.running()
-                                                  else "Gilt beim n\u00e4chsten Start."))
+        gm_note.configure(text=tr("g.saved") + (tr("g.saved_restart") if c.running() else tr("g.saved_next")))
         bg(lambda: ui_q.put(("games", c.games_view(c.status()))))
 
     def game_change(gid):
         cur = c.settings.get(c.game_setting(gid), "")
-        d = filedialog.askdirectory(initialdir=cur or None, title="Ordner w\u00e4hlen")
+        d = filedialog.askdirectory(initialdir=cur or None, title=tr("g.choose_folder"))
         if d:
             game_changed(gid, d)
 
     def show_games(val):
         gm_state["val"] = val
+        worlds_draw()
         gs, live = val
         rows = game_rows(gs) + [rose_row()]
         if rows == gm_state["rows"]:
@@ -902,8 +950,8 @@ def run_gui():
         gm_state["rows"] = rows
         for w in gm_frame.winfo_children():
             w.destroy()
-        for i, h in enumerate(("Spiel", "Ordner", "Quelle", "")):
-            ttk.Label(gm_frame, text=h, font=("Segoe UI", 10, "bold")).grid(row=0, column=i, sticky="w", padx=(0, 10))
+        for i, h in enumerate((tr("g.col_game"), tr("g.col_folder"), tr("g.col_source"), "")):
+            ttk.Label(gm_frame, text=h, font=(UIF, 10, "bold")).grid(row=0, column=i, sticky="w", padx=(0, 10))
         for i, (gid, name, folder, src, found) in enumerate(rows, 1):
             ttk.Label(gm_frame, text=name).grid(row=i, column=0, sticky="nw", padx=(0, 10), pady=2)
             ttk.Label(gm_frame, text=folder, wraplength=330, justify="left",
@@ -913,13 +961,13 @@ def run_gui():
             bf.grid(row=i, column=3, sticky="ne", pady=2)
             chg, rst = ((rose_change, rose_reset) if gid == "rose" else
                         ((lambda g=gid: game_change(g)), (lambda g=gid: game_changed(g, ""))))
-            ttk.Button(bf, text="\u00c4ndern\u2026", command=chg).pack(side="left")
-            ttk.Button(bf, text="Zur\u00fccksetzen (automatisch)", command=rst).pack(side="left", padx=(4, 0))
+            ttk.Button(bf, text=tr("g.change"), command=chg).pack(side="left")
+            ttk.Button(bf, text=tr("g.reset"), command=rst).pack(side="left", padx=(4, 0))
         gm_frame.columnconfigure(1, weight=1)
 
     # ---- Log tab ----
     log_tab = ttk.Frame(nb, padding=4)
-    nb.add(log_tab, text="Log")
+    nb.add(log_tab, text=tr("tab.log"))
     log_txt = tk.Text(log_tab, wrap="none", font=("Consolas", 9))
     ys = ttk.Scrollbar(log_tab, orient="vertical", command=log_txt.yview)
     log_txt.configure(yscrollcommand=ys.set)
@@ -933,11 +981,11 @@ def run_gui():
     def copy_log():
         root.clipboard_clear()
         root.clipboard_append(log_txt.get("1.0", "end"))
-    ttk.Button(lb, text="Copy", command=copy_log).pack(side="left", padx=3)
-    ttk.Button(lb, text="Clear", command=lambda: log_txt.delete("1.0", "end")).pack(side="left", padx=3)
+    ttk.Button(lb, text=tr("s.copy"), command=copy_log).pack(side="left", padx=3)
+    ttk.Button(lb, text=tr("s.clear"), command=lambda: log_txt.delete("1.0", "end")).pack(side="left", padx=3)
 
     # ---- Settings tab ----
-    se = scrollable("Settings", 10)
+    se = scrollable(tr("tab.settings"), 10)
     worlds_var = tk.StringVar(value=c.settings.get("worlds", ""))
     extra_var = tk.StringVar(value=c.settings.get("extra", ""))
     base_var = tk.StringVar(value=c.settings.get("update_base", DEFAULT_UPDATE_BASE))
@@ -950,15 +998,15 @@ def run_gui():
     rose_var = tk.StringVar(value=c.settings.get("rose_install", ""))
     vlog_var = tk.StringVar(value=c.settings.get("vrchat_log_dir", ""))
     # GAME-FOLDERS (maintainer 2026-10-29): folder settings live only on the Spiele tab, not on Settings
-    gx = ttk.LabelFrame(gm_tab, text="Ordner von Hand / suchen", padding=8)
+    gx = ttk.LabelFrame(gm_tab, text=tr("g.manual_box"), padding=8)
     gx.grid(row=3, column=0, sticky="we", pady=(10, 0))
     gx.columnconfigure(0, weight=1)
     r = 0
     # Half-Life / Counter-Strike folder (HL-DETECT): empty = Steam detection; set = used as-is (no ownership check)
-    ttk.Label(gx, text="Half-Life / Counter-Strike Ordner (leer = Steam wird automatisch gefunden):"
+    ttk.Label(gx, text=tr("g.hl_label")
               ).grid(row=r, column=0, columnspan=3, sticky="w")
     ttk.Entry(gx, textvariable=hl_var, width=70).grid(row=r + 1, column=0, columnspan=2, sticky="we")
-    ttk.Button(gx, text="Browse…", command=lambda: hl_var.set(filedialog.askdirectory(initialdir=hl_var.get() or None) or hl_var.get())
+    ttk.Button(gx, text=tr("g.browse"), command=lambda: hl_var.set(filedialog.askdirectory(initialdir=hl_var.get() or None) or hl_var.get())
                ).grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
     hl_lbl = ttk.Label(gx, text="",
                        foreground="#555", wraplength=640, justify="left")
@@ -968,16 +1016,16 @@ def run_gui():
         v = hl_var.get().strip()
         if v:
             d = steam.describe_root(v)
-            hl_lbl.configure(text=("OK - " if d["valid"] else "Problem - ") + d["reason"])
+            hl_lbl.configure(text=tr("g.ok" if d["valid"] else "g.problem", why=d["reason"]))
 
     def hl_search():
-        hl_lbl.configure(text="Suche l\u00e4uft ...")
+        hl_lbl.configure(text=tr("g.searching"))
 
         def work():
             cands = steam.detect_non_steam(force=True)
             ui_q.put(("hl_found", cands))
         bg(work)
-    ttk.Button(gx, text="Suchen", command=hl_search).grid(row=r + 2, column=2, sticky="w", padx=(6, 0))
+    ttk.Button(gx, text=tr("g.search"), command=hl_search).grid(row=r + 2, column=2, sticky="w", padx=(6, 0))
     hl_list = tk.Listbox(gx, height=3, width=70)
     hl_list.grid(row=r + 3, column=0, columnspan=2, sticky="we")
     hl_items = []
@@ -988,14 +1036,14 @@ def run_gui():
             hl_var.set(hl_items[sel[0]]["root"])
             hl_validate()
     hl_list.bind("<<ListboxSelect>>", hl_pick)
-    ttk.Button(gx, text="Pr\u00fcfen", command=hl_validate).grid(row=r + 3, column=2, sticky="nw", padx=(6, 0))
+    ttk.Button(gx, text=tr("g.check"), command=hl_validate).grid(row=r + 3, column=2, sticky="nw", padx=(6, 0))
     r += 4
     # Warcraft III folders (maintainer 2026-10-22: the companion finds the install or lets the player pick it)
-    for label, var in (("Warcraft III folder (empty = found automatically: registry, usual folders):", war3_var),
-                       ("Warcraft III fan-map folder (optional: maps you downloaded yourself):", w3maps_var)):
+    for label, var in ((tr("g.w3_label"), war3_var),
+                       (tr("g.w3maps_label"), w3maps_var)):
         ttk.Label(gx, text=label).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8 if r else 0, 0))
         ttk.Entry(gx, textvariable=var, width=70).grid(row=r + 1, column=0, columnspan=2, sticky="we")
-        ttk.Button(gx, text="Browse…", command=lambda v=var: v.set(filedialog.askdirectory(initialdir=v.get() or None) or v.get())
+        ttk.Button(gx, text=tr("g.browse"), command=lambda v=var: v.set(filedialog.askdirectory(initialdir=v.get() or None) or v.get())
                    ).grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
         r += 2
     w3_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
@@ -1004,11 +1052,11 @@ def run_gui():
     def war3_detect():
         import war3
         e = war3.ownership(war3_var.get().strip() or None)["war3"]
-        w3_lbl.configure(text=("found: " + e["reason"]) if e["allowed"] else ("not found: " + e["reason"]))
-    ttk.Button(gx, text="Detect", command=war3_detect).grid(row=r, column=2, sticky="w", padx=(6, 0))
+        w3_lbl.configure(text=tr("g.found_w3", why=e["reason"]) if e["allowed"] else tr("g.notfound_w3", why=e["reason"]))
+    ttk.Button(gx, text=tr("g.detect"), command=war3_detect).grid(row=r, column=2, sticky="w", padx=(6, 0))
     r += 1
     # ROSE Online folder (BYOG: the companion builds the ROSE packs from the player's own install)
-    ttk.Label(gx, text="ROSE Online folder (empty = found automatically: registry, Steam, usual folders):"
+    ttk.Label(gx, text=tr("g.rose_label")
               ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
     rose_ent = ttk.Entry(gx, textvariable=rose_var, width=70)
     rose_ent.grid(row=r + 1, column=0, columnspan=2, sticky="we")
@@ -1018,10 +1066,10 @@ def run_gui():
     rose_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
     rose_lbl.grid(row=r + 2, column=0, columnspan=2, sticky="w")
     # VRChat log folder (Linux/Proton/Steam Deck): empty = auto-detect; set = used as-is
-    ttk.Label(gx, text="VRChat log folder (empty = found automatically; Linux/Proton: steamapps/compatdata/438100/pfx/.../LocalLow/VRChat/VRChat):"
+    ttk.Label(gx, text=tr("g.vlog_label")
               ).grid(row=30, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Entry(gx, textvariable=vlog_var, width=70).grid(row=31, column=0, columnspan=2, sticky="we")
-    ttk.Button(gx, text="Browse…", command=lambda: vlog_var.set(filedialog.askdirectory(initialdir=vlog_var.get() or None) or vlog_var.get())
+    ttk.Button(gx, text=tr("g.browse"), command=lambda: vlog_var.set(filedialog.askdirectory(initialdir=vlog_var.get() or None) or vlog_var.get())
                ).grid(row=31, column=2, sticky="w", padx=(6, 0))
     rose_found = {"path": "", "how": "", "busy": False, "silent": False}
     rose_chk = {"path": None, "text": "", "busy": False}          # rosefind.check result of the typed folder (computed off the Tk thread)
@@ -1033,7 +1081,7 @@ def run_gui():
 
         def work():
             ok, why = rosefind.check(path)
-            ui_q.put(("rose_check", (path, ("found: " if ok else "not found: ") + why)))
+            ui_q.put(("rose_check", (path, tr("g.found_w3" if ok else "g.notfound_w3", why=why))))
         bg(work)
 
     def rose_show(st=None):
@@ -1047,12 +1095,12 @@ def run_gui():
             if rose_chk["path"] == typed:
                 rose_lbl.configure(text=rose_chk["text"])
             else:
-                rose_lbl.configure(text="checking ...")
+                rose_lbl.configure(text=tr("g.searching"))
                 rose_check_bg(typed)
         elif rose_found["path"]:
-            rose_lbl.configure(text="found (%s): %s" % (rose_found["how"], rose_found["path"]))
+            rose_lbl.configure(text=tr("rose.found", p=rose_found["path"]))
         elif rose_found["busy"]:
-            rose_lbl.configure(text="searching ...")
+            rose_lbl.configure(text=tr("g.searching"))
 
     def rose_apply(path):
         """the companion is a separate process: tell it over its local control route (it also gets --rose-install on restart).
@@ -1062,6 +1110,7 @@ def run_gui():
         bg(lambda: ui_q.put(("rose_applied", c.rose_post(q))))
 
     def rose_redraw():
+        worlds_draw()
         if gm_state["val"] is not None:
             show_games(gm_state["val"])
 
@@ -1083,7 +1132,7 @@ def run_gui():
         rose_found["busy"] = True
         rose_found["silent"] = silent
         if not silent:
-            rose_lbl.configure(text="searching ...")
+            rose_lbl.configure(text=tr("g.searching"))
         rose_redraw()
 
         def work():
@@ -1098,54 +1147,54 @@ def run_gui():
             rose_show()
 
     def rose_build_all():
-        rose_lbl.configure(text="asking the companion ...")
+        rose_lbl.configure(text=tr("g.asking"))
         bg(lambda: ui_q.put(("rose_built", c.rose_post("/rose/build_all"))))
 
     def rose_built(ans):
         if ans is None:
-            rose_lbl.configure(text="Companion not running - start it first (it also builds each zone when the world asks).")
+            rose_lbl.configure(text=tr("g.not_running"))
         else:
             q = ans.get("queued") or []
-            rose_lbl.configure(text=("build queued: " + ", ".join(q)) if q else "all ROSE zones are already up to date")
-    ttk.Button(rose_btns, text="Browse…", command=rose_browse).pack(side="left")
-    ttk.Button(rose_btns, text="Auto-detect", command=rose_detect).pack(side="left", padx=(4, 0))
-    ttk.Button(gx, text="Build all ROSE zones now", command=rose_build_all).grid(row=r + 2, column=2, sticky="w", padx=(6, 0))
+            rose_lbl.configure(text=tr("g.queued", l=", ".join(q)) if q else tr("g.all_current"))
+    ttk.Button(rose_btns, text=tr("g.browse"), command=rose_browse).pack(side="left")
+    ttk.Button(rose_btns, text=tr("g.auto_detect"), command=rose_detect).pack(side="left", padx=(4, 0))
+    ttk.Button(gx, text=tr("g.build_all"), command=rose_build_all).grid(row=r + 2, column=2, sticky="w", padx=(6, 0))
     r += 3
     r = 0
     relay_var = tk.StringVar(value=c.settings.get("relay_url", ""))
     dl_var = tk.StringVar(value=c.settings.get("map_autodownload", "on"))
-    ttk.Label(se, text="Map relay URL (https://..., empty = off): share the maps you host, fetch maps the host shared:"
+    ttk.Label(se, text=tr("s.relay")
               ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Entry(se, textvariable=relay_var, width=80).grid(row=r + 1, column=0, columnspan=3, sticky="we")
     dlf = ttk.Frame(se)
     dlf.grid(row=r + 2, column=0, columnspan=3, sticky="w")
-    ttk.Label(dlf, text="Download missing maps:").pack(side="left")
+    ttk.Label(dlf, text=tr("s.download")).pack(side="left")
     ttk.Combobox(dlf, textvariable=dl_var, values=("on", "ask", "off"), width=6, state="readonly").pack(side="left", padx=6)
     r += 3
     # maintainer 2026-10-29: no world-ID row any more - the official worlds come from worlds.txt on GitHub (WORLDS_URL);
     # a value already in gui.json still counts (worlds_var is saved unchanged)
-    for label, var, kw in (("Extra companion arguments (advanced, e.g. --game-root \"D:\\Games\\Half-Life\"):", extra_var, {}),
-                           ("Update server (releases of %s/%s):" % (REPO_OWNER, REPO_NAME), base_var, {}),
-                           ("Read token (only if the repository is private; never logged):", token_var, {"show": "•"})):
+    for label, var, kw in ((tr("s.extra"), extra_var, {}),
+                           (tr("s.update_server", o=REPO_OWNER, r=REPO_NAME), base_var, {}),
+                           (tr("s.token"), token_var, {"show": "•"})):
         ttk.Label(se, text=label).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8 if r else 0, 0))
         ttk.Entry(se, textvariable=var, width=80, **kw).grid(row=r + 1, column=0, columnspan=3, sticky="we")
         r += 2
-    ttk.Checkbutton(se, text="Check for updates when the app starts", variable=auto_var).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
-    ttk.Checkbutton(se, text="Include pre-releases (all v0.x releases are pre-releases)", variable=pre_var).grid(row=r + 1, column=0, columnspan=3, sticky="w")
-    ttk.Label(se, text="Cache folder (converted packs, map downloads; pick any drive):").grid(row=r + 2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+    ttk.Checkbutton(se, text=tr("s.auto_update"), variable=auto_var).grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    ttk.Checkbutton(se, text=tr("s.prerelease"), variable=pre_var).grid(row=r + 1, column=0, columnspan=3, sticky="w")
+    ttk.Label(se, text=tr("s.cache")).grid(row=r + 2, column=0, columnspan=3, sticky="w", pady=(10, 0))
     cf = ttk.Frame(se)
     cf.grid(row=r + 3, column=0, columnspan=3, sticky="we")
     cache_lbl = ttk.Label(cf, text="", anchor="w")
     cache_lbl.pack(side="left", fill="x", expand=True)
-    btn_cdef = ttk.Button(cf, text="Default")
+    btn_cdef = ttk.Button(cf, text=tr("s.default"))
     btn_cdef.pack(side="right", padx=(6, 0))
-    btn_cchg = ttk.Button(cf, text="Change…")
+    btn_cchg = ttk.Button(cf, text=tr("s.change"))
     btn_cchg.pack(side="right")
     sb = ttk.Frame(se)
     sb.grid(row=r + 4, column=0, columnspan=3, sticky="w", pady=(10, 0))
-    btn_check = ttk.Button(sb, text="Check for updates now")
-    btn_cache = ttk.Button(sb, text="Open cache folder")
-    btn_clear = ttk.Button(sb, text="Clear cache")
+    btn_check = ttk.Button(sb, text=tr("s.check_now"))
+    btn_cache = ttk.Button(sb, text=tr("s.open_cache"))
+    btn_clear = ttk.Button(sb, text=tr("s.clear_cache"))
     for b in (btn_check, btn_cache, btn_clear):
         b.pack(side="left", padx=(0, 6))
     upd_lbl = ttk.Label(se, text="", foreground="#555", wraplength=640, justify="left")
@@ -1157,7 +1206,18 @@ def run_gui():
 
     rose_sent = {"v": c.settings.get("rose_install", "").strip()}     # the ROSE folder the running companion knows
 
+    sync = {"job": None}
+
+    def sync_first_run():
+        """folders the first-run job saved into c.settings must reach the Settings variables, or remember() would blank them"""
+        job = getattr(first, "job", None)
+        if job is not None and job is not sync["job"]:
+            sync["job"] = job
+            rose_var.set(c.settings.get("rose_install", ""))
+            hl_var.set(c.settings.get("hl_root", ""))
+
     def remember():
+        sync_first_run()
         typed_rose = rose_var.get().strip()
         if typed_rose != rose_sent["v"] and c.running():
             rose_apply(typed_rose)                  # Save of a typed ROSE folder also reaches the running companion (POST /rose/install)
@@ -1177,7 +1237,7 @@ def run_gui():
 
     def toggle():
         if c.running():
-            btn_toggle.configure(state="disabled", text="Stopping…")
+            btn_toggle.configure(state="disabled", text=tr("m.stopping"))
             bg(lambda: (c.stop(), ui_q.put(("refresh", None))))
             return
         remember()
@@ -1188,7 +1248,7 @@ def run_gui():
 
     def refresh_buttons():
         run = c.running()
-        btn_toggle.configure(state="disabled" if installing.is_set() or cache_busy.is_set() else "normal", text="Stop" if run else "Start",
+        btn_toggle.configure(state="disabled" if installing.is_set() or cache_busy.is_set() else "normal", text=tr("m.stop") if run else tr("m.start"),
                              fg="#a00000" if run else "#006000")
 
     def check_now(quiet=False):
@@ -1200,9 +1260,7 @@ def run_gui():
 
     def install():
         info = c.update_info or {}
-        if not messagebox.askyesno("Install update",
-                                   "Install %s now?\n\nThe companion is stopped, the files are replaced and the app "
-                                   "restarts. Settings and the map cache are kept." % info.get("latest")):
+        if not messagebox.askyesno(tr("d.install_title"), tr("d.install_q", v=info.get("latest"))):
             return
         remember()
         installing.set()
@@ -1220,7 +1278,7 @@ def run_gui():
 
     def show_cache_path():
         d = c.cache_dir()
-        cache_lbl.configure(text="%s   (%s free)" % (d, cachedir.fmt_bytes(cachedir.free_bytes(d))))
+        cache_lbl.configure(text=tr("s.free", d=d, f=cachedir.fmt_bytes(cachedir.free_bytes(d))))
 
     def switch_cache(picked):
         """picked = chosen folder ("" = default). Validate, ask about moving the existing cache, run it in the background."""
@@ -1287,9 +1345,82 @@ def run_gui():
     btn_cache.configure(command=open_cache)
 
     def clear_cache():
-        if messagebox.askyesno("Clear cache", "Delete all converted map/model packs? They are rebuilt on demand."):
+        if messagebox.askyesno(tr("d.clear_title"), tr("d.clear_q")):
             c.clear_cache()
     btn_clear.configure(command=clear_cache)
+
+    # ---- language switch (the whole window is built with one language: restart the app) and first run ----
+    def restart_app():
+        argv = [sys.executable] + (sys.argv[1:] if runtime.FROZEN else sys.argv)
+        try:
+            c.stop()
+            subprocess.Popen(argv, cwd=runtime.install_root(), creationflags=NO_WINDOW)
+        except OSError as e:
+            c.log("[gui] restart failed: %s" % e)
+            return
+        root.destroy()
+
+    def save_lang(code):
+        c.settings.update(lang=code)
+        try:
+            c.save_settings()
+        except OSError as e:
+            c.log("[gui] could not save settings: %s" % e)
+
+    def lang_changed(_e=None):
+        code = next((l for l in i18n.LANGS if i18n.LANG_NAMES[l] == lang_var.get()), "en")
+        if code != i18n.lang():
+            save_lang(code)
+            restart_app()
+    lang_cb.bind("<<ComboboxSelected>>", lang_changed)
+
+    built_lang = i18n.lang()
+    first = firstrun_ui.FirstRun(root, c, bg, on_advanced=lambda: leave_first_run(), on_lang=lambda code: (i18n.set_lang(code), save_lang(code)))
+
+    def show_main():
+        nb.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        top.pack(fill="x", before=nb)
+
+    def leave_first_run():
+        first.hide()
+        c.settings.update(first_run_done=True, view="advanced")
+        try:
+            c.save_settings()
+        except OSError:
+            pass
+        if i18n.lang() != built_lang:
+            restart_app()
+            return
+        show_main()
+        try:
+            nb.select(0)                                   # Worlds tab first
+        except tk.TclError:
+            pass
+        if c.settings.get("auto_start", True) and not c.running():
+            c.start()
+        refresh_buttons()
+
+    def hide_main():
+        top.pack_forget()
+        banner.pack_forget()
+        nb.pack_forget()
+
+    def enter_first_run():
+        hide_main()
+        first.show()
+
+    def enter_simple():
+        """the simple view = home screen of the first run (setup already done); remembered as the last used view"""
+        hide_main()
+        c.settings.update(view="simple")
+        try:
+            c.save_settings()
+        except OSError:
+            pass
+        first.show_home()
+        if c.settings.get("auto_start", True) and not c.running():
+            c.start()
+    btn_easy.configure(command=lambda: enter_simple() if c.settings.get("first_run_done") else enter_first_run())
 
     # ---- periodic work ----
     def pump_logs():
@@ -1329,11 +1460,11 @@ def run_gui():
     def show_update(info):
         btn_check.configure(state="normal")
         if info is None:
-            upd_lbl.configure(text="Update check failed: %s" % (c.update_error or "?"))
+            upd_lbl.configure(text=tr("d.update_check_failed", why=c.update_error or "?"))
             return
         upd_lbl.configure(text=info["message"])
         if info["status"] == "available":
-            banner_lbl.configure(text="Update available: %s → %s" % (VERSION, info["latest"]))
+            banner_lbl.configure(text=tr("d.update_avail", a=VERSION, b=info["latest"]))
             btn_install.configure(state="normal")
             banner.pack(fill="x", padx=8, before=nb)
         else:
@@ -1343,10 +1474,7 @@ def run_gui():
 
     def ask_map(key):
         asked.add(key)
-        yes = messagebox.askyesno("GSVR - map from the host", "The host shares a map you do not have "
-                                  "(%s).\n\nDownload it from the relay? Only the map file (Counter-Strike: and the custom "
-                                  "files that map needs, never Valve's own content) is downloaded; everything is checked "
-                                  "before use." % key, parent=root)
+        yes = messagebox.askyesno(tr("d.map_title"), tr("d.map_q", k=key), parent=root)
         bg(lambda: c.answer_ask(key, yes))
 
     last_status = {}
@@ -1371,9 +1499,10 @@ def run_gui():
         colour, text = headline(st, c.running(), c.fatal)
         lamp.configure(fg=colour)
         head_lbl.configure(text=text)
-        fatal_lbl.configure(text=("Companion could not start:\n" + c.fatal) if (c.fatal and not c.running()) else "")
+        fatal_lbl.configure(text=(tr("m.fatal") + c.fatal) if (c.fatal and not c.running()) else "")
         show_rows(status_rows(st, c.foreign))
         show_build(build_rows(st))
+        worlds_draw(st)
         refresh_buttons()
 
     def pump_ui():
@@ -1396,7 +1525,7 @@ def run_gui():
                         root.destroy()
                         return
                     installing.clear()
-                    banner_lbl.configure(text="Update failed: %s" % (c.update_error or "see the Log tab"))
+                    banner_lbl.configure(text=tr("d.update_failed", why=c.update_error or tr("tab.log")))
                     btn_install.configure(state="normal")
                     refresh_buttons()
                 elif kind == "cache_done":
@@ -1409,7 +1538,7 @@ def run_gui():
                     rose_show()
                 elif kind == "rose_applied":
                     if val is not None and not val.get("ok", False):
-                        rose_lbl.configure(text="not usable: " + str(val.get("reason", "")))
+                        rose_lbl.configure(text=tr("g.not_usable", why=str(val.get("reason", ""))))
                 elif kind == "rose_built":
                     rose_built(val)
                 elif kind == "rose_found":
@@ -1422,23 +1551,22 @@ def run_gui():
                     else:
                         rose_found["path"] = ""
                         if not rose_found["silent"]:
-                            rose_lbl.configure(text="not found - use Browse to pick the ROSE folder (the one with data.idx).")
+                            rose_lbl.configure(text=tr("g.not_found_pick"))
                     rose_redraw()
                 elif kind == "rose_picked":
                     d, ok, why = val
                     if ok:
                         rose_set(d)
                         rose_detect()
-                        gm_note.configure(text="ROSE-Ordner gespeichert: %s" % d)
+                        gm_note.configure(text=tr("g.rose_saved", p=d))
                     else:
-                        gm_note.configure(text="Kein g\u00fcltiger ROSE-Ordner: %s" % why)
+                        gm_note.configure(text=tr("g.rose_bad", why=why))
                 elif kind == "hl_found":
                     hl_items[:] = val
                     hl_list.delete(0, "end")
                     for it in val:
                         hl_list.insert("end", "%s  [%s]" % (it["root"], ", ".join(it["mods"]) or "?"))
-                    hl_lbl.configure(text=("%d Installation(en) gefunden - eine anklicken, dann Start." % len(val)) if val
-                                     else "Nichts gefunden - bitte mit Browse den Ordner mit hl.exe waehlen.")
+                    hl_lbl.configure(text=tr("g.hl_found_n", n=len(val)) if val else tr("g.hl_found_none"))
         except queue.Empty:
             pass
         root.after(200, pump_ui)
@@ -1461,7 +1589,12 @@ def run_gui():
     if c.settings.get("auto_update_check", True):
         root.after(800, lambda: check_now(quiet=True))
     # players just want it running: start the companion right away (Windows autostart passes --minimized)
-    if c.settings.get("auto_start", True) and not c.running():
+    start_view = "firstrun" if os.environ.get("GSVR_FIRSTRUN") == "1" else firstrun.start_view(c.settings, c.fresh_install)
+    if start_view == "firstrun":
+        root.after(50, enter_first_run)                  # 1-click first run (docs/design/companion_first_run.md); the job starts the companion
+    elif start_view == "simple":
+        root.after(50, enter_simple)
+    elif c.settings.get("auto_start", True) and not c.running():
         root.after(400, lambda: (c.start(), refresh_buttons()))
     if "--minimized" in sys.argv:
         root.iconify()
@@ -1551,7 +1684,7 @@ def selftest():
     c.reset_game_folder("war3")
     ok &= chk("--war3-root" not in c.argv(), "GAME-FOLDERS: Zuruecksetzen (war3) -> no --war3-root")
     gv, live = c.games_view({"games": [{"id": "valve", "name": "Half-Life", "found": False, "root": "", "source": "none", "hint": "x"}]})
-    ok &= chk(live and game_rows(gv)[0][2].startswith("nicht gefunden") and game_rows(gv)[0][3] == "-",
+    ok &= chk(live and game_rows(gv)[0][2].startswith("not found") and game_rows(gv)[0][3] == "-",
               "GAME-FOLDERS: games_view uses status.json games; not found -> 'nicht gefunden' + hint")
     c.settings.update(war3_root="")
     a0 = c.argv()

@@ -47,7 +47,7 @@ Requests from the world arrive as VRChat log lines:
 import argparse, errno, http.server, json, os, queue, re, socket, struct, sys, threading, time, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I drops the script dir from sys.path
-import builder, buildprog, csshare, games as games_mod, holo, hostinfo, logwatch, mapshare, models, prebuilt, rose, rosebuild, runtime, steam, war3   # noqa: E402
+import builder, buildprog, csshare, games as games_mod, holo, hostinfo, i18n, logwatch, mapshare, models, prebuilt, rose, rosebuild, runtime, steam, war3   # noqa: E402
 from version import VERSION                                        # noqa: E402  (single source of truth)
 
 APP = "gsvr-companion"          # status.json "app": the world + GUI accept a status only with this value
@@ -945,7 +945,7 @@ def make_handler(state):
             q = urllib.parse.urlsplit(self.path)
             if self.client_address[0] not in ("127.0.0.1", "::1") or hostname not in ALLOWED_HOSTS:
                 return self._reject()
-            if q.path in ("/rose/install", "/rose/build_all") and self.headers.get("X-GSVR-Rose") == "1":
+            if q.path in ("/rose/install", "/rose/build_all", "/rose/cancel") and self.headers.get("X-GSVR-Rose") == "1":
                 return self._rose_post(q)
             if q.path != "/ask" or self.headers.get("X-GSVR-Ask") != "1":
                 return self._reject()
@@ -964,6 +964,9 @@ def make_handler(state):
                     return self._send(400, "bad request\n")
                 ok, why = state.rosebuild.set_install(d or None)
                 body = {"ok": bool(ok), "reason": why}
+            elif q.path == "/rose/cancel":                    # first-run "Cancel": stop the running build, drop the queue (?scope=batch: only the background batch, not an on-demand build)
+                state.rosebuild.cancel(batch_only=(qs.get("scope") or [""])[0] == "batch")
+                body = {"ok": True}
             else:
                 body = {"ok": True, "queued": state.rosebuild.build_all(force=(qs.get("force") or ["0"])[0] == "1")}
             body["rose_build"] = state.rosebuild.state(cached=True)
@@ -1174,6 +1177,7 @@ def main(argv=None):
     ap.add_argument("--world-list", help="URL of the official world list; re-read when a world outside --world-allow joins")
     ap.add_argument("--http-log", help="append every HTTP request (TSV, incl. User-Agent) to this file")
     a = ap.parse_args(argv)
+    i18n.set_lang(os.environ.get("GSVR_LANG") or i18n.resolve("auto"))   # status.json hint texts (games.py) in the GUI's language
     a.world_allow = set(a.world_allow.split(",")) if a.world_allow else None
     a.cache_dir = os.path.abspath(a.cache_dir)
     a.rose_dir = os.path.abspath(a.rose_dir) if a.rose_dir else rose.default_dir(a.cache_dir)

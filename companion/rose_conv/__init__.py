@@ -123,6 +123,8 @@ PACKS = {
     "goblincaveb2": _zone(32, "Goblin Cave (B2)"),
     "goblincaveb3": _zone(33, "Goblin Cave (B3)"),
     "forgottentemple": _zone(56, "Forgotten Temple"),                     # W18 DUNGEONS: Luna dungeon, entered by the quest teleport of Crystal Snowfields NPC EM54-001 (quests 2051 - 2053), exits (WARP rows 118 - 120) to zone 54
+    "shadyjungle": _zone(62, "Shady Jungle"),                             # W19 ZONES: Eldeon field (11 x 7 = 77 blocks, 745 object chunks: scene pools 80 / 800); the two Eldeon (61) gates lead in, its gates lead back
+    "lunaclanfield": _zone(59, "Luna Clan Field"),                        # W19 ZONES: entered by the clan teleport Clan-warp05 (clan member) of a Crystal Snowfields NPC, its gate leads back to zone 54
     "login": dict(kind="lobby", zone=None, all=False, ui=True, label="Character select",         # out/w5 login has UIAT + UIDL: built with --ui
                   argv=["--lobby", "--lobby-config", "<rose_conv/lobby_default.json>", "--ui"]),
     "avatar": dict(kind="avatar", zone=None, all=False, ui=False, label="Avatar + items", argv=["rose_avatar_pack.py"]),

@@ -1,6 +1,8 @@
 import sys, os, tkinter as tk
 sys.path.insert(0, sys.argv[1])
 os.environ.setdefault("GSVR_GUI_SMOKE", "1")
+os.environ["GSVR_LANG"] = os.environ.get("GSVR_LANG", "en")
+os.environ.setdefault("GSVR_FIRSTRUN", "0")
 orig = tk.Tk.mainloop
 checks = {}
 
@@ -16,7 +18,11 @@ def short(self, n=0):
         from tkinter import ttk
         nb = next(w for w in walk(self) if isinstance(w, ttk.Notebook))
         tabs = {nb.tab(t, "text"): self.nametowidget(t) for t in nb.tabs()}
+        import i18n
+        T = {"Status": i18n.tr("tab.status"), "Spiele": i18n.tr("tab.games"), "Settings": i18n.tr("tab.settings")}
+        checks["Worlds tab"] = i18n.tr("tab.worlds") in tabs
         for name in ("Status", "Spiele", "Settings"):
+            tabs[name] = tabs[T[name]]
             sub = list(walk(tabs[name]))
             checks[name + " scrollbar"] = any(isinstance(x, ttk.Scrollbar) for x in sub)
             checks[name + " canvas"] = any(isinstance(x, tk.Canvas) for x in sub)
