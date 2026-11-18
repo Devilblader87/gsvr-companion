@@ -36,7 +36,7 @@ MANIFEST_ASSET = "gsvr-modules.json"
 SIG_ASSET = "gsvr-modules.json.sig"
 TAG_RE = re.compile(r"modules-(\d{1,9})")
 NAME_RE = re.compile(r"[a-z][a-z0-9]{1,15}")
-VER_RE = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,4}")
+VER_RE = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?")         # 4th part = hotfix (0.9.49.1)
 FILE_RE = re.compile(r"gsvr-module-([a-z][a-z0-9]{1,15})-(\d{1,4}\.\d{1,4}\.\d{1,4})\.zip")
 SHA_RE = re.compile(r"[0-9a-f]{64}")
 MEMBER_RE = re.compile(r"[A-Za-z0-9_./-]+")

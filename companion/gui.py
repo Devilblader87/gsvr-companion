@@ -1383,6 +1383,8 @@ def run_gui():
 
     def leave_first_run():
         first.hide()
+        if last_status.get("st") is not None:              # tabs were not redrawn while the simple view was on top
+            show_status(last_status["st"])
         c.settings.update(first_run_done=True, view="advanced")
         try:
             c.save_settings()
@@ -1510,9 +1512,13 @@ def run_gui():
             while True:
                 kind, val = ui_q.get_nowait()
                 if kind == "status":
-                    show_status(val)
+                    if first.visible:                    # simple view on top: keep the status, redraw the tabs when they show
+                        last_status["st"] = val
+                    else:
+                        show_status(val)
                 elif kind == "games":
-                    show_games(val)
+                    if not first.visible:
+                        show_games(val)
                 elif kind == "modules":
                     mod_done(val)
                 elif kind == "update":

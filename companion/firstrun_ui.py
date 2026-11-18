@@ -11,6 +11,9 @@ import i18n
 import worlds
 from i18n import tr
 
+DETECT_KEYS = ("hl_root", "rose_install", "war3_root", "war3_maps")
+DETECT_EVERY = 60.0         # s between full game scans in the simple view (status still refreshes every 4 s)
+
 GREEN, YELLOW, RED, GREY = "#1a9c3a", "#e0a800", "#c62828", "#8a8a8a"
 LIGHTS = {"green": GREEN, "yellow": YELLOW, "red": RED, "grey": GREY}
 
@@ -69,6 +72,7 @@ class FirstRun:
         self.home_rows = []
         self.home_busy = False
         self._home_t = 0.0
+        self._det = None                 # (settings signature, time, entries): the drive scan is slow, the home view reuses it
 
     # ---------------------------------------------------------------- lifecycle
     def show(self):
@@ -89,6 +93,7 @@ class FirstRun:
         self.job = None
         self.msg = ""
         self.home_rows = []
+        self._det = None                                       # fresh scan whenever the simple view opens
         self.frame.pack(fill="both", expand=True)
         self.draw()
         self.refresh_home()
@@ -102,9 +107,16 @@ class FirstRun:
         self.home_busy = True
         s = dict(self.c.settings)
 
+        sig = tuple((s.get(k) or "").strip() for k in DETECT_KEYS)
+
         def work():
+            import time
             try:
-                ents = firstrun.detect(s)
+                d = self._det
+                if d is None or d[0] != sig or time.time() - d[1] > DETECT_EVERY:
+                    d = (sig, time.time(), firstrun.detect(s))     # full scan only on open, after a settings change, or once a minute
+                    self._det = d
+                ents = d[2]
                 st = self.c.status() if self.c.running() else None
                 rows = firstrun.world_rows(ents, st, self.c.running())
             except Exception:                                  # noqa: BLE001 - keep the last rows
