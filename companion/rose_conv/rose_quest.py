@@ -62,6 +62,7 @@ COND_DOC = {
     3: 'ability value: a = ability type, b = value, c = cmp', 4: 'quest item: a = raw equipment index (1..11 = that equipment slot must hold the item, else a count check), b = item sn, c = count, d = cmp',
     6: 'position: a = zone, b = x cm, c = y cm, d = distance cm', 10: 'random percent: b = low, c = high', 13: 'select npc: b = npc id',
     11: 'object variable (ZONES MORE): sub = object (0 selected npc, 1 selected event), a = variable 0..19, b = value, c = cmp',
+    5: 'party (W18 DUNGEONS): sub = must be the leader (1), b = party level, c = cmp (2 >=, 3 <)',
     9: 'has skill (QUEST CHECK): sub = has (1) / has not (0), b = first id, c = last id',
     14: 'user switch: a = id, b = value 0/1', 21: 'object distance: a = object (0 npc 1 event), b = distance cm', 22: 'server channel: b = low, c = high',
     23: 'clan: has a clan: b = 1 / 0 (CLAN QUESTS)', 24: 'clan rank (0 penalty .. 6 master): b = value, c = cmp', 25: 'clan contribution: b = value, c = cmp', 26: 'clan level: b = value, c = cmp',
@@ -75,6 +76,8 @@ REW_DOC = {
     11: 'object variable (ZONES MORE): sub = object (0 selected npc, 1 selected event), a = variable 0..19, b = value, c = reward op',
     23: 'clan level increase (QUEST CHECK; the runtime fails it: no clan growth yet)', 24: 'clan money: b = value, c = reward op', 25: 'clan points: b = value, c = reward op',
     26: 'clan skill: sub 1 add 0 remove, b = skill id', 27: 'clan contribution: b = value, c = reward op',
+    8: 'spawn monster (W18 DUNGEONS): sub = location, a = count, b = npc id, c / d = x / y cm; the runtime accepts it and counts it (not modelled)',
+    20: 'set team number (W18): sub = source; accepted, one instance per zone', 21: 'set revive position (W18): b = x cm, c = y cm',
     15: 'set user switch: a = id, b = value', 16: 'clear switch group: a = group', 17: 'clear all switches', 29: 'call lua (client side): no-op', 30: 'reset skills',
     28: 'teleport me and the nearby clan members (CLAN QUESTS): a = zone, b = x cm, c = y cm, d = distance cm',
     255: 'unsupported (sub = original op): fails like the reference server'}
@@ -171,6 +174,9 @@ def _cond_records(op, d, p, size, warn):
     elif op in (24, 25, 26, 27, 29):          # CLAN QUESTS: clan rank (24) / contribution (25) / level (26) / points (27) / member count (29): b = value (u16), c = cmp
         val, cmp_ = struct.unpack_from('<HB', d, p)
         out.append((op, 0, 0, val, cmp_, 0))
+    elif op == 5:          # W18 DUNGEONS: Party (rose-offline QsdCondition::Party): sub = must be the leader, b = party level, c = cmp (2 >= / 3 <, the file byte 1 = less than)
+        lead, lv, lt = struct.unpack_from('<B3xiB', d, p)
+        out.append((5, 1 if lead else 0, 0, lv, 3 if lt else 2, 0))
     elif op == 28:          # CLAN QUESTS: clan money: b = value, c = cmp
         val, cmp_ = struct.unpack_from('<iB', d, p)
         out.append((28, 0, 0, val, cmp_, 0))
@@ -239,6 +245,14 @@ def _rew_records(op, d, p, size, warn):
         out.append((15, 0, sid, 1 if val else 0, 0, 0))
     elif op == 16:
         out.append((16, 0, struct.unpack_from('<H', d, p)[0], 0, 0, 0))
+    elif op == 8:          # W18 DUNGEONS: SpawnMonster: sub = location (0 owner 1 selected npc 2 selected event 3 position), a = count, b = npc id, c / d = x / y cm (position), zone dropped
+        npc, cnt, loc, _z, x, y = struct.unpack_from('<IIB3xIii', d, p)
+        out.append((8, loc, min(cnt, 65535), npc, x, y))
+    elif op == 20:          # W18 DUNGEONS: SetTeamNumber (sub = source 0 unique 1 clan 2 party)
+        out.append((20, d[p], 0, 0, 0, 0))
+    elif op == 21:          # W18 DUNGEONS: SetRevivePosition: b = x cm, c = y cm
+        x, y = struct.unpack_from('<ii', d, p)
+        out.append((21, 0, 0, x, y, 0))
     elif op == 28:          # CLAN QUESTS: teleport nearby clan members (and me): a = zone, b = x cm, c = y cm, d = distance (cm)
         dist, z, x, y = struct.unpack_from('<IH2xII', d, p)
         out.append((28, 0, z, x, y, dist))

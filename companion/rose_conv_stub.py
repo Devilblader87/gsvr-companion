@@ -55,6 +55,7 @@ PACKS = {
     "goblincaveb1": {"kind": "zone", "zone": 31, "args": ["--zone", "31", "--all", "--ui"]},
     "goblincaveb2": {"kind": "zone", "zone": 32, "args": ["--zone", "32", "--all", "--ui"]},
     "goblincaveb3": {"kind": "zone", "zone": 33, "args": ["--zone", "33", "--all", "--ui"]},
+    "forgottentemple": {"kind": "zone", "zone": 56, "args": ["--zone", "56", "--all", "--ui"]},
     "junonpolis": {"kind": "zone", "zone": 2, "args": ["--zone", "2", "--all", "--ui"]},
     "dolphinisland": {"kind": "zone", "zone": 3, "args": ["--zone", "3", "--all", "--ui"]},
     "manasnowfields": {"kind": "zone", "zone": 52, "args": ["--zone", "52", "--all", "--ui"]},
