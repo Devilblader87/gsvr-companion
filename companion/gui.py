@@ -1377,9 +1377,24 @@ def run_gui():
     built_lang = i18n.lang()
     first = firstrun_ui.FirstRun(root, c, bg, on_advanced=lambda: leave_first_run(), on_lang=lambda code: (i18n.set_lang(code), save_lang(code)))
 
+    upd_state = {"avail": False}
+
+    def place_banner():
+        """the update banner sits on top of whichever view is shown (simple view or tabs); packing it 'before' a
+        hidden widget raised TclError and stopped the UI pump in the simple view (0.9.49)"""
+        banner.pack_forget()
+        if not upd_state["avail"]:
+            return
+        anchor = first.frame if first.visible else nb
+        try:
+            banner.pack(fill="x", padx=8, before=anchor)
+        except tk.TclError:
+            banner.pack(fill="x", padx=8, side="top")
+
     def show_main():
         nb.pack(fill="both", expand=True, padx=8, pady=(4, 8))
         top.pack(fill="x", before=nb)
+        place_banner()
 
     def leave_first_run():
         first.hide()
@@ -1410,6 +1425,7 @@ def run_gui():
     def enter_first_run():
         hide_main()
         first.show()
+        place_banner()
 
     def enter_simple():
         """the simple view = home screen of the first run (setup already done); remembered as the last used view"""
@@ -1420,6 +1436,7 @@ def run_gui():
         except OSError:
             pass
         first.show_home()
+        place_banner()
         if c.settings.get("auto_start", True) and not c.running():
             c.start()
     btn_easy.configure(command=lambda: enter_simple() if c.settings.get("first_run_done") else enter_first_run())
@@ -1468,9 +1485,10 @@ def run_gui():
         if info["status"] == "available":
             banner_lbl.configure(text=tr("d.update_avail", a=VERSION, b=info["latest"]))
             btn_install.configure(state="normal")
-            banner.pack(fill="x", padx=8, before=nb)
+            upd_state["avail"] = True
         else:
-            banner.pack_forget()
+            upd_state["avail"] = False
+        place_banner()
 
     asked = set()
 
@@ -1508,6 +1526,16 @@ def run_gui():
         refresh_buttons()
 
     def pump_ui():
+        try:
+            pump_ui_inner()
+        except Exception as e:                       # noqa: BLE001 - never let one message stop the UI pump
+            c.log("[gui] ui message failed: %r" % (e,))
+        try:
+            root.after(200, pump_ui)
+        except tk.TclError:                          # window already destroyed (update install restarts the app)
+            pass
+
+    def pump_ui_inner():
         try:
             while True:
                 kind, val = ui_q.get_nowait()
@@ -1575,7 +1603,6 @@ def run_gui():
                     hl_lbl.configure(text=tr("g.hl_found_n", n=len(val)) if val else tr("g.hl_found_none"))
         except queue.Empty:
             pass
-        root.after(200, pump_ui)
 
     def on_close():
         remember()
