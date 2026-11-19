@@ -63,7 +63,7 @@ class QuestOpsTests(unittest.TestCase):
         self.assertFalse(warn)
 
     def test_still_unsupported_stay_255(self):
-        t, warn = self.parse([_rec(18, struct.pack("<BBBBB3x", 1, 0, 0, 23, 59))], [_rec(19, struct.pack("<HH", 1, 0) + _s("x"))])
+        t, warn = self.parse([_rec(12, struct.pack("<IIII", 1, 2, 3, 4))], [_rec(19, struct.pack("<HH", 1, 0) + _s("x"))])
         self.assertEqual(t["conds"][0][0], 255)
         self.assertEqual(t["rews"][0][0], 255)
         self.assertEqual(sum(warn.values()), 2)

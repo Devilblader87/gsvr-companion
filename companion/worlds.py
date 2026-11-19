@@ -13,7 +13,7 @@ WORLD_ID_RE = re.compile(r"^wrld_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 
 # key -> (world id, display name, game ids that unlock it)
 WORLDS = {
-    "rose": ("wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2", "GSVR - ROSE Online", ("rose",)),
+    "rose": ("wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2", "GSVR - ROSE Online ローズオンライン", ("rose",)),
     "hl": ("wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a", "GSVR - Half-Life", ("valve", "gearbox", "bshift", "svencoop")),   # Sven Co-op is part of the hub, no own row
     "war3": ("wrld_71563253-4115-40d3-b165-7cdba23bff06", "Warcraft III VR (bring your own game)", ("war3",)),   # W3VR (own unity project, ~/dev/decomp/warcraft3)
     "cs": ("wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb", "GSVR - Counter-Strike", ("cstrike",)),

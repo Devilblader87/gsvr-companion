@@ -71,6 +71,7 @@ import struct
 
 import rosefmt as F
 import rosedds as D
+import rose_ambient as AMB
 
 TAG_EFCT = b'EFCT'
 VERSION = 3
@@ -916,6 +917,18 @@ class Builder:
         except Exception:          # one bad / missing EFT: that effect is not in the table
             self._w('EFT missing or unreadable')
             return False
+        return self._add_eft(fid, eft)
+
+    def add_eft(self, fid, eft):
+        """w20 OPTICS: an effect that has no EFT file (a LIST_MORPH_OBJECT row, rose_ambient.morph_eft) -> True when it has a drawable part"""
+        if fid in self.files:
+            return self.files[fid] is not None
+        self.files[fid] = None
+        if len([f for f in self.files.values() if f]) >= MAX_FILES:
+            return False
+        return self._add_eft(fid, eft)
+
+    def _add_eft(self, fid, eft):
         first = len(self.emitters)
         dur, endless, flags = 0.0, False, 0
         for p in eft['particles']:
@@ -1024,9 +1037,10 @@ def skill_effects(c):
                 status=[_int(c, 11), _int(c, 12)], area_hit=_int(c, 83))
 
 
-def build_tables(read, file_stb, list_stb, skill_stb, npc_stb=None, weapon_stb=None, atlas=None, status_stb=None, useitem_stb=None, type_motion=None, file_motion=None):
+def build_tables(read, file_stb, list_stb, skill_stb, npc_stb=None, weapon_stb=None, atlas=None, status_stb=None, useitem_stb=None, type_motion=None, file_motion=None, ambient=None):
     """-> (skills, npcs, weapons, builder); builder.statuses / builder.items / builder.levelup / builder.partyup hold the fx11 / w17 tables. type_motion / file_motion
     (TYPE_MOTION / FILE_MOTION) give the cast effects' motion frame events (cast_timing; without them every cast starts with the cast).
+    ambient = (LIST_MORPH_OBJECT stb, morph rows used by the zones, effect object paths used by the zones) adds the w20 zone ambient effects (rose_ambient).
     Pure apart from read(path) -> bytes (KeyError when missing)."""
     mcache = {}
     fe = {}
@@ -1097,7 +1111,33 @@ def build_tables(read, file_stb, list_stb, skill_stb, npc_stb=None, weapon_stb=N
                 b.items.append(dict(id=n, use=use, status=sf))
     b.levelup = fixed_effect(b, fe, LEVELUP_EFT, LEVELUP_ID)
     b.partyup = fixed_effect(b, fe, PARTY_UP_EFT, PARTY_UP_ID)
+    b.ambient_morph = 0
+    b.ambient_paths = 0
+    if ambient is not None:
+        add_ambient(b, fe, *ambient)
     return skills, npcs, weapons, b
+
+
+def add_ambient(b, fe, morph_stb, morph_rows, paths):
+    """w20 OPTICS: the effects of the zones' IFO type 6 (LIST_MORPH_OBJECT rows, file id AMB_MORPH_BASE + row) and type 5 (effect object files: FILE_EFFECT row or the
+    path id) into the builder. Sets b.ambient_morph / b.ambient_paths (drawable counts)."""
+    if morph_stb is not None:
+        for row in sorted(morph_rows):
+            fid = AMB.morph_file_id(row)
+            if not fid or row >= morph_stb['rows']:
+                continue
+            cells = morph_stb['cells'][row]
+            eft = AMB.morph_eft(cells) if AMB.morph_mesh_ok(b.read, cells) else None
+            if eft is not None and b.add_eft(fid, eft):
+                b.ambient_morph += 1
+    ids = {AMB.norm_path(p): r for r, p in fe.items()}
+    for path in paths:
+        fid = AMB.path_file_id(ids, path)
+        if fid in fe and AMB.norm_path(fe[fid]) != path:
+            b._w('ambient effect id collision')
+            continue
+        if b.add_file(fid, path):
+            b.ambient_paths += 1
 
 
 def fixed_effect(b, fe, path, reserved_id):
@@ -1272,8 +1312,16 @@ def build_section(vfs, log=print):
     fs, ls, sk = _stb(vfs, 'FILE_EFFECT'), _stb(vfs, 'LIST_EFFECT'), _stb(vfs, 'LIST_SKILL')
     if fs is None or sk is None:
         return [], dict(warnings={'EFCT: FILE_EFFECT / LIST_SKILL missing': 1})
+    morph = _stb(vfs, 'LIST_MORPH_OBJECT')
+    amb = None
+    if morph is not None:          # w20 OPTICS: the zones' animated morph objects (waves) and effect objects; a client without the table / index just has none
+        try:
+            rows, paths = AMB.scan_ifos(vfs, F.ifo)
+            amb = (morph, rows, sorted(set(paths) | set(AMB.scan_zsc(vfs, F.zsc))))          # + the effects of the ZSC objects (torches, street lights, window lights)
+        except Exception as e:
+            log('EFCT: zone ambient effects skipped (%s)' % e)
     skills, npcs, weapons, b = build_tables(vfs.read, fs, ls, sk, _stb(vfs, 'LIST_NPC'), _stb(vfs, 'LIST_WEAPON'), status_stb=_stb(vfs, 'LIST_STATUS'),
-                                            useitem_stb=_stb(vfs, 'LIST_USEITEM'), type_motion=_stb(vfs, 'TYPE_MOTION'), file_motion=_stb(vfs, 'FILE_MOTION'))
+                                            useitem_stb=_stb(vfs, 'LIST_USEITEM'), type_motion=_stb(vfs, 'TYPE_MOTION'), file_motion=_stb(vfs, 'FILE_MOTION'), ambient=amb)
     if not b.emitters:
         return [], dict(warnings={'EFCT: no drawable effect': 1})
     data = enc_efct(b, skills, npcs, weapons)
@@ -1283,13 +1331,13 @@ def build_section(vfs, log=print):
     info = dict(effects=len([f for f in b.files.values() if f]), emitters=len(b.emitters), keys=len(b.keys), cells=len(b.atlas.rgba), skills=nall,
                 player_skills=np_, player_skills_with_effect=npfx, npcs=len(npcs), weapons=len(weapons), bytes=len(data), warnings=dict(b.warn),
                 meshes=len(b.meshes), mesh_verts=len(b.verts), vat_texels=b.vat_texels, statuses=len(b.statuses), items=len(b.items), levelup=b.levelup,
-                partyup=b.partyup, tracks=len(b.tracks), atlas=(at[0], at[1]) if at else (0, 0), atlas_copied=b.atlas.copied, atlas_halved=b.atlas.halved,
+                partyup=b.partyup, ambient_morph=getattr(b, 'ambient_morph', 0), ambient_paths=getattr(b, 'ambient_paths', 0), tracks=len(b.tracks), atlas=(at[0], at[1]) if at else (0, 0), atlas_copied=b.atlas.copied, atlas_halved=b.atlas.halved,
                 casts_at_cast=len([a for a in ca if a != CAST_NEVER and not a & CAST_FIRE]), casts_at_fire=len([a for a in ca if a != CAST_NEVER and a & CAST_FIRE]),
                 casts_never=len([a for a in ca if a == CAST_NEVER]))
     log('effects: %d files, %d emitters, %d atlas cells (%d x %d, %d copied, %d halved), %d meshes (%d vertices, %d animation texels), %d transform tracks, '
         '%d of %d player skills with an effect (%d skill rows; casts %d at the cast, %d at the fire, %d never), %d npcs, %d weapons, %d statuses, %d items, '
-        'level-up %d, party level-up %d, %.2f MB'
+        'level-up %d, party level-up %d, ambient %d morph meshes + %d effect objects, %.2f MB'
         % (info['effects'], info['emitters'], info['cells'], info['atlas'][0], info['atlas'][1], b.atlas.copied, b.atlas.halved, len(b.meshes), len(b.verts),
            b.vat_texels, len(b.tracks), npfx, np_, nall, info['casts_at_cast'], info['casts_at_fire'], info['casts_never'], len(npcs), len(weapons),
-           len(b.statuses), len(b.items), b.levelup, b.partyup, len(data) / 1e6))
+           len(b.statuses), len(b.items), b.levelup, b.partyup, getattr(b, 'ambient_morph', 0), getattr(b, 'ambient_paths', 0), len(data) / 1e6))
     return [(TAG_EFCT, 1, len(skills), data)], info

@@ -56,17 +56,23 @@ class VersionAndTable(unittest.TestCase):
         LOAD PACKAGE 5: every zone + the login pack one revision more (BONT, the pre-baked bone texture), the avatar pack (no clips) keeps its version; Birth Island had 2 already.
         ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py). fx11: avatar 3 (EFCT version 2: effect meshes, dummy bones, statuses). w15 skilltips: WRAPPER_REV 6 (SKDB skill descriptions).
         w17-fx: avatar 4 (EFCT version 3: full resolution textures, per-part materials, transform animations, cast frame events)."""
-        self.assertEqual(rose_conv.WRAPPER_REV, 6)
+        self.assertEqual(rose_conv.WRAPPER_REV, 7)
         self.assertEqual(rose_conv.BONT_REV, 1)
         tiny = ("junonpolis", "adventurersplain", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "dolphinisland")
-        self.assertEqual(rose_conv.PACK_REV, dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=4, **{n: 2 for n in tiny}))   # 0.9.47g: tiny transparent DXT as RGBA32
+        dun = ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple")          # ROSE w20: the monsters' skill table in AIPS (rose_npcskills.py)
+        amb = ("birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "junonpolis", "dolphinisland",
+               "goblincaveb1", "shadyjungle")          # w20 OPTICS: ZFXO (waves, effect objects) -> one more revision each
+        want = dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=5, **{n: 2 for n in tiny})   # 0.9.47g: tiny transparent DXT as RGBA32
+        for n in amb + dun:
+            want[n] += 1
+        self.assertEqual(rose_conv.PACK_REV, want)
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
-        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p3")
-        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p4")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3)
+        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p4")
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p5")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3, w20: + zone ambient effects)
         for n in rose_conv.PACKS:
-            if n not in ("birthisland", "avatar") + tiny:
+            if n not in ("birthisland", "avatar") + tiny + amb + dun:
                 self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p1")
-        self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p2")
+        self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p3")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)
 
     def test_tiny_dxt_keeps_alpha(self):
@@ -130,7 +136,7 @@ class VersionAndTable(unittest.TestCase):
         self.assertIn("rose_pack.py", listed)
         for name, h in listed.items():
             self.assertEqual(_sha(os.path.join(HERE, name)), h, "%s edited locally: change rose-vrchat and run tools/sync_rose_converter.sh" % name)
-        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
+        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
         extra = [f for f in os.listdir(HERE) if f.endswith(".py") and f not in listed and f not in own]
         self.assertEqual(extra, [], "unlisted modules in rose_conv/")
 
@@ -415,6 +421,52 @@ class ItemTypes(unittest.TestCase):
         self.assertEqual(self.I.missing_codes(reach, recs), {})
         nameless = [self.I.item_record(12171, [""] * 9 + ["5"], ""), self.I.item_record(12999, [""] * 9 + ["0"], "n")]
         self.assertEqual(self.I.missing_codes(dict(DROP={12171, 12999}), nameless), {"DROP": [12171, 12999]})
+
+
+class DropMaterialFlags(unittest.TestCase):
+    """rose-fix-droptex (docs/design/rose_droptex.md): the runtime picks a ground model part's draw kind from its OMAT flags (GsvrRpg1Chars.FldmPartTemplate / CharMatKind),
+    so the converter must carry the ZSC material switches 1:1: alpha enabled -> MF_BLEND, alpha test -> MF_ALPHATEST (+ alpha ref / 256), specular -> MF_SPECULAR."""
+
+    def _mat(self, f):
+        import rose_pack
+        ob = rose_pack.ObjBuilder(None, None, None)
+        zsc = dict(mats=[("3DDATA/ITEM/X/X.PNG", f, 1.0, 0)])          # not a DDS: no texture is read, the material row still gets its flags
+        import io, contextlib
+        with contextlib.redirect_stderr(io.StringIO()):
+            return ob.mats[ob.get_mat(zsc, 0)]
+
+    def kind(self, flags):
+        """the runtime rule (GsvrRpg1Chars.CharMatKind = rose-offline-client ObjectMaterial): 0 opaque, 1 cut-out, 2 blend, 3 additive"""
+        if flags & rpg1.MF_SPECULAR or not flags & rpg1.MF_BLEND:
+            return 0
+        if flags & rpg1.MF_ALPHATEST:
+            return 1
+        return 3 if flags & rpg1.MF_ADDITIVE else 2
+
+    def test_armour_chest_is_opaque(self):
+        m = self._mat([0, 0, 0, 1, 128, 1, 1, 0, 1])          # di37 (the equipment chest of Soldier Boots and every armour drop): alpha test + specular, alpha NOT enabled
+        self.assertEqual(m["flags"], rpg1.MF_ALPHATEST | rpg1.MF_SPECULAR)
+        self.assertAlmostEqual(m["alpha_ref"], 0.5)
+        self.assertEqual(self.kind(m["flags"]), 0)
+
+    def test_weapon_kinds(self):
+        self.assertEqual(self.kind(self._mat([0, 0, 0, 1, 128, 1, 1, 0, 0])["flags"]), 0)          # Air Gun fgu10: alpha test without alpha enabled = opaque in the client
+        bow = self._mat([0, 1, 0, 1, 128, 1, 1, 0, 0])
+        self.assertEqual((bow["flags"], self.kind(bow["flags"])), (rpg1.MF_BLEND | rpg1.MF_ALPHATEST, 1))          # bows: alpha enabled + test = cut-out
+        self.assertEqual(self.kind(self._mat([0, 1, 1, 0, 0, 1, 1, 0, 0])["flags"]), 2)
+        self.assertEqual(self.kind(self._mat([0, 1, 0, 0, 0, 1, 0, 1, 0])["flags"]), 3)
+
+    def test_runtime_rule_matches(self):
+        p = os.path.join(os.path.dirname(HERE), "..", "unity", "Assets", "GoldSrcVR", "Scripts", "GsvrRpg1Chars.cs")
+        if not os.path.isfile(p):
+            self.skipTest("unity tree not next to the companion")
+        with open(p, encoding="utf-8") as f:
+            src = f.read()
+        if not src:
+            self.skipTest("unity tree not next to the companion")
+        self.assertIn("if ((flags & GsvrRpg1Pack.MF_SPECULAR) != 0) return GsvrRpg1Pack.KindOpaque;", src)
+        self.assertIn("if ((flags & GsvrRpg1Pack.MF_BLEND) == 0) return GsvrRpg1Pack.KindOpaque;", src)
+        self.assertIn("return CharMatTemplate(GsvrRpg1Pack.OmatFlags(d, omatOff, om));", src)
 
 
 class Summons(unittest.TestCase):
@@ -910,7 +962,7 @@ class Effects(unittest.TestCase):
         self.assertIn("rose_effects.build_section(vfs, log=log)", src)
         self.assertNotIn("log('effects: %s' % e)", src)                                # not swallowed: an import / table error fails the avatar build
         self.assertLess(src.index("rose_effects.build_section"), src.index("info = dict("))
-        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p4")
+        self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p5")
 
     def test_fx11_meshes_vertex_animation(self):
         """fx11: an EFT mesh part becomes real geometry (effect frame (-x, z, -y), metres) + its ZMO vertex animation as RGBAHalf texels (frame-major: frame f vertex v at
@@ -1105,6 +1157,159 @@ class Effects(unittest.TestCase):
         self.assertEqual(b2.partyup, 297)
         x = E.dec_efct(E.enc_efct(b2, _s))
         self.assertEqual(x["partyup"], 297)
+
+    def test_w20_morph_ambient(self):
+        """w20 OPTICS: a LIST_MORPH_OBJECT row becomes an effect file with ONE endless, two sided mesh part (file id 40000 + row); effect object paths get their FILE_EFFECT
+        row (or the stable path id); the avatar table holds them next to the skill effects."""
+        E = self.E
+        import rose_ambient as A
+        mo = _fx_stb({1: {0: "wave", 1: "FX\\RING.ZMS", 2: "FX\\RING.ZMO", 3: "FX\\C.DDS", 4: 1, 5: 0, 6: 0, 7: 1, 8: 0, 9: 5, 10: 2, 11: 1},
+                      2: {0: "nomesh", 1: "", 3: "FX\\C.DDS"}, 3: {0: "gone", 1: "FX\\NOPE.ZMS", 3: "FX\\C.DDS"}})
+        s, n, w, b = E.build_tables(self.read, self.fe, self.le, self.sk, ambient=(mo, {1, 2, 3, 99}, ["FX/CAST.EFT", "FX/NEW.EFT"]))
+        self.files["FX/NEW.EFT"] = _fx_eft([("FX/A.PTL", (0, 0, 0), 0)])
+        self.assertEqual(b.ambient_morph, 1)
+        self.assertIn(A.morph_file_id(1), b.files)
+        rec = b.files[A.AMB_MORPH_BASE + 1]
+        self.assertEqual(rec["count"], 1)
+        wave = b.emitters[rec["first"]]
+        self.assertEqual((wave["kind"], wave["mode"], wave["mrep"]), (1, E.MODE_ADD, 0.0))             # src alpha, dst one = additive, endless
+        self.assertTrue(wave["mflags"] & E.MF_TWOSIDED)                                                 # drawn two sided (see morph_eft)
+        self.assertTrue(wave["mflags"] & E.MF_ZTEST)
+        self.assertFalse(wave["mflags"] & E.MF_ZWRITE)
+        self.assertEqual(rec["flags"] & 1, 1)                                                           # endless
+        self.assertIsNone(b.files.get(A.morph_file_id(2)))                                              # no mesh path -> not drawn
+        self.assertIsNone(b.files.get(A.morph_file_id(3)))                                              # mesh missing -> not drawn
+        self.assertIsNone(b.files.get(A.morph_file_id(99)))                                             # row beyond the table
+        fid = A.path_file_id({A.norm_path("FX\\CAST.EFT"): 1}, "FX/CAST.EFT")
+        self.assertEqual(fid, 1)                                                                        # the FILE_EFFECT row is reused
+        d = E.dec_efct(E.enc_efct(b, s))
+        self.assertIn(A.AMB_MORPH_BASE + 1, [f[0] for f in d["files"]])              # file id is the first field of the record
+
+
+class Ambient(unittest.TestCase):
+    """w20 OPTICS: ZFXO (rose_conv/rose_ambient.py): record codec, the anchor rotation maths, zone records from IFO blocks."""
+
+    def setUp(self):
+        import rose_ambient
+        self.A = rose_ambient
+
+    @staticmethod
+    def _rot(q):
+        x, y, z, w = q
+        n = (x * x + y * y + z * z + w * w) ** 0.5
+        x, y, z, w = x / n, y / n, z / n, w / n
+        return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+
+    @staticmethod
+    def _mv(m, v):
+        return tuple(sum(m[r][c] * v[c] for c in range(3)) for r in range(3))
+
+    def test_anchor_rotation_matches_the_pack_placement(self):
+        """effect-frame vertex (-x, z, -y) turned by the anchor rotation == the pack's own object placement (x, z, y) of the rotated file vertex (rose_pack add_instance)"""
+        A = self.A
+        import math
+        for q in ((0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.7071068, 0.7071068), (0.2, -0.4, 0.5, 0.7), (0.5, 0.5, -0.5, 0.5), (0.1, 0.9, 0.3, -0.2)):
+            ar = self._rot(A.anchor_rot(q))
+            ro = self._rot(q)
+            for v in ((1.0, 0.0, 0.0), (0.0, 2.0, 0.0), (0.0, 0.0, 3.0), (0.3, -0.7, 1.1)):
+                fx, fy, fz = self._mv(ro, v)
+                want = (fx, fz, fy)                                       # S (R_obj v)
+                ve = (-v[0], v[2], -v[1])                                 # the effect frame vertex of the same file vertex
+                got = self._mv(ar, ve)
+                for a, b in zip(want, got):
+                    self.assertAlmostEqual(a, b, places=5, msg="q %r v %r" % (q, v))
+            # the anchor rotation is a proper rotation (unit quaternion)
+            self.assertAlmostEqual(math.sqrt(sum(c * c for c in A.anchor_rot(q))), 1.0, places=6)
+
+    def test_codec_and_bounds(self):
+        A = self.A
+        recs = [dict(file=40001, kind=1, pos=(1.5, 2.0, 3.5), rot=(0.0, 0.0, 0.0, 1.0), scale=2.1), dict(file=7, kind=2, pos=(0.0, 0.0, 0.0), rot=(0.0, 1.0, 0.0, 0.0), scale=1.0)]
+        d = A.enc_zfxo(recs)
+        self.assertEqual(len(d), 16 + 36 * 2)
+        back = A.dec_zfxo(d)
+        self.assertEqual([(r["file"], r["kind"]) for r in back], [(40001, 1), (7, 2)])
+        self.assertAlmostEqual(back[0]["scale"], 2.1, places=5)
+        self.assertEqual(A.dec_zfxo(A.enc_zfxo([])), [])
+        with self.assertRaises(ValueError):
+            A.dec_zfxo(d[:-1])
+        bad = A.enc_zfxo([dict(file=1, kind=1, pos=(float("nan"), float("inf"), 1e30), rot=(float("nan"), 0, 0, 1), scale=float("nan"))])
+        r = A.dec_zfxo(bad)[0]
+        self.assertTrue(all(abs(c) <= 1e6 for c in r["pos"]))
+        self.assertEqual(r["scale"], 0.0)          # the runtime treats scale <= 0 as 1
+
+    def test_zone_records(self):
+        A = self.A
+
+        class Win:
+            size_x, size_z, x0, z0 = 640.0, 640.0, 5000.0, 5100.0
+
+            def to_local(self, x, y, z):
+                return (x / 100.0 + A.CENTER_OFF - self.x0, z / 100.0, y / 100.0 + A.CENTER_OFF - self.z0)
+        ob6 = dict(id=1, pos=(10000.0, 20000.0, 150.0), q=(0.0, 0.0, 0.0, 1.0), scale=(2.1, 2.1, 2.1))
+        ifos = {(32, 31): {6: [ob6, dict(ob6, id=77), dict(ob6, pos=(1.0e7, 0.0, 0.0))], 5: [dict(id=0, path="3DDATA\\EFFECT\\FIRE.EFT", pos=(0.0, 0.0, 0.0), q=(0, 0, 0, 1), scale=(1, 1, 1))]}}
+        recs = A.zone_records(ifos, Win(), {1}, {})
+        self.assertEqual([(r["file"], r["kind"]) for r in recs[:1]], [(A.AMB_MORPH_BASE + 1, 1)])        # id 77 has no row, the far one is outside the window
+        self.assertEqual(len(recs), 2)
+        self.assertEqual(recs[1]["kind"], 2)
+        self.assertGreaterEqual(recs[1]["file"], A.AMB_PATH_BASE)
+        self.assertEqual(recs[1]["file"], A.path_file_id({}, "3DDATA/EFFECT/fire.eft"))                 # path ids ignore case and slashes
+        self.assertEqual(recs[1]["scale"], 1.0)
+        self.assertAlmostEqual(recs[0]["scale"], 2.1)
+        self.assertAlmostEqual(recs[0]["pos"][0], 100.0 + 5200.0 - 5000.0)
+        self.assertAlmostEqual(recs[0]["pos"][1], 1.5)
+        self.assertAlmostEqual(recs[0]["pos"][2], 200.0 + 5200.0 - 5100.0)
+
+    def test_zsc_object_effects(self):
+        """effects of placed deco / cnst objects: parent part chain x entry transform, object placement; type 1 = night only, type 2 (light container) and non-EFT are no effects"""
+        A = self.A
+        import math
+
+        class Win:
+            size_x, size_z, x0, z0 = 640.0, 640.0, 5000.0, 5100.0
+
+            def to_local(self, x, y, z):
+                return (x / 100.0 + A.CENTER_OFF - self.x0, z / 100.0, y / 100.0 + A.CENTER_OFF - self.z0)
+        zsc = dict(effs=["3Ddata/Effect/_fire_02.eft", "3LIGHT_X", "3Ddata\\Junon\\EHouse\\win.eft"],
+                   objs=[([], []),
+                         ([(0, 0, dict(pos=(100.0, 0.0, 50.0), rot=(1.0, 0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)))],
+                          [(0, 0, dict(pos=(0.0, 0.0, 200.0), rot=(-1.0, 0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0), parent=1)), (1, 2, dict(pos=(0, 0, 0))), (2, 1, dict(pos=(0, 100.0, 0), parent=1))])])
+        self.assertEqual([(e[0], e[1]) for e in A.object_effects(zsc, 1)], [("3Ddata/Effect/_fire_02.eft", 0), ("3Ddata\\Junon\\EHouse\\win.eft", 1)])
+        self.assertEqual(A.object_effects(zsc, 0), [])
+        self.assertEqual(A.object_effects(zsc, 9), [])
+        fire = A.object_effects(zsc, 1)[0]
+        self.assertEqual(tuple(round(c, 3) for c in fire[3]), (100.0, 0.0, 250.0))                     # the part's offset + the entry's, parent chain resolved
+        # the object stands at (cm) (20000, 30000, 100) turned 90 degrees about the file z axis (up), scaled 2
+        h = math.sqrt(0.5)
+        ob = dict(id=1, pos=(20000.0, 30000.0, 100.0), q=(0.0, 0.0, h, h), scale=(2.0, 2.0, 2.0))
+        recs = A.zone_records({(1, 1): {1: [ob]}}, Win(), set(), {}, ((1, zsc),))
+        self.assertEqual([(r["kind"]) for r in recs], [A.KIND_EFFECT, A.KIND_NIGHT])
+        r = recs[0]
+        # file position: object + R(90 deg about z) * (2 * (100, 0, 250)) = (20000, 30000 + 200, 100 + 500) cm -> local metres
+        self.assertAlmostEqual(r["pos"][0], 200.0 + 5200.0 - 5000.0, places=3)
+        self.assertAlmostEqual(r["pos"][1], 6.0, places=3)
+        self.assertAlmostEqual(r["pos"][2], 302.0 + 5200.0 - 5100.0, places=3)
+        self.assertAlmostEqual(r["scale"], 2.0, places=3)
+        self.assertAlmostEqual(math.sqrt(sum(c * c for c in r["rot"])), 1.0, places=5)
+
+    def test_mat_quat_roundtrip(self):
+        A = self.A
+        import math
+        for q in ((0.0, 0.0, 0.0, 1.0), (0.2, -0.4, 0.5, 0.7), (0.9, 0.1, 0.0, 0.2), (0.0, 0.0, 1.0, 0.0), (0.1, 0.95, -0.2, 0.1)):
+            n = math.sqrt(sum(c * c for c in q))
+            qn = tuple(c / n for c in q)
+            m = A._qm((qn[3], qn[0], qn[1], qn[2]))
+            r = A.mat_quat(m)
+            same = max(abs(a - b) for a, b in zip(r, qn)) < 1e-6 or max(abs(a + b) for a, b in zip(r, qn)) < 1e-6
+            self.assertTrue(same, (q, r))
+        self.assertEqual(A.KIND_NIGHT, 3)
+
+    def test_pack_hook_and_tag(self):
+        src = open(os.path.join(HERE, "rose_pack.py"), encoding="utf-8").read()
+        self.assertIn("rose_ambient.zone_ambient(vfs, ifos, win, ((1, zsc_d), (3, zsc_c)))", src)
+        self.assertIn("(b'ZFXO', 1, len(amb), rose_ambient.enc_zfxo(amb))", src)
+        self.assertEqual(self.A.TAG_ZFXO, b"ZFXO")
 
 
 def zlib_crc(b):

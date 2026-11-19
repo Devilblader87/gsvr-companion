@@ -2,6 +2,31 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.50
+
+**New**
+- The VRChat menu is usable in every zone, also with a group: the zone with the most players sits at the centre of the world, and the load world is now above the game. (Hotfixes 0.9.49m / 0.9.49m2 are included: the menu no longer fights the ROSE laser and chat field, no forced player moves while the VRChat menu is open, the big VRChat menu is usable again while you are alone in a zone.)
+- Tip on the help board: if the VRChat menu is hard to click, set the VRChat option "Forced Camera Near Distance" to None.
+- Smoother frame rate in VR while the next zone is being prepared.
+- No surprise teleports: you are only moved when you choose to or when you enter a new area, and arriving is smoother. Fights and click-to-move are no longer interrupted by position corrections.
+- Saving is more robust after a freeze or a short disconnect.
+
+**ROSE Online**
+- Monsters use their skills and spells in every zone like the original, including ranged and area spells.
+- Drops belong to the killer and the party for 60 seconds.
+- Quests: more condition types are understood, ready for future zones.
+- VR wheel: new Drive button for the PAT cart.
+- Sea waves, shore foam, torches, street lights and fires at night.
+- Dropped items are now fully textured and lit.
+- "Change character" from inside the game (menu or wheel, Yes/No, your progress is saved first).
+- Master tools are easier to find: Master sector in the wheel, "Go to player" (click) on the join message, "Return to my character".
+
+**Half-Life family**
+- Opposing Force: rope climbing; allies drop from ropes.
+- Alien slaves call for help, gargantua stomp timing fixed, scientists and Barneys have their scared lines.
+
+Needs companion 0.9.50: all ROSE packs rebuild once in the background; you can keep playing meanwhile.
+
 ## 0.9.49.2 (hotfix)
 - Updates now show in the Simple view. In 0.9.49 / 0.9.49.1 the "Update available" bar could only appear in the Advanced view; in the Simple view the update was found but never shown (and the window stopped refreshing).
 - If you are on 0.9.49 or 0.9.49.1: switch to the Advanced view once (button at the top), where the yellow "Update available -> Install" bar appears, or download this release directly.

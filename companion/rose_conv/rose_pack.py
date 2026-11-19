@@ -18,13 +18,13 @@ COORDINATE DECISION (the one place where it is written down):
 import sys, os, re, math, json, hashlib, struct, argparse, collections
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import rosevfs, rosefmt as F, rosedds as D, rpg1 as P, rosechar as C, rose_chars as RC, rose_env, rose_audio as AU, rose_warp, rose_lobby, rose_revive, rose_text as TX
+import rosevfs, rosefmt as F, rosedds as D, rpg1 as P, rosechar as C, rose_chars as RC, rose_env, rose_ambient, rose_audio as AU, rose_warp, rose_lobby, rose_revive, rose_text as TX
 
 TOOL_VERSION = 4
 # every section a full game zone writes with all options (docs/RPG1_PACK.md section 19); --no-chars writes ACTJ instead of the character sections, --lobby adds LOBY
 FULL_ZONE_TAGS = (b'AREA', b'CELL', b'HGHT', b'TERR', b'TATL', b'TTIL', b'OTEX', b'OMAT', b'OMSH', b'SPWN', b'SPWE',
                   b'SKEL', b'CMSH', b'CANM', b'ACTR', b'AVAT',
-                  b'SPWR', b'NBEH', b'EVNT', b'REVV', b'WARP', b'WATR', b'SKYB', b'OCOL', b'OCLD',
+                  b'SPWR', b'NBEH', b'EVNT', b'REVV', b'WARP', b'WATR', b'SKYB', b'ZFXO', b'OCOL', b'OCLD',
                   b'DROP', b'SKIL', b'ITEM', b'ITEX', b'SKDB', b'SHOP', b'QUST', b'SNDS', b'MMAP', b'UIAT', b'UIDL', b'BONT')
 LOBBY_NAME = 'login'          # --lobby output: out/login.rpg1, the world asks the companion for rose__login.rpg1
 BUDGET_BYTES = 48 * 1024 * 1024     # whole zone with characters, avatar, sky, water, music (hard design ceiling 100 MB); Birth Island 5x5 = 22.6 MB + 6 MB audio, Adventurer's Plain = 33.1 MB + 6 MB
@@ -1462,7 +1462,7 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
                         if pg and pt['ppr'] > 0:
                             lm[pt['part']] = (pg, pt['ppr'], pt['slot'])
                 ob.add_instance(zid, zsc, obj, b, lm)
-        for t, nm in ((6, 'animated objects'), (4, 'sound objects'), (5, 'effect objects'), (10, 'warps'), (11, 'collision objects'), (12, 'event objects')):
+        for t, nm in ((6, 'animated objects (ZFXO)'), (4, 'sound objects'), (5, 'effect objects (ZFXO)'), (10, 'warps'), (11, 'collision objects'), (12, 'event objects')):
             skipped[nm] += len(o.get(t, []))
     log('objects: %d instances, %d chunks, %d materials, %d textures, %d lightmapped parts' % (ob.stats['instances'], len(ob.chunk_list()), len(ob.mats), len(ob.textures),
                                                                                                ob.stats['lightmapped parts']))
@@ -1594,6 +1594,15 @@ def convert(vfs, zone, center=None, size=5, cell=2.5, terrain_step=2, max_slope=
             except (KeyError, ValueError) as e:
                 warns['water frames: %s' % e] += 1
                 extra.append((b'WATR', 1, len(wplanes), P.enc_watr(wplanes, [], D.FMT_DXT1, 0, 0, rose_env.WATER_FPS, water_tile)))
+        try:          # w20 OPTICS: ZFXO = the zone's animated morph objects (waves, foam) + effect objects, played by the runtime's effect player (rose_ambient.py)
+            amb = rose_ambient.zone_ambient(vfs, ifos, win, ((1, zsc_d), (3, zsc_c)))
+        except (KeyError, ValueError) as e:
+            amb = []
+            warns['ambient effects: %s' % e] += 1
+        if amb:
+            extra.append((b'ZFXO', 1, len(amb), rose_ambient.enc_zfxo(amb)))
+            info['ambient'] = dict(morph=len([a for a in amb if a['kind'] == rose_ambient.KIND_MORPH]), effects=len([a for a in amb if a['kind'] == rose_ambient.KIND_EFFECT]),
+                                   night_effects=len([a for a in amb if a['kind'] == rose_ambient.KIND_NIGHT]))
         if zone.get('cells') is not None:
             try:
                 sky, sky_info = rose_env.read_sky(vfs, zone['cells'], sky_px)

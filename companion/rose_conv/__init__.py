@@ -48,8 +48,10 @@ import rose_ui                           # noqa: E402
 import rose_skilltips                    # noqa: E402
 
 rose_skilltips.install()                 # ROSE w15: SKDB description table + TXJA skill descriptions (companion-owned, the vendored rose_skills.py stays as it is)
+import rose_npcskills                    # noqa: E402
+rose_npcskills.install()                 # ROSE w20 DUNGEON: the monsters' skill table behind the AIPS records (companion-owned, the vendored rose_aips.py stays as it is)
 
-WRAPPER_REV = 6                          # bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
+WRAPPER_REV = 7                          # 7 = ROSE w20: monster skill table in AIPS for EVERY zone (Stefan 2026-11-18: all zones at once); bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
 # per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
 # birthisland 2: walk grid slope limit 2.0 (ROSE w11 leveling: at 1.0 the five arms of the island were separate walk components, 67 of 81 monster points unreachable from the start)
 PACK_REV = {"birthisland": 2}
@@ -137,10 +139,23 @@ for _n, _s in PACKS.items():
     if _s["kind"] != "avatar":
         PACK_REV[_n] = PACK_REV.get(_n, 0) + BONT_REV
 del _n, _s
-PACK_REV["avatar"] = 4          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
+# ROSE w20 DUNGEON: the dungeon packs carry the monsters' skill table in AIPS (rose_npcskills.py) and rebuild once; the other zones get it with their next rebuild (until then
+# their monster skills keep hitting like normal attacks, the old behaviour; no WRAPPER_REV bump for that reason)
+for _n in ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple"):
+    PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
+del _n
+# w20 OPTICS: the zones with animated morph objects (waves, foam) / effect objects get the ZFXO section (rose_ambient.py) and rebuild once: Birth Island 304 waves, Luxem Tower 336,
+# Adventurer's Plain 15 + 21, Breezy Hills 438, Zant 2, El Verloon 14 + 4, Anima Lake 12 + 6, Forest of Wisdom 3, Kenji Beach 235, Junon Polis 86, Dolphin Island 384, Goblin Cave B1 3,
+# Shady Jungle 1 + 2 (retail survey). The other packs have none and keep their version.
+for _n in ("birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "junonpolis", "dolphinisland",
+           "goblincaveb1", "shadyjungle"):
+    PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
+del _n
+PACK_REV["avatar"] = 5          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 #                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform
 #                                     animations, cast effects on the motion frame events, the party level-up effect)
+#                                 5 = w20 OPTICS: + the zone ambient effects (morph object waves, effect object files; file ids 40000+, rose_ambient.py)
 
 
 # ------------------------------------------------------------------ install check

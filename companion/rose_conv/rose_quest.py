@@ -67,6 +67,8 @@ COND_DOC = {
     14: 'user switch: a = id, b = value 0/1', 21: 'object distance: a = object (0 npc 1 event), b = distance cm', 22: 'server channel: b = low, c = high',
     23: 'clan: has a clan: b = 1 / 0 (CLAN QUESTS)', 24: 'clan rank (0 penalty .. 6 master): b = value, c = cmp', 25: 'clan contribution: b = value, c = cmp', 26: 'clan level: b = value, c = cmp',
     27: 'clan points: b = value, c = cmp', 28: 'clan money: b = value, c = cmp', 29: 'clan member count: b = value, c = cmp', 30: 'clan skill in range: sub = has (1 / 0), b = first id, c = last id',
+    15: 'party member count (W20): b .. c = the allowed member count (false without a party)', 17: 'compare npc variables (W20): sub = cmp, a = variable of npc b, c = npc 2, d = variable of npc 2',
+    18: 'month day time (W20): sub = day of the month (0 any), b .. c = minutes of the day (UTC)', 19: 'week day time (W20): sub = day of the week (0 Sunday), b .. c = minutes of the day (UTC)',
     255: 'unsupported (sub = original op): false'}
 REW_DOC = {
     0: 'quest op: sub 0 remove selected 1 add 2 change selected keep data 3 change selected new 4 select, b = quest id', 1: 'item: sub 1 add 0 remove, b = item sn, c = quantity',
@@ -180,6 +182,15 @@ def _cond_records(op, d, p, size, warn):
     elif op == 28:          # CLAN QUESTS: clan money: b = value, c = cmp
         val, cmp_ = struct.unpack_from('<iB', d, p)
         out.append((28, 0, 0, val, cmp_, 0))
+    elif op == 15:          # W20 QUEST: PartyMemberCount (rose-offline QsdCondition::PartyMemberCount): b = first count, c = last count
+        lo, hi = struct.unpack_from('<HH', d, p)
+        out.append((15, 0, 0, lo, hi, 0))
+    elif op == 17:          # W20 QUEST: CompareNpcVariables: sub = cmp, a = variable of npc 1, b = npc 1, c = npc 2, d = variable of npc 2
+        n1, v1, n2, v2, cmp_ = struct.unpack_from('<IHxxIHxxB', d, p)
+        out.append((17, cmp_, v1, n1, n2, v2))
+    elif op in (18, 19):    # W20 QUEST: MonthDayTime (18: sub = day of the month, 0 = any) / WeekDayTime (19: sub = day of the week, 0 = Sunday): b .. c = minutes of the day (hour x 60 + minute)
+        day, h0, m0, h1, m1 = struct.unpack_from('<BBBBB', d, p)
+        out.append((op, day, 0, h0 * 60 + m0, h1 * 60 + m1, 0))
     elif op == 30:          # CLAN QUESTS: clan skill in range: sub = has (1 / 0), b = first id, c = last id
         lo, hi, has = struct.unpack_from('<HHB', d, p)
         out.append((30, 1 if has else 0, 0, lo, hi, 0))
