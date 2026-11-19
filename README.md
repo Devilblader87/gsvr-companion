@@ -17,9 +17,8 @@ PC (Windows) VRChat only. Linux / Steam Deck: see [Proton](#linux--steam-deck-pr
 
 | World | Game you need | Status | Link |
 |---|---|---|---|
-| GSVR - Half-Life (campaign, mod hub with Opposing Force, Blue Shift, Ricochet, DMC) | Half-Life (+ mods) | alpha | [open](https://vrchat.com/home/world/wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a) |
+| GSVR - Half-Life (campaign, mod hub with Opposing Force, Blue Shift, Ricochet, DMC, Sven Co-op) | Half-Life (+ mods / Sven Co-op) | alpha | [open](https://vrchat.com/home/world/wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a) |
 | GSVR - Counter-Strike | Counter-Strike 1.6 | alpha | [open](https://vrchat.com/home/world/wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb) |
-| GSVR - Sven Co-op | Sven Co-op | alpha | [open](https://vrchat.com/home/world/wrld_19508790-4711-46f7-bf73-e5b96f944db9) |
 | Warcraft III | Warcraft III 1.21 - 1.31 | alpha | [open](https://vrchat.com/home/world/wrld_71563253-4115-40d3-b165-7cdba23bff06) |
 | GSVR - ROSE Online ローズオンライン | ROSE Online | alpha | [open](https://vrchat.com/home/world/wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2) |
 
@@ -35,7 +34,7 @@ The companion reads your game install, converts maps, models and sounds on your 
 
 **Counter-Strike.** Counter-Strike 1.6 is found through Steam; custom maps are shared through the relay.
 
-**Sven Co-op.** Found through Steam; co-op maps with Sven weapons, monsters and allies.
+**Sven Co-op.** Found through Steam; its co-op maps (Sven weapons, monsters and allies) are played in the Half-Life hub world.
 
 **Warcraft III.** Classic installs 1.21 - 1.31 (your own copy). Melee, tower defense and other custom maps on a table, with friends. **Map sharing:** when the host plays a fan map a friend does not have, only that map file is passed on through the relay and saved in the friend's `Warcraft III\Maps\Download\GSVR` (it also works in the real game). Switch it off in the settings ("Load maps from host automatically"). Texts and dialogs come from your own install.
 
