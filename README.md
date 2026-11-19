@@ -1,48 +1,83 @@
 # GSVR Companion
 
-Play your own copy of **Counter-Strike 1.6, Half-Life, Sven Co-op, Warcraft III and ROSE Online** in VRChat: the companion converts maps, models and sounds from the games installed on **your** PC.
+Play your own copy of **Half-Life** (+ Opposing Force, Blue Shift, Ricochet, DMC), **Counter-Strike 1.6**, **Sven Co-op**, **Warcraft III** and **ROSE Online** in VRChat. Bring your own game: the companion converts maps, models and sounds from the games installed on **your** PC.
 
-**Download & instructions:** https://devilblader87.github.io/gsvr-companion/
+**[Download & instructions](https://devilblader87.github.io/gsvr-companion/)** | **[Latest release](https://github.com/Devilblader87/gsvr-companion/releases/latest)** | **[Discord](https://discord.gg/nc2rw6Snx)** | [Changelog](CHANGELOG.md)
 
-* Releases: see the [Releases](https://github.com/Devilblader87/gsvr-companion/releases) page. The companion updates itself from here.
-* Worlds: GSVR - Counter-Strike, GSVR - Half-Life, GSVR - Sven Co-op and **Warcraft III** (melee, tower defense and other custom maps on a table, multiplayer with your friends).
-* The VRChat worlds contain no game files. The companion reads your install, converts it on your PC and serves it to VRChat on `127.0.0.1` only.
-* The "Spiele" tab shows for every game where it was found (Steam, registry, folder scan or set by hand) and lets you change the folder. Half-Life / Counter-Strike are found through Steam; installs without Steam or in other folders can be picked there.
-* Warcraft III: classic installs 1.21 – 1.31 (your own copy). **Map sharing:** when the host plays a fan map a friend does not have, only that map file is passed on through the GSVR relay and saved in the friend's `Warcraft III\Maps\Download\GSVR` (it also works in the real game). Blizzard's own maps and game data are never sent. Can be switched off in the settings ("Karten vom Host automatisch laden"). The game's texts (e.g. the end-of-game dialog) come from the string tables of your own install. After a companion update the maps are converted again by themselves (0.9.32: fixes new maps failing to convert with ModuleNotFoundError 'nodegraph' (the Windows build of 0.9.31 and earlier lacked the node graph module; update to this version); 0.9.31: Opposing Force capture-the-flag end-of-round scoreboard, stand-in models from your own install for the Opposing Force models Steam does not ship (pit worm, baby voltigore, spore ammo, voltigore gibs) (rebuilds the Opposing Force model pack); 0.9.30: monsters that survive a level change keep their place and health when you come back, more exact scripted scenes, Opposing Force ally / medic / engineer and sniper behaviour with their sounds, Big Mama sounds, grunts sweep / dance / rappel, running conveyor textures, pushable crates float, real corpse gibs, DMC grenade blast radius and telefrag, the Opposing Force campaign no longer stalls after of3a1 (rebuilds model, map, sound and sentence packs); 0.9.28: the load cabin is the original Black Mesa intro tram from your own Half-Life install (next stop and loading bar on its front wall, black space with silver streaks outside), the Black Mesa Inbound ride no longer stalls in c0a0d, co-op guests change level at once and arrive on the carried tram, tram seats follow braking trams on time; 0.9.27: co-op parity — everybody starts, loads, changes level, respawns and late-joins at exactly the host's spot with the same gear and world state, TELEPORT TO HOST in the player menu, arriving on the carried tram after a level change, a transit cabin while the next map loads, a global voice switch, the world state is kept in every save slot, the Opposing Force intro plays to the end, a choosable cache folder, desktop E = use; 0.9.26: new VR HUD (ammo on the gun, health and armour on the wrist, damage and geiger indicators with the original sprites), bots in the Half-Life deathmatch rooms, all Blue Shift weapons visible, the real Ricochet disc in your hand, Opposing Force boot camp exit door and drill sergeant voice, smoother crouching in vents, bug report board with QR code), more effects, duck fixes; 0.9.24: crouch through windows and vents with auto step-up and crouch toggle, original jump height, save slots per mod room, Half-Life node-graph AI (cover, flanking, doors), loading bar, per-mod model cache; 0.9.23: Opposing Force room in the HL mod hub (14 chapters from your own OF install), laser menus in all hubs, start console buttons fixed, Blue Shift / OF / Ricochet / DMC rules extended; 0.9.22: real gibs and debris, monster voices, HL rules pass 2, HL VR weapon grips, changelog boards, Warcraft III tavern hub with holodeck reveal and holo table, packs gsm1-2.7 / w3p1-85; 0.9.21: real sprite effects - explosions, muzzle flashes for everyone, blood with a settings switch, textured beams - and Sven Co-op walk cycles, model packs gsm1-2.5; 0.9.20: HL monsters visible again, CS silencer animations and walkable de_aztec bridge, model packs gsm1-2.4; 0.9.19: Warcraft III packs w3p1-84 for the new W3VR world; 0.9.18: weapon packs gsm1-2.2 — VR grips for Half-Life / Sven weapons, Counter-Strike knife + grenade hand, silencer at the muzzle; 0.9.17: pack format w3p1-83 — Warcraft III PORT13 rule wave (items, harvesting, missiles, movement); 0.9.16: pack format w3p1-82 — Warcraft III armor-type upgrades and the PORT12 rule wave, hub model packs load right after a direct Sven start; 0.9.15: map hologram previews for the GoldSrc mod hub, built from your own install; Warcraft III items, upgrades, missiles and movement closer to the original; 0.9.14: pack format w3p1-81 — Warcraft III save system through the original game menu (map save codes and game caches kept in your VRChat data), rules measured in the real 1.26a, undead AI expansion, GPU flow fields on more TD maps; 0.9.13: pack format w3p1-80 — melee maps on the two-level pathfinder with one gold miner at a time, computer opponents attack the nearest enemy base, item abilities and figurines, more JASS natives (UnitDamagePoint, GetPlayerScore, buffs, shared vision, game cache), GPU flow fields on Line Tower Wars and Wintermaul; 0.9.12: pack format w3p1-75 — lobby computer opponents (easy / normal / insane) on the real melee AI scripts of your install, night elf / undead build rules, Ancients root and uproot, town halls keep 750 from gold mines, TD waves spawned at a region edge walk again; Counter-Strike custom maps are shared through the relay; 0.9.11: pack format w3p1-74 — attack, spell, chop, build and death animations with sounds, flyers fly and ships float, workers drop off only at real drop-off buildings, hero item / inventory controls and hero bar; 0.9.10: pack format w3p1-72 and many game rules from the 1.26a reference — stunned units keep their order, Footman Frenzy rally points, map-script `and` short-circuits, computer AI natives; 0.9.9: classic melee maps — workers visible, the build menu shows all buildings, gold / lumber harvest works, fog of war is on, and a simple computer opponent: in the lobby click an "Open" row → "Computer (easy)").
-* PC (Windows) VRChat only. Needs the VRChat setting *Allow Untrusted URLs*.
+## Quick start
 
-Fan project, not affiliated with Valve, Blizzard Entertainment or VRChat. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment.
+1. Download `GSVR-Setup.exe` from the [latest release](https://github.com/Devilblader87/gsvr-companion/releases/latest) and install it.
+2. Start the companion. Your games are found automatically; press **Start** (1-click setup) to build what is needed.
+3. In VRChat: **Settings -> Comfort & Safety -> Allow Untrusted URLs: on**.
+4. Press "Open world in VRChat" (or use a link below) and join.
 
+PC (Windows) VRChat only. Linux / Steam Deck: see [Proton](#linux--steam-deck-proton). The companion UI is available in English, Japanese and German.
 
-### ROSE Online (bring your own game)
+## Worlds
 
-The companion supports the ROSE Online world. It finds your ROSE install automatically
-(registry, Steam, usual folders); otherwise set the "ROSE Online folder" in the GUI or start
-with `--rose-install <folder>`. On your first join it builds the zone, avatar and lobby packs
-from your own install (about 1 minute per pack; progress is shown in the world's load room),
-caches them, and prebuilds the other zones in the background. Music needs miniaudio (bundled).
-Nothing is downloaded, and no game files are shared: everything is built locally from your copy.
-The ROSE world is alpha: the first build takes about 1 minute per zone and zone loads in the
-world still take 1.5 to 2.5 minutes (neighbour zones are preloaded in the background, so most
-gate trips are much faster).
+| World | Game you need | Status | Link |
+|---|---|---|---|
+| GSVR - Half-Life (campaign, mod hub with Opposing Force, Blue Shift, Ricochet, DMC) | Half-Life (+ mods) | alpha | [open](https://vrchat.com/home/world/wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a) |
+| GSVR - Counter-Strike | Counter-Strike 1.6 | alpha | [open](https://vrchat.com/home/world/wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb) |
+| GSVR - Sven Co-op | Sven Co-op | alpha | [open](https://vrchat.com/home/world/wrld_19508790-4711-46f7-bf73-e5b96f944db9) |
+| Warcraft III | Warcraft III 1.21 - 1.31 | alpha | [open](https://vrchat.com/home/world/wrld_71563253-4115-40d3-b165-7cdba23bff06) |
+| GSVR - ROSE Online ローズオンライン | ROSE Online | alpha | [open](https://vrchat.com/home/world/wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2) |
 
-Zones built by the companion (0.9.49): Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, the Goblin Cave dungeon (B1-B3), Junon Polis, Dolphin Island, the Junon Clan Field and the clan hideout; on Luna the Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields and Freezing Plateau; on Eldeon the Refuge Xita.
-Original skill and spell effects with 3D effect models from your own client, skill tooltips, the original 3 x 30 bag, second job change and level cap 250, party heals and resurrection, a who-is-where list. Monsters spawn across the whole map like the original, summon capsules call a helper that fights for you, bows/guns use ammo, every weapon class has its own animations, all NPCs and most quests run. The world has co-op up to 4, parties (with party voice), clans and a global chat.
+Each world only needs the game it is built from. A banner at each world's spawn shows its current status and changes.
 
-### Linux / Steam Deck (Proton)
+## How it works
 
-The Windows build also runs under Wine/Proton. Since 0.9.42.1 it looks for VRChat's log in VRChat's own Proton prefix
-(`steamapps/compatdata/438100/pfx/.../LocalLow/VRChat/VRChat`) in your Steam libraries, so it sees which world you
-joined. If the status still says "not in a world yet" while you are in a GSVR world, start `gsvr-cli.exe --companion`
-with `--vrchat-log-dir <the folder that holds output_log_*.txt>`.
+The companion reads your game install, converts maps, models and sounds on your PC and serves them to VRChat on `127.0.0.1` only. The VRChat worlds contain no game files, and nothing is downloaded. Nothing is shared, except optionally Warcraft III fan maps (and Counter-Strike custom maps) between friends via the GSVR relay; Blizzard's own maps and game data are never sent, and this can be switched off.
 
-**Community:** questions, ideas, bug reports? Join our Discord: https://discord.gg/nc2rw6Snx
+## Per-game notes
+
+**Half-Life family.** Half-Life, Opposing Force, Blue Shift, Ricochet and DMC are found through Steam. Installs without Steam or in other folders can be picked in the **Games** tab (Advanced view). Each mod uses your own install; models Steam does not ship get stand-ins.
+
+**Counter-Strike.** Counter-Strike 1.6 is found through Steam; custom maps are shared through the relay.
+
+**Sven Co-op.** Found through Steam; co-op maps with Sven weapons, monsters and allies.
+
+**Warcraft III.** Classic installs 1.21 - 1.31 (your own copy). Melee, tower defense and other custom maps on a table, with friends. **Map sharing:** when the host plays a fan map a friend does not have, only that map file is passed on through the relay and saved in the friend's `Warcraft III\Maps\Download\GSVR` (it also works in the real game). Switch it off in the settings ("Load maps from host automatically"). Texts and dialogs come from your own install.
+
+**ROSE Online (alpha).** The install is found automatically (registry, Steam, usual folders); otherwise set the "ROSE Online folder" in the Games tab or start with `--rose-install <folder>`. On first join the zone, avatar and lobby packs are built from your own install, about 1 minute per zone, in the background (progress is shown in the world's load room); they are cached. Zone loads in the world can still take 1.5 to 2.5 minutes, neighbour zones are preloaded.
+Zones (0.9.49): Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, Goblin Cave (B1-B3), Junon Polis, Dolphin Island, Junon Clan Field, clan hideout; Luna: Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields, Freezing Plateau, Luna Clan Field; Eldeon: Refuge Xita, Shady Jungle.
+Co-op up to 4, parties (with party voice), clans and a global chat. Original skill effects, skill tooltips, 3 x 30 bag, second job change, level cap 250, bows/guns use ammo, all NPCs and most quests run.
+
+## 日本語クイックスタート
+
+自分のPCにインストールした Half-Life、Counter-Strike 1.6、Sven Co-op、Warcraft III、ROSE Online を VRChat で遊べるツールです(ゲームは各自でご用意ください)。
+1. [ダウンロードページ](https://devilblader87.github.io/gsvr-companion/)から `GSVR-Setup.exe` をダウンロードしてインストールします。
+2. コンパニオンを起動すると、ゲームが自動で検出されます。「スタート」を押すと準備が始まります。
+3. VRChat の設定 → Comfort & Safety → 「Allow Untrusted URLs(信頼されていないURL)」をオンにします。
+4. 「VRChatでワールドを開く」を押して参加します。
+Windows PC の VRChat のみ対応です。質問・不具合報告は [Discord](https://discord.gg/nc2rw6Snx) へ。
+
+## Linux / Steam Deck (Proton)
+
+The Windows build also runs under Wine/Proton. Since 0.9.42.1 it looks for VRChat's log in VRChat's own Proton prefix (`steamapps/compatdata/438100/pfx/.../LocalLow/VRChat/VRChat`) in your Steam libraries, so it sees which world you joined. If the status still says "not in a world yet" while you are in a GSVR world, start `gsvr-cli.exe --companion` with `--vrchat-log-dir <the folder that holds output_log_*.txt>`.
+
+## Troubleshooting
+
+- **The world says the companion is missing:** start the companion and make sure *Allow Untrusted URLs* is on in VRChat.
+- **A game is not found:** set its folder in the **Games** tab (Advanced view); it shows where each game was found (Steam, registry, folder scan or by hand).
+- **The first load is slow:** the first build converts your game data and is cached; later loads are much faster. ROSE builds in the background, about 1 minute per zone.
+- **The menu is hard to click in VR:** set VRChat's *Forced Camera Near Distance* to *None*.
+- **A Warcraft III map behaves like before an update:** update the companion; a new version rebuilds the maps by itself the next time they are played.
+- **No update banner on 0.9.49 / 0.9.49.1:** switch to the **Advanced view** once (button at the top); the yellow "Update available" bar appears there. Later versions show updates in both views and update automatically.
+
+## Releases & changelog
+
+New versions are published on the [Releases](https://github.com/Devilblader87/gsvr-companion/releases) page; the companion updates itself from there. The full history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License, code signing and privacy
 
-GSVR Companion is free software under the [GNU GPL v3](LICENSE). The Windows binaries are built by GitHub Actions from this source and are **not code-signed**, so Windows SmartScreen may warn on first start (More info -> Run anyway). Verify a download with the SHA-256 file attached to each release or build it yourself; see [code signing and download verification, and the privacy statement](CODE_SIGNING_POLICY.md). The source of the converter and companion is in `companion/` and `tools/`; build instructions: `companion/packaging/` (`build_windows.bat`, `.github/workflows/build.yml`).
+GSVR Companion is free software under the [GNU GPL v3](LICENSE). The Windows binaries are built by GitHub Actions from this source and are **not code-signed**, so Windows SmartScreen may warn on first start (More info -> Run anyway). Verify a download with the SHA-256 file attached to each release or build it yourself; see [code signing and download verification, and the privacy statement](CODE_SIGNING_POLICY.md). The source is in `companion/` and `tools/`; build instructions: `companion/packaging/` (`build_windows.bat`, `.github/workflows/build.yml`).
 
     GSVR Companion - copyright (C) 2026 the GSVR Companion contributors.
     This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
     License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
     version. It is distributed WITHOUT ANY WARRANTY; see the license for details.
+
+## Notice
+
+Fan project, not affiliated with Valve, Blizzard Entertainment, VRChat or the owners of ROSE Online. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment; ROSE Online is a trademark of its owners.
