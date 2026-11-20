@@ -151,6 +151,16 @@ for _n in ("birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant
            "goblincaveb1", "shadyjungle"):
     PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
 del _n
+# ROSE w21 DUNGEON2: the dungeon packs carry the v2 monster skill table (rose_npcskills.py: target filter, cast motion / speed, add abilities = monster buffs / debuffs + cast
+# time) and rebuild once; every other zone keeps its w20 table (old behaviour of those skills) until its next rebuild - a WRAPPER_REV bump would give it to all zones at once.
+for _n in ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple", "lunaclanfield"):
+    PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
+del _n
+# ROSE w21 DUNGEON2 repair: the monsters' CHR cast / skill action motions 6..11 are in ACTR now (rose_chars.NPC_MOTION_IDS; before only 0..5, so no monster had a cast
+# time: rosedungeon r95 'no living B2 monster with a casting skill'); the w21 packs rebuild once more, the other zones get the clips with their next rebuild.
+for _n in ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple", "lunaclanfield"):
+    PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
+del _n
 PACK_REV["avatar"] = 5          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 #                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform

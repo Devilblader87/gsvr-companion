@@ -63,14 +63,16 @@ class VersionAndTable(unittest.TestCase):
         amb = ("birthisland", "luxemtower", "adventurersplain", "breezyhills", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "junonpolis", "dolphinisland",
                "goblincaveb1", "shadyjungle")          # w20 OPTICS: ZFXO (waves, effect objects) -> one more revision each
         want = dict({n: 1 for n in rose_conv.PACKS}, birthisland=3, avatar=5, **{n: 2 for n in tiny})   # 0.9.47g: tiny transparent DXT as RGBA32
-        for n in amb + dun:
+        dun2 = ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple", "lunaclanfield")          # ROSE w21 DUNGEON2: the v2 monster skill table (buffs / debuffs, cast time)
+        cast = dun2          # ROSE w21 DUNGEON2 repair: the monsters' cast / skill action motions 6..11 in ACTR (rose_npcskills.install_cast_motions)
+        for n in amb + dun + dun2 + cast:
             want[n] += 1
         self.assertEqual(rose_conv.PACK_REV, want)
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
         self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p4")
         self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p5")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3, w20: + zone ambient effects)
         for n in rose_conv.PACKS:
-            if n not in ("birthisland", "avatar") + tiny + amb + dun:
+            if n not in ("birthisland", "avatar") + tiny + amb + dun + dun2:
                 self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p1")
         self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p3")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)

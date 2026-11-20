@@ -41,7 +41,7 @@ def _skill_stb(rows):
 
 
 # made-up skills: 7 = self damage around the caster (type 17, weapon damage, power 120, range 2 m, scope 6 m), 9 = a bullet (type 6, magic, power 80, range 12 m), 11 = a self buff (type 8)
-ROWS = {7: {5: 17, 15: 1, 9: 120, 6: 200, 8: 600, 70: 2, 13: 90, 11: 3, 14: 10, 20: 5},
+ROWS = {7: {5: 17, 15: 1, 9: 120, 6: 200, 8: 600, 70: 2, 13: 90, 11: 3, 14: 10, 20: 5, 7: 5, 52: 6, 53: 120, 21: 38, 22: -15, 24: 23, 25: 40, 26: -20, 10: 1, 68: 7, 69: 100},
         9: {5: 6, 15: 2, 9: 80, 6: 1200, 8: 0, 70: 1},
         11: {5: 8, 15: 0, 9: 0, 11: 4, 14: 30}}
 
@@ -64,6 +64,11 @@ class NpcSkillTests(unittest.TestCase):
         tab = N.dec_table(data)
         self.assertEqual([r[0] for r in tab], [7, 9, 11], "one record per used skill id, sorted, no duplicates")
         self.assertEqual(tab[0], (7, 17, 1, 120, 200, 600, 2, 90, 3, 0, 10, 5, 0, 0, 0, 0))
+        h = rose_aips.HDR.unpack_from(data, 0)
+        self.assertEqual(h[N.HDR_SK_STRIDE], N.SK2_BYTES, "W21: header word 11 = the v2 record size")
+        v2 = N.dec_table_v2(data)
+        self.assertEqual(v2[0][16:28], (5, 6, 120, 38, -15, 0, 23, 40, -20, 1, 7, 100), "W21 v2 fields: filter, cast motion / speed, add abilities (signed), harm, action motion / speed")
+        self.assertEqual(v2[0][:16], tab[0])
         self.assertEqual(tab[1][:7], (9, 6, 2, 80, 1200, 0, 1))
         self.assertEqual(info["skills"], 3)
         self.assertEqual(warn, [])
@@ -97,6 +102,24 @@ class NpcSkillTests(unittest.TestCase):
         self.assertEqual(N.dec_table(bytes(bad)), [], "a count past the end reads as no table")
         self.assertEqual(N.dec_table(data[:40]), [])
 
+    def test_w20_table_still_reads(self):
+        """W21: a pack built with the w20 converter (32 B records, header word 11 = 0) decodes; the v2 fields read 0"""
+        p0 = _prog([(3, [(25, 1, 0, 0, 9, 0, 0)])])
+        data = bytearray(self.run_wrapper([p0])[0][3])
+        h = list(rose_aips.HDR.unpack_from(data, 0))
+        n, o = h[N.HDR_SK_COUNT], h[N.HDR_SK_OFF]
+        old = bytearray(data[:o])
+        for r in N.dec_table_v2(bytes(data)):
+            old += N.SK.pack(*r[:16])
+        h[N.HDR_SK_STRIDE] = 0
+        rose_aips.HDR.pack_into(old, 0, *h)
+        v2 = N.dec_table_v2(bytes(old))
+        self.assertEqual([r[0] for r in v2], [9])
+        self.assertEqual(v2[0][16:], (0,) * 16)
+        h[N.HDR_SK_STRIDE] = 40
+        rose_aips.HDR.pack_into(old, 0, *h)
+        self.assertEqual(N.dec_table(bytes(old)), [], "a record size that is neither 32 nor 64..256 reads as no table")
+
     def test_installed_once(self):
         self.assertIsNotNone(N._orig, "rose_conv installs the wrapper")
         w = rose_aips.build_section
@@ -109,6 +132,32 @@ class NpcSkillTests(unittest.TestCase):
         out, warn, info = N.build_with_skills(lambda v, a, r: (sec, [], {}), _Vfs({}), {}, lambda b: None)
         self.assertEqual(out, sec)
         self.assertTrue(any("AIPS skills" in w for w in warn))
+
+
+class CastMotionClips(unittest.TestCase):
+    """W21 DUNGEON2 repair (rosedungeon r95): the monsters' cast / skill action motions (CHR slots 6..11) reach ACTR, so GsvrRoseAi.MotionMs has a clip for them."""
+
+    def test_all_twelve_slots_exported(self):
+        import rose_chars
+        self.assertEqual(rose_chars.NPC_MOTION_IDS, tuple(range(12)), "rose_conv installs all 12 CHR motion slots (GsvrRpg1Chars.MotCount)")
+        self.assertEqual(rose_chars.NPC_LOOP_MOTIONS, (0, 1, 5), "cast motions are one shot")
+
+    def test_add_actors_keeps_cast_clips(self):
+        import rose_chars
+        b = rose_chars.CharBuilder(_Vfs({'S.ZMD': b'', 'M%d.ZMO' % 0: b''}), None)
+        mo = ['M%d.ZMO' % i for i in range(10)]
+        b.vfs.files.update({p: b'' for p in mo})
+        made = []
+        b.skeleton = lambda path: 0
+        b.mesh_object = lambda *a, **k: []
+        b.clip = lambda path, skel, loop, label='': (made.append((path, loop)), len(made) - 1)[1]
+        b._actor_rec = lambda a, row: a
+        # a made-up mage: stop 0, move 1, attack 2, hit 3, die 4, run 5, cast 6, skill action 7, cast 8, skill action 9 (motion file i for slot i)
+        npcs = {281: dict(skel=0, models=[], motions=[(i, i) for i in range(10)], effects=[])}
+        b.add_actors({281: dict(name='mage')}, (['S.ZMD'], mo, [], npcs, True), None)
+        clips = b.actors[0]['clips']
+        self.assertEqual([c >= 0 for c in clips], [True] * 10 + [False] * 2, "slots 6..9 (cast / skill action) carry clips, 10 / 11 have no file")
+        self.assertEqual([loop for _p, loop in made][6:10], [False] * 4, "cast / skill action clips are one shot")
 
 
 if __name__ == "__main__":

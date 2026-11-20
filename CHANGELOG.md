@@ -2,6 +2,29 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.51
+
+**ROSE Online**
+- Storage: talk to "[Ferrell Guild Staff] Crow" in Zant. Your storage is shared by all your characters.
+- Player trade: trade with another player in the same instance. Trades are safe, and items cannot be duplicated.
+- Monsters now use buffs and debuffs like the original, and you can see their cast bars in dungeons.
+- Party money is split between the members.
+- Sit / stand: press X on desktop, or use the VR wheel. HP and MP recover faster while you sit. Emotes are now available too.
+- Wheel changes: Char has Sit/Stand; Party/Clan has Trade.
+
+**Half-Life family**
+- Allies that drop in on ropes now call their own squad for help, like in the original.
+- Blue Shift: snarks are thrown from the original distance and height (also while ducked).
+- Deathmatch Classic: shotgun punch adjusted.
+- Opposing Force: snow impacts are slightly quieter.
+- Spectator: with no target, the HL camera now goes to the map start instead of staying put.
+
+**Worlds**
+- New ROSE poster and portal in the Half-Life hub and in the Counter-Strike world.
+- The ROSE help board now shows the first steps as pictures.
+
+Needs companion 0.9.51: all ROSE packs rebuild once in the background; you can keep playing meanwhile.
+
 ## 0.9.50
 
 **New**
