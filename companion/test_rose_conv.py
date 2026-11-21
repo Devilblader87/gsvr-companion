@@ -67,14 +67,17 @@ class VersionAndTable(unittest.TestCase):
         cast = dun2          # ROSE w21 DUNGEON2 repair: the monsters' cast / skill action motions 6..11 in ACTR (rose_npcskills.install_cast_motions)
         for n in amb + dun + dun2 + cast:
             want[n] += 1
+        for n, s in rose_conv.PACKS.items():          # ROSE w23 MUSIC: every pack with SNDS (zones + login) carries the full-length zone BGM (rose_music.py)
+            if s["kind"] != "avatar":
+                want[n] += 1
         self.assertEqual(rose_conv.PACK_REV, want)
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
-        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p4")
+        self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p5")
         self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p5")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3, w20: + zone ambient effects)
         for n in rose_conv.PACKS:
             if n not in ("birthisland", "avatar") + tiny + amb + dun + dun2:
-                self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p1")
-        self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p3")
+                self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p2")
+        self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p4")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)
 
     def test_tiny_dxt_keeps_alpha(self):
@@ -138,7 +141,7 @@ class VersionAndTable(unittest.TestCase):
         self.assertIn("rose_pack.py", listed)
         for name, h in listed.items():
             self.assertEqual(_sha(os.path.join(HERE, name)), h, "%s edited locally: change rose-vrchat and run tools/sync_rose_converter.sh" % name)
-        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
+        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py", "rose_music.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
         extra = [f for f in os.listdir(HERE) if f.endswith(".py") and f not in listed and f not in own]
         self.assertEqual(extra, [], "unlisted modules in rose_conv/")
 

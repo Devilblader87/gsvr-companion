@@ -50,6 +50,8 @@ import rose_skilltips                    # noqa: E402
 rose_skilltips.install()                 # ROSE w15: SKDB description table + TXJA skill descriptions (companion-owned, the vendored rose_skills.py stays as it is)
 import rose_npcskills                    # noqa: E402
 rose_npcskills.install()                 # ROSE w20 DUNGEON: the monsters' skill table behind the AIPS records (companion-owned, the vendored rose_aips.py stays as it is)
+import rose_music                        # noqa: E402
+rose_music.install()                     # ROSE w23 music: the zone BGM as the WHOLE track with its natural loop (companion-owned, the vendored rose_audio.py keeps its 64 s excerpt code)
 
 WRAPPER_REV = 7                          # 7 = ROSE w20: monster skill table in AIPS for EVERY zone (Stefan 2026-11-18: all zones at once); bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
 # per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
@@ -161,6 +163,12 @@ del _n
 for _n in ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple", "lunaclanfield"):
     PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
 del _n
+# ROSE w23 MUSIC (owner report 2026-11-21: Breezy Hills music repeats after ~1 min): every pack with SNDS (all zones + the login pack) carries the full-length zone
+# BGM (rose_music.py; Breezy Hills 64 s excerpt -> 114.2 s, +4.4 MB) and rebuilds once; the avatar pack has no music and keeps its version.
+for _n, _s in PACKS.items():
+    if _s["kind"] != "avatar":
+        PACK_REV[_n] = PACK_REV.get(_n, 0) + rose_music.MUSIC_REV
+del _n, _s
 PACK_REV["avatar"] = 5          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 #                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform

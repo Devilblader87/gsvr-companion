@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GSVR Companion</title>
-<meta name="description" content="Play your own copy of Counter-Strike 1.6, Half-Life, Sven Co-op, Warcraft III and ROSE Online in VRChat: the GSVR companion app converts your installed game files locally.">
+<meta name="description" content="Free PC app for the GSVR worlds in VRChat: play ROSE Online (free game client), Counter-Strike 1.6, Half-Life, Sven Co-op and Warcraft III from your own installed games. Windows 10/11, about 5 minutes to set up.">
 <style>
   :root { --bg: #14130f; --panel: #1f1c15; --text: #e8dcc0; --muted: #a8987a; --accent: #ffb42a; --line: #3a3324; }
   @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #f4efe4; --panel: #fffaf0; --text: #2a2418; --muted: #6d5f45; --accent: #b86e00; --line: #dccfb3; } }
@@ -18,6 +18,10 @@
   .card { background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--accent); padding: 18px 20px; margin: 18px 0; }
   a.btn { display: inline-block; background: var(--accent); color: #1a1408; font-weight: 700; text-decoration: none; padding: 12px 22px; margin: 6px 8px 6px 0; }
   a.btn.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  a.btn.big { font-size: 19px; padding: 14px 26px; }
+  .req { display: inline-block; margin-left: 4px; }
+  .warn { border-top-color: var(--muted); }
+  section.lang { border-top: 1px solid var(--line); margin-top: 36px; }
   ol li { margin: 6px 0; }
   code { background: var(--line); padding: 1px 6px; }
   small, .muted { color: var(--muted); }
@@ -27,84 +31,99 @@
 <body>
 <main>
   <h1>GSVR <span>Companion</span></h1>
-  <p class="lead">Play Half-Life, Counter-Strike 1.6, Sven Co-op, Warcraft III and ROSE Online in VRChat — built from <b>your own</b> installed games, on your PC.</p>
+  <p class="lead">The free PC app for the GSVR worlds in VRChat: play <b>ROSE Online</b> (the game client is free), Counter-Strike 1.6, the Half-Life campaign, Sven Co-op and Warcraft III — built from <b>your own</b> installed games, on your PC. About 5 minutes to set up.</p>
+  <p class="muted">Worlds: <b>GSVR - ROSE Online</b> (MMORPG in co-op; the ROSE client is free), <b>GSVR - Half-Life</b> (the campaign in co-op, Opposing Force, Blue Shift, Sven Co-op and more; needs Half-Life on Steam) and <b>GSVR - Counter-Strike</b> (classic rounds, bomb, hostages, bots; needs Counter-Strike on Steam). Each world only needs the game it is built from.</p>
 
   <div class="card">
-    <div>Latest version: <span id="ver">…</span></div>
-    <a class="btn" id="dl-win" href="https://github.com/Devilblader87/gsvr-companion/releases/latest">Download GSVR-Setup.exe (Windows)</a>
-    <a class="btn alt" href="https://github.com/Devilblader87/gsvr-companion/releases">All releases</a>
+    <div>Latest version: <span id="ver"><a href="https://github.com/Devilblader87/gsvr-companion/releases">see the release page</a></span></div>
+    <!-- main button: works without JavaScript (direct GitHub download); the script points it at the newest release's exe, or at play.heimserver.me/dl?w= for visitors who came via a short link -->
+    <a class="btn big" id="dl-win" href="https://github.com/Devilblader87/gsvr-companion/releases/latest/download/GSVR-Setup.exe">Download GSVR-Setup.exe</a>
+    <span class="req muted">Windows 10/11 64-bit<span id="size"></span></span>
+    <div><a class="btn alt" href="https://github.com/Devilblader87/gsvr-companion/releases/latest">Release page (SHA-256, notes)</a></div>
     <div class="muted"><small>Already installed? The companion updates itself on start — nothing to download again.
       Portable zip and source: see <a href="https://github.com/Devilblader87/gsvr-companion/releases">all releases</a>.</small></div>
   </div>
 
-  <h2>日本語</h2>
-  <p>自分のPCにインストールした Half-Life、Counter-Strike 1.6、Sven Co-op、Warcraft III、ROSE Online を VRChat で遊べるツールです(ゲームは各自でご用意ください)。</p>
-  <ol>
-    <li>上のボタンから <code>GSVR-Setup.exe</code> をダウンロードしてインストールします。</li>
-    <li>コンパニオンを起動すると、ゲームが自動で検出されます。「スタート」を押すと準備が始まります。</li>
-    <li>VRChat の設定 → Comfort &amp; Safety → 「Allow Untrusted URLs(信頼されていないURL)」をオンにします。</li>
-    <li>「VRChatでワールドを開く」を押して参加します。</li>
-  </ol>
-  <p class="muted"><small>Windows PC の VRChat のみ対応です。質問・不具合報告は <a href="https://discord.gg/nc2rw6Snx">Discord</a> へ。</small></p>
+  <div class="card warn">
+    <b>Windows or your browser warns you? That is expected.</b>
+    <ul>
+      <li>Browser (Chrome / Edge: “not commonly downloaded”): open the downloads list, then <b>… → Keep</b> (Edge: <b>Keep anyway</b>).</li>
+      <li>Windows: “Windows protected your PC” / “unknown publisher”: click <b>More info → Run anyway</b>.</li>
+    </ul>
+    <small class="muted">Why: GSVR is a free fan project, and code-signing certificates cost money every year, so the installer is not signed. Instead, everything is open:
+      the source code is public under the GPL-3.0 (<a href="https://github.com/Devilblader87/gsvr-companion">GitHub</a>), and every release page lists the SHA-256 of each file so you can check your download.
+      No account, no login, and the app sends no data about you: it only talks to VRChat on your own PC (<code>127.0.0.1</code>) and to GitHub for its updates.</small>
+  </div>
 
   <h2>Get playing in 4 steps</h2>
   <ol>
+    <li><b>Download GSVR-Setup.exe</b> (button above). For Half-Life / Counter-Strike you also need the game on Steam, installed on this PC; ROSE Online needs only its free game client. The companion finds Steam by itself.</li>
     <li><b>Run GSVR-Setup.exe</b> — no admin rights needed, it starts with Windows and updates itself.
       <br><small class="muted">Windows may say “Windows protected your PC” (new, unsigned app): click <b>More info → Run anyway</b>.</small></li>
-    <li><b>Start the companion.</b> Your installed games are found automatically; press <b>Start</b> (1-click setup) to build what is needed. The Simple view shows each world's status. A game that is not found can be set in the <b>Games</b> tab (Advanced view).</li>
-    <li>In VRChat: <b>Settings → Comfort &amp; Safety → Allow Untrusted URLs: on</b>.</li>
-    <li>Press <b>Open world in VRChat</b> (or use a link below) and join.</li>
+    <li>In VRChat: <b>Settings → Comfort &amp; Safety → Allow Untrusted URLs: on</b> (or type “untrusted” in the settings search field).</li>
+    <li><b>Start GSVR Companion</b> (Start menu or its tray icon) and <b>rejoin the world</b>. The START HERE board at the spawn turns green when everything is ready.</li>
   </ol>
-  <p class="muted"><small>VRChat on PC (Windows) only — Quest / Android cannot load local files. The companion is available in English, Japanese and German.</small></p>
-
-  <h2>Worlds</h2>
-  <ul>
-    <li><a href="https://vrchat.com/home/world/wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a">GSVR - Half-Life</a> — campaign and mod hub (Opposing Force, Blue Shift, Ricochet, DMC, Sven Co-op). Needs Half-Life (+ mods / Sven Co-op).</li>
-    <li><a href="https://vrchat.com/home/world/wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb">GSVR - Counter-Strike</a> — needs Counter-Strike 1.6.</li>
-    <li><a href="https://vrchat.com/home/world/wrld_71563253-4115-40d3-b165-7cdba23bff06">Warcraft III</a> — melee, tower defense and other custom maps on a table. Needs Warcraft III 1.21 – 1.31.</li>
-    <li><a href="https://vrchat.com/home/world/wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2">GSVR - ROSE Online ローズオンライン</a> — needs ROSE Online.</li>
-  </ul>
-  <p class="muted"><small>All worlds are alpha. Each world only needs the game it is built from; a banner at its spawn shows the current status and changes.</small></p>
 
   <h2>Why a companion app?</h2>
-  <p>The worlds contain no game files. The companion reads maps, models and sounds from the copy of the game that you
-  own, converts them on your PC and hands them to VRChat over <code>127.0.0.1</code> (your own computer only).
-  Nothing is downloaded and game data never leaves your PC.</p>
+  <p>The world does not contain any game files. The companion reads maps, models and sounds from the copy of the game
+  that you own, converts them on your PC and hands them to VRChat over <code>127.0.0.1</code> (your own computer only).
+  Nothing is uploaded anywhere, and only games you have installed can be played.</p>
 
-  <h2>ROSE Online (alpha)</h2>
-  <p>The install is found automatically (registry, Steam, usual folders); otherwise set the "ROSE Online folder" in the Games tab or start with <code>--rose-install &lt;folder&gt;</code>. On first join the zone, avatar and lobby packs are built from your own install, about 1 minute per zone, in the background (progress is shown in the world's load room) and cached. Zone loads in the world can still take 1.5 to 2.5 minutes; neighbour zones are preloaded.</p>
-  <p><b>Zones (0.9.49):</b> Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, Goblin Cave (B1-B3), Junon Polis, Dolphin Island, Junon Clan Field, clan hideout; Luna: Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields, Freezing Plateau, Luna Clan Field; Eldeon: Refuge Xita, Shady Jungle.</p>
-  <p>Co-op up to 4, parties (with party voice), clans and a global chat. Original skill effects, skill tooltips, 3 x 30 bag, second job change, level cap 250, bows/guns use ammo, all NPCs and most quests run.</p>
-  <p>Community: questions, ideas, bug reports? <a href="https://discord.gg/nc2rw6Snx">Join our Discord</a></p>
-
-  <h2>Warcraft III: sharing fan maps</h2>
-  <p>If the host plays a fan map a friend does not have, the friend's companion fetches <b>only that map file</b> through the GSVR relay (<code>w3relay.heimserver.me</code>; files are kept 24 h and can only be fetched by their exact hash) and builds it from the friend's own Warcraft III. The map is saved in <code>Warcraft III\Maps\Download\GSVR</code>, so it also works in the real game. Blizzard's own maps and game data are never sent. Switch it off in the settings (<i>Load maps from host automatically</i>: on / ask / off). Takedown requests: <code>abuse@heimserver.me</code>.</p>
-
-  <h2>Troubleshooting</h2>
+  <h2>Trouble?</h2>
   <ul>
-    <li><b>The world says the companion is missing:</b> start the companion and make sure <i>Allow Untrusted URLs</i> is on in VRChat.</li>
-    <li><b>A game is not found:</b> set its folder in the <b>Games</b> tab (Advanced view); it shows where each game was found (Steam, registry, folder scan or by hand).</li>
-    <li><b>The first load is slow:</b> the first build converts your game data and is cached; later loads are much faster. ROSE builds in the background, about 1 minute per zone.</li>
-    <li><b>The menu is hard to click in VR:</b> set VRChat's <i>Forced Camera Near Distance</i> to <i>None</i>.</li>
-    <li><b>A Warcraft III map behaves like before an update:</b> update the companion; a new version rebuilds the maps by itself the next time they are played.</li>
-    <li><b>No update banner on 0.9.49 / 0.9.49.1:</b> switch to the <b>Advanced view</b> once (button at the top); the yellow "Update available" bar appears there. Later versions show updates in both views and update automatically.</li>
+    <li><b>"Companion not found"</b> — the app is not running, or a firewall blocks local connections.</li>
+    <li><b>"Untrusted URLs"</b> — switch the VRChat setting above on and rejoin.</li>
+    <li><b>"Game not installed"</b> — install it in Steam, the companion rescans automatically.</li>
+    <li>VRChat on PC (Windows) only — Quest / Android cannot load local files.</li>
   </ul>
-  <p>The full version history is in the <a href="https://github.com/Devilblader87/gsvr-companion/blob/main/CHANGELOG.md">changelog</a>. On Linux / Steam Deck the Windows build runs under Proton; see the <a href="https://github.com/Devilblader87/gsvr-companion#linux--steam-deck-proton">README</a>.</p>
-  <p class="muted"><small><a href="https://github.com/Devilblader87/gsvr-companion/blob/main/CODE_SIGNING_POLICY.md">Download verification &amp; privacy</a> &middot; <a href="https://github.com/Devilblader87/gsvr-companion/blob/main/LICENSE">GPL-3.0</a></small></p>
-  <p class="muted"><small>Fan project, not affiliated with Valve, Blizzard Entertainment, VRChat or the owners of ROSE Online. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment; ROSE Online is a trademark of its owners.</small></p>
+
+  <section class="lang" lang="de">
+    <h2>Deutsch</h2>
+    <p><b>Kostenlose PC-App für die GSVR-Welten in VRChat</b> (ROSE Online: Spielclient kostenlos; Half-Life / Counter-Strike: eigenes Spiel auf Steam). Einrichtung ca. 5 Minuten, Windows 10/11 64-bit.</p>
+    <ol>
+      <li><b>GSVR-Setup.exe herunterladen</b> (Knopf oben). Warnt der Browser, in der Download-Liste <b>Behalten</b> wählen.</li>
+      <li><b>Installieren.</b> Meldet Windows „Der Computer wurde durch Windows geschützt“: <b>Weitere Informationen → Trotzdem ausführen</b>.</li>
+      <li>VRChat: <b>Einstellungen → Comfort &amp; Safety → Allow Untrusted URLs: an</b> (oder „untrusted“ ins Suchfeld tippen).</li>
+      <li><b>GSVR Companion starten</b> (Startmenü oder Tray-Symbol) und die Welt <b>neu betreten</b>.</li>
+    </ol>
+    <p class="muted"><small>Warum unsigniert? Kostenloses Fanprojekt, ein Signatur-Zertifikat kostet jedes Jahr Geld. Dafür ist alles offen: Quellcode unter GPL-3.0, SHA-256 jeder Datei auf der Release-Seite. Kein Konto, und die App sendet keine Daten über dich.</small></p>
+  </section>
+
+  <section class="lang" lang="ja">
+    <h2>日本語</h2>
+    <p><b>VRChatのGSVRワールド用の無料PCアプリ</b>（ローズオンライン：ゲームクライアントは無料／Half-Life・Counter-Strike：Steamの自分のゲームが必要）。設定は約5分、Windows 10/11 64ビット。</p>
+    <ol>
+      <li><b>GSVR-Setup.exeをダウンロード</b>（上のボタン）。ブラウザが警告したら、ダウンロード一覧で<b>「保存」</b>を選択。</li>
+      <li><b>インストール。</b>「WindowsによってPCが保護されました」と出たら<b>「詳細情報」→「実行」</b>。</li>
+      <li>VRChat：<b>設定 → Comfort &amp; Safety → Allow Untrusted URLs をオン</b>（設定の検索欄に「untrusted」と入力しても可）。</li>
+      <li><b>GSVR Companionを起動</b>（スタートメニューまたはトレイアイコン）し、ワールドに<b>入り直す</b>。</li>
+    </ol>
+    <p class="muted"><small>署名がない理由：無料のファンプロジェクトのため、毎年費用がかかるコード署名証明書は使っていません。代わりにソースコードはGPL-3.0で公開、各ファイルのSHA-256はリリースページに記載。アカウント不要、アプリは個人データを送信しません。</small></p>
+  </section>
+
+  <p class="muted"><small>Fan project, not affiliated with Valve, the ROSE Online publishers or VRChat. Counter-Strike and Half-Life are trademarks of Valve Corporation; ROSE Online belongs to its rights holders.</small></p>
 </main>
 <script>
-  // newest release (pre-releases included) from the public GitHub API — no server of our own involved
+  // 1) newest release INCLUDING pre-releases (releases/latest skips them): version line, file size, and the button points at that release's GSVR-Setup.exe
+  // 2) visitors who came through a short link (play.heimserver.me/r /h /c redirect here with ?w=...) proved that our short-link server is up: for them the button
+  //    goes through play.heimserver.me/dl?w=... (download counter per world). Everyone else keeps the direct GitHub link, so a missing /dl never breaks the button.
+  // Without JavaScript the plain href downloads straight from GitHub (releases/latest/download/GSVR-Setup.exe).
+  let viaShort = false, dl = "";
+  try {
+    const w = (new URLSearchParams(location.search).get("w") || "").toLowerCase();
+    if (/^[a-z]{1,8}$/.test(w)) { viaShort = true; dl = "https://play.heimserver.me/dl?w=" + w; document.getElementById("dl-win").href = dl; }
+  } catch (e) { /* keep the GitHub link */ }
   fetch("https://api.github.com/repos/Devilblader87/gsvr-companion/releases?per_page=10")
     .then(r => r.ok ? r.json() : [])
     .then(list => {
-      const rel = (list || []).find(r => !r.draft);
-      if (!rel) { document.getElementById("ver").textContent = "-"; return; }
-      document.getElementById("ver").textContent = rel.tag_name;
-      const a = (rel.assets || []).find(x => x.name === "GSVR-Setup.exe");
-      if (a) document.getElementById("dl-win").href = a.browser_download_url;
+      const rel = (list || []).find(r => !r.draft && (r.assets || []).some(x => x.name === "GSVR-Setup.exe"));
+      if (!rel) return;
+      document.getElementById("ver").textContent = rel.tag_name + (rel.prerelease ? " (pre-release)" : "");
+      const a = rel.assets.find(x => x.name === "GSVR-Setup.exe");
+      if (a.size) document.getElementById("size").textContent = ", " + Math.round(a.size / 1048576) + " MB";
+      if (!viaShort) document.getElementById("dl-win").href = a.browser_download_url;
     })
-    .catch(() => { document.getElementById("ver").textContent = "see releases"; });
+    .catch(() => { /* the version line keeps its link to the release page */ });
 </script>
 </body>
 </html>

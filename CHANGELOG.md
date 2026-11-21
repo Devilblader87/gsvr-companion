@@ -2,6 +2,29 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.53
+
+**ROSE Online**
+- Zone music now plays the whole original track and loops at its natural end (before: only the first minute with a cross-fade).
+- Change character: you are back in the zone in under a second, and the select room with podiums looks like the first join.
+- Japanese: our menus, HUD, windows and boards now show Japanese text correctly (font: Noto Sans JP, SIL Open Font License 1.1). Item, NPC and quest names still come from your own client.
+- VR: hold a window and push the right stick up / down to move it farther / closer (like overlay apps).
+- VR: the laser now also works in the character select lobby.
+- Lobby boards stay readable from every angle.
+- Co-op: debuffs and poison from party members now land on monsters correctly.
+- Towns and fields run smoother.
+
+**Half-Life family**
+- Opposing Force: the Gargantua is back (model pack rebuilt within the size limit) and stomps like the original.
+- More client code ported from the original.
+
+**Worlds**
+- New "START HERE" board at the spawn of ROSE, Half-Life and Counter-Strike: 4 steps, QR code and a live status (red / amber / green) that tells you what is still missing.
+- New VRChat group board: join the group and see the next group event in your local time.
+- Weekly group events: ROSE Saturday 21:00 JST, Half-Life co-op night Friday 20:00 CET.
+
+Needs companion 0.9.53: all ROSE packs and the Opposing Force model pack rebuild once in the background; you can keep playing meanwhile.
+
 ## 0.9.51
 
 **ROSE Online**

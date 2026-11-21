@@ -277,7 +277,20 @@ def spr2_layout(frames, atlas_w=SPR2_ATLAS_W):
     return pos, ah
 
 
-def spr2_select(candidates, max_texels):
+def spr2_unique(frames):
+    """(unique frames in first-seen order, index into them per input frame): frames with the same size and the same texels share one
+    atlas slot (profile flag fx_dedupe; the frame table still has one row per frame, with the shared slot position)."""
+    seen, uniq, ref = {}, [], []
+    for f in frames:
+        key = (f.w, f.h, bytes(f.rgba))
+        if key not in seen:
+            seen[key] = len(uniq)
+            uniq.append(f)
+        ref.append(seen[key])
+    return uniq, ref
+
+
+def spr2_select(candidates, max_texels, dedupe=False):
     """candidates: [(rel name, Sprite)] in priority order -> (kept, dropped names). Strict priority: the kept sprites are the
     longest prefix whose shelf-packed atlas fits max_texels; the first sprite that does not fit and everything after it is
     dropped (lowest priority first). Sprites with screen-sized frames are skipped without ending the prefix."""
@@ -291,7 +304,7 @@ def spr2_select(candidates, max_texels):
             dropped.append(rel)
             continue
         trial = frames + s.frames
-        _pos, ah = spr2_layout(trial)
+        _pos, ah = spr2_layout(spr2_unique(trial)[0] if dedupe else trial)
         if SPR2_ATLAS_W * ah <= max_texels:
             kept.append((rel, s))
             frames = trial
@@ -301,17 +314,27 @@ def spr2_select(candidates, max_texels):
     return kept, dropped
 
 
-def spr2_chunk(sprites, name, mips, half):
+def spr2_chunk(sprites, name, mips, half, dedupe=False):
     """sprites: [(rel name, Sprite)], name(str) -> (off, len) in the GSM1 names table, half = 2x2 box filter.
     Returns (chunk bytes, (atlasW, atlasH, frames))."""
     frames = [f for _n, s in sprites for f in s.frames]
-    pos, ah = spr2_layout(frames)
+    if dedupe:
+        uniq, ref = spr2_unique(frames)
+    else:
+        uniq, ref = frames, list(range(len(frames)))
+    pos, ah = spr2_layout(uniq)
     aw = SPR2_ATLAS_W
     img = bytearray(aw * ah * 4)
     ftab = b""
-    for f, (sx, sy) in zip(frames, pos):
+    drawn = set()
+    for fi, f in enumerate(frames):
+        sx, sy = pos[ref[fi]]
         sw, sh = spr2_slot(f)
         px, py = (sw - f.w) // 2, (sh - f.h) // 2
+        if ref[fi] in drawn:
+            ftab += struct.pack("<8i", f.ox, f.oy, f.w, f.h, sx + px, sy + py, f.k if f.k != 1 else 0, 0)
+            continue
+        drawn.add(ref[fi])
         for y in range(sh):
             srow = min(f.h - 1, max(0, y - py))
             row = f.rgba[srow * f.w * 4:(srow + 1) * f.w * 4]

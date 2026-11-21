@@ -188,7 +188,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 21, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 21: T3 PROP studio props item_generic (map model key: plant_01 / plant_cactus / plant_palm / snow_tree / tree_palm / egg ...) + op4mortar (mortar.mdl idle / fire), gearbox prop cap 24 -> 32 (prop_max); 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
+PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 22, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 22: + garg (w22 gargstomp: the OF pack had no garg sequences) WITHIN the 99 MB budget: skyline atlas packing, cell-area cap 6.05M, SPR2 frame dedupe, SPR2 texel cap 2M (w23 ofpack, see docs/pack_budget.md); 21: T3 PROP studio props item_generic (map model key: plant_01 / plant_cactus / plant_palm / snow_tree / tree_palm / egg ...) + op4mortar (mortar.mdl idle / fire), gearbox prop cap 24 -> 32 (prop_max); 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
 
 
 def version_for_mod(mod):
@@ -365,7 +365,7 @@ def fx_sprite_order(mod):
 
 
 # per-mod default budgets (texels at level 0, 5.25 bytes each with the mips): the cstrike pack is already ~94 MB, so it only keeps the core
-FX_TEXELS_MOD = {"cstrike": 1024 * 512}
+FX_TEXELS_MOD = {"cstrike": 1024 * 512, "gearbox": 1024 * 2048}   # gearbox: the 99 MB size guard is the limit, not the texel cap (w23 pack budget)
 FX_TEXELS = 1024 * 1536          # SPR2 atlas budget (texels at level 0; 5.25 bytes per texel with the mips); valve / cstrike packs stay near 90 MB
 
 
@@ -987,6 +987,7 @@ OF_MONSTERS = tuple(MONSTERS) + (
     # bosses / big props: own pose vertex budget (5th field)
     ("voltigore", (65,), (), 0, 40000),                         # 65 = the victory dance at the enemy corpse
     ("baby_voltigore", (65,), (), 0, 12000),
+    ("garg", (), (), 0, 40000),                                  # CGargantua (OF of2a1.. have gargs; models/garg.mdl via the valve fallback): stomp anim event 5 needs its sequences
     ("geneworm", (), (), 0, 30000),
     ("pit_worm_up", (), (), 0, 30000),
     ("pit_worm", (), (), 0, 30000),           # not in the Steam install: MODEL_STANDINS, the runtime then draws big_mom
@@ -1005,9 +1006,9 @@ PROFILES["gearbox"] = dict(PROFILES["valve"], script_seqs=SCRIPT_SEQS, weapons=O
                            # + vgibs (COFVoltigore::GibMonster / CGib: models/vgibs.mdl, 9 pieces) after the CGib models
                            gib_models=GIB_MODELS[:3] + ("vgibs",) + GIB_MODELS[3:],
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
-                           mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=4096 * 1536,
+                           mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=6_050_000,
                            # studio-prop skins at most 128 px: the pack sits at the 99 MB guard (the props push the tail sprite fexplo1 out)
-                           prop_tex_max=128, prop_max=32)   # prop_max: + item_generic / op4mortar models (28 named)
+                           prop_tex_max=128, prop_max=32, atlas_skyline=True, fx_dedupe=True)   # prop_max: + item_generic / op4mortar models (28 named)
 
 
 # ───────────────────────── Blue Shift (--mod bshift) ─────────────────────────
@@ -2618,13 +2619,14 @@ class Builder:
             area = sum(cell(it[0], it[1])[0] * cell(it[0], it[1])[1] for it in items.values())
             placed = None
             if area <= self.max_atlas_px:
-                for aw in (1024, 2048, 4096):
-                    pos, used = shelf_pack([cell(items[k][0], items[k][1]) for k in keys], aw)
+                for aw in ((1024, 2048) if self.prof.get("atlas_skyline") else (1024, 2048, 4096)):   # skyline: the smallest area wins, never wider than 2048
+                    pos, used = (skyline_pack if self.prof.get("atlas_skyline") else shelf_pack)([cell(items[k][0], items[k][1]) for k in keys], aw)
                     if pos is None:
                         continue
                     ah = -(-used // 8) * 8
                     if ah <= 4096 and aw * ah <= self.max_atlas_px:
-                        if placed is None or max(aw, ah) * 1e9 + aw * ah < max(placed[0], placed[1]) * 1e9 + placed[0] * placed[1]:
+                        if placed is None or (aw * ah < placed[0] * placed[1] if self.prof.get("atlas_skyline") else
+                                              max(aw, ah) * 1e9 + aw * ah < max(placed[0], placed[1]) * 1e9 + placed[0] * placed[1]):
                             placed = (aw, ah, pos)
             if placed:
                 break
@@ -2849,12 +2851,12 @@ class Builder:
             budget = min(self.fx_texels, int(max(0, room) / 5.25))      # RGBA32 + 3 mips = 5.25 bytes per texel
             if budget < self.fx_texels:
                 log(f"pack-size guard: effect sprite budget cut from {self.fx_texels} to {budget} texels (--max-bytes {self.max_bytes})")
-            kept, dropped = spr.spr2_select(self.fx_sprites, budget)
+            kept, dropped = spr.spr2_select(self.fx_sprites, budget, bool(self.prof.get("fx_dedupe")))
             self.budget_fx = (self.fx_texels, budget, list(dropped))
             if dropped:
                 log(f"effect sprites over the {budget} texel budget, dropped (lowest priority first): {', '.join(dropped)}")
             if kept:
-                ch, (faw, fah, fn) = spr.spr2_chunk(kept, name, spr.SPR2_MIPS, half_rgba)
+                ch, (faw, fah, fn) = spr.spr2_chunk(kept, name, spr.SPR2_MIPS, half_rgba, bool(self.prof.get("fx_dedupe")))
                 chunks.append(ch)
                 log(f"effect sprites: {len(kept)} ({fn} frames) in a {faw}x{fah}x{spr.SPR2_MIPS} atlas, {len(ch) / 1e6:.2f} MB")
         names.extend(b"\0" * (-len(names) % 4))
@@ -2913,6 +2915,57 @@ def shelf_pack(sizes, width):
         x += w
         shelf = max(shelf, h)
     return pos, y + shelf
+
+
+def skyline_pack(sizes, width):
+    """Bottom-left skyline packing, tallest first (profile flag atlas_skyline: the shelf rows of shelf_pack leave ~9% of the gearbox atlas
+    empty at the right edge of every row; the same cells packed on a skyline need fewer rows). Returns (positions in input order, used height)
+    like shelf_pack. Cells are the same, so every texture keeps its size and texels: only the position (and so every UV) moves."""
+    order = sorted(range(len(sizes)), key=lambda i: (-sizes[i][1], -sizes[i][0], i))
+    sky = [(0, 0, width)]                     # (x, y, w) segments left to right, y = the height of the skyline there
+    pos = [None] * len(sizes)
+    top = 0
+    for i in order:
+        w, h = sizes[i]
+        if w > width:
+            return None, 1 << 30
+        best = None
+        for si in range(len(sky)):
+            x = sky[si][0]
+            if x + w > width:
+                break
+            y, rem, sj = 0, w, si             # the cell rests on the highest segment under it
+            while rem > 0:
+                y = max(y, sky[sj][1])
+                rem -= sky[sj][2]
+                sj += 1
+            # lowest resting y, then leftmost x (no explicit waste term)
+            if best is None or (y, x) < (best[0], best[1]):
+                best = (y, x)
+        y, x = best
+        pos[i] = (x, y)
+        top = max(top, y + h)
+        # raise the skyline over [x, x+w) to y+h
+        out = []
+        for sx, sy, sw in sky:
+            ex = sx + sw
+            if ex <= x or sx >= x + w:
+                out.append((sx, sy, sw))
+                continue
+            if sx < x:
+                out.append((sx, sy, x - sx))
+            if ex > x + w:
+                out.append((x + w, sy, ex - (x + w)))
+        out.append((x, y + h, w))
+        out.sort()
+        merged = []
+        for seg in out:
+            if merged and merged[-1][1] == seg[1] and merged[-1][0] + merged[-1][2] == seg[0]:
+                merged[-1] = (merged[-1][0], merged[-1][1], merged[-1][2] + seg[2])
+            else:
+                merged.append(seg)
+        sky = merged
+    return pos, top
 
 
 half_rgba = spr.half_rgba      # 2x2 box filter (defined in spr.py with half_sprite)
