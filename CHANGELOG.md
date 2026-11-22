@@ -2,6 +2,24 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.54
+
+**ROSE Online**
+- Shops look like the original now: an 8×6 icon grid per tab, every item of a tab visible at once (before: 3 rows per page).
+- Item tooltips are readable: dark box, larger text, price line, placed beside the item instead of over it. In VR the laser shows the tooltip beside the shop window.
+- Compare stats: shop items show the difference to the piece you wear in that slot (green better, red worse), with the worn piece next to it.
+- Recovery like the original: HP/MP regenerate every 4 s by your stats, sitting gives the original sit bonus; standing out of combat adds a small HP top-up.
+- Monsters follow day and night like the original, and sleep/stun really stops them.
+- Night music in the outdoor zones that have it in the original (dungeons keep their day track).
+- Gem appraisal at the NPC (free for now).
+- VR window buttons are translated (German, Japanese) and fit their text.
+
+**Half-Life family**
+- Opposing Force: all 100 effect sprites of the original are in the model pack now (smaller bone data keeps it within the size limit).
+- More client code ported from the original.
+
+Needs companion 0.9.54: the Opposing Force model pack and some ROSE zones rebuild once in the background; you can keep playing meanwhile.
+
 ## 0.9.53
 
 **ROSE Online**

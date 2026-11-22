@@ -121,7 +121,7 @@
 #     int32 mask [NBM]    per bone: bit s = controller slot s moves it (256 = gait leg bone)
 #     int32 vbone [NV]; float vert [NV*6] per vertex of the skinned meshes: bone, position + normal in that bone's frame (Unity axes)
 #     int32 skin [NK*4]   mesh, skin family, uvFirst (float index), vertices; float skinUv [NU] alternate atlas UVs of that family
-#     float tex [W*H*4]   the bone texture (RGBAFloat rows, texel i at (i % W, i / W))
+#     float tex [W*H*4]   the bone texture (RGBAFloat rows, texel i at (i % W, i / W)); header int 15 = 1: binary16 (RGBAHalf, 8 B / texel)
 #   Monster frame = W frame (model space at angles 0, origin = entity origin, GoldSrc +x → Unity +Z): place with
 #   Quaternion.Euler(0, 90 − yaw, 0). Keys are picked like VAN1 (pick_keys, ≤ MON_KEYS per activity, MON_TOL units of
 #   bone-position error); linear-movement sequences play in place (the motion bone's x/y/z is zeroed, mdl10).
@@ -188,7 +188,7 @@ VERSION_NUM = 2
 # VERSION bump ...); a change that only touches another mod's table / code leaves it alone, so the players' cached pack of
 # this mod is reused after a companion update. tools/modelpack_rev_check.py builds every pack and FAILS when the output
 # changed but the rev did not (and `--update` records the new golden tools/modelpack_rev.json).
-PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 22, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 22: + garg (w22 gargstomp: the OF pack had no garg sequences) WITHIN the 99 MB budget: skyline atlas packing, cell-area cap 6.05M, SPR2 frame dedupe, SPR2 texel cap 2M (w23 ofpack, see docs/pack_budget.md); 21: T3 PROP studio props item_generic (map model key: plant_01 / plant_cactus / plant_palm / snow_tree / tree_palm / egg ...) + op4mortar (mortar.mdl idle / fire), gearbox prop cap 24 -> 32 (prop_max); 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
+PACK_REV = {"cstrike": 5, "valve": 12, "svencoop": 9, "gearbox": 23, "bshift": 10, "ricochet": 4, "dmc": 2}   # gearbox 23: SKL1 bone texture as RGBAHalf (skel_half) + all 100 OF effect sprites (FX texel cap 4.7 M, 98.84 MB; w24 ofeffects); 22: + garg (w22 gargstomp: the OF pack had no garg sequences) WITHIN the 99 MB budget: skyline atlas packing, cell-area cap 6.05M, SPR2 frame dedupe, SPR2 texel cap 2M (w23 ofpack, see docs/pack_budget.md); 21: T3 PROP studio props item_generic (map model key: plant_01 / plant_cactus / plant_palm / snow_tree / tree_palm / egg ...) + op4mortar (mortar.mdl idle / fire), gearbox prop cap 24 -> 32 (prop_max); 20: T3 B10/B11 view sequences (m40a1 holster 8, pipe wrench holster 4 / charge start 11 / idles 0-2, saw holster 4 / idles 0-1 / reload-end 3 as VAN1 100 + n); 19: vgibs gib model + ammo_spore world mesh spore_ammo.mdl (MODEL_STANDINS); 18: sniper (v_m40a1 firelastround/reload2/reload3 + events) + OF ally/medic/torch acts 65/51/10/21/22
 
 
 def version_for_mod(mod):
@@ -365,7 +365,7 @@ def fx_sprite_order(mod):
 
 
 # per-mod default budgets (texels at level 0, 5.25 bytes each with the mips): the cstrike pack is already ~94 MB, so it only keeps the core
-FX_TEXELS_MOD = {"cstrike": 1024 * 512, "gearbox": 1024 * 2048}   # gearbox: the 99 MB size guard is the limit, not the texel cap (w23 pack budget)
+FX_TEXELS_MOD = {"cstrike": 1024 * 512, "gearbox": 1024 * 4608}   # gearbox: the 99 MB size guard is the limit, not the texel cap (w23 pack budget; w24: 4.7 M > all 100 OF sprites = 4.0 M)
 FX_TEXELS = 1024 * 1536          # SPR2 atlas budget (texels at level 0; 5.25 bytes per texel with the mips); valve / cstrike packs stay near 90 MB
 
 
@@ -1008,7 +1008,8 @@ PROFILES["gearbox"] = dict(PROFILES["valve"], script_seqs=SCRIPT_SEQS, weapons=O
                            # the unrestricted OF set is 158 MB (92 MB monster poses, 44 MB atlas): same caps as the Sven pack (<= 100 MB companion / VRChat limit)
                            mon_part_verts=1200, mon_pose_verts=40000, pw_tex_max=128, v_tex_max=128, atlas_px=6_050_000,
                            # studio-prop skins at most 128 px: the pack sits at the 99 MB guard (the props push the tail sprite fexplo1 out)
-                           prop_tex_max=128, prop_max=32, atlas_skyline=True, fx_dedupe=True)   # prop_max: + item_generic / op4mortar models (28 named)
+                           prop_tex_max=128, prop_max=32, atlas_skyline=True, fx_dedupe=True,
+                           skel_half=True)   # w24 ofeffects: SKL1 bone texture as RGBAHalf (-13.6 MB -> the effect sprites fit)   # prop_max: + item_generic / op4mortar models (28 named)
 
 
 # ───────────────────────── Blue Shift (--mod bshift) ─────────────────────────
@@ -2808,11 +2809,13 @@ class Builder:
                     x, y, w_, h_ = rects[k]
                     uvs.extend([(x + s_ * w_) / aw, (y + t_ * h_) / ah])
                 self.skp.skins.append((mesh, fam, uvs))
+            self.skp.half = bool(self.prof.get("skel_half"))
             ch = self.skp.chunk()
             chunks.append(ch)
             tw, th = self.skp.tex_size()
+            texfmt = "half" if self.skp.half else "float"
             log(f"skinned models: {len(self.skp.models)} ({sum(mo['keys'] for mo in self.skp.models)} keys, {len(self.skp.texels)} bone texels in a "
-                f"{tw}x{th} float texture, {len(self.skp.verts_i)} vertices, {len(self.skp.skins)} alternate skins), SKL1 {len(ch) / 1e6:.2f} MB")
+                f"{tw}x{th} {texfmt} texture, {len(self.skp.verts_i)} vertices, {len(self.skp.skins)} alternate skins), SKL1 {len(ch) / 1e6:.2f} MB")
         if self.gibs:
             # GIB1: int32 count N, int32 total pieces P, N x (nameOff, nameLen, pieceFirst, pieceCount), P x (mesh index or -1, vertex count).
             # Meshes are kind 6 (one pose each, model space). Old loaders skip the chunk and keep the cube gibs.
@@ -3029,6 +3032,8 @@ def main(argv=None):
                     help="pack size guard (the companion refuses > 100 MB): the SPR2 effect sprites shrink to what is left under it")
     ap.add_argument("--no-gibs", action="store_true", help="leave out the GSX1 GIB1 gib models (hgibs / agibs / material gibs)")
     ap.add_argument("--no-view-anims", action="store_true", help="leave out the VAN1 smooth v_ anims (reload / draw / attack)")
+    ap.add_argument("--skel-float", action="store_true", help="SKL1 bone texture as RGBAFloat even for a profile with skel_half (the pre-0.9.54 format; accuracy tests)")
+    ap.add_argument("--skel-half", action="store_true", help="SKL1 bone texture as RGBAHalf even for a profile without skel_half (offline tests of the half loader path)")
     ap.add_argument("--no-skel", action="store_true", help="monsters as baked pose meshes (MON1 only, the pre-SKL1 format) instead of skinned")
     ap.add_argument("out", nargs="?")
     a = ap.parse_args(argv)
@@ -3046,6 +3051,10 @@ def main(argv=None):
     b = Builder(a.game_root, a.mod, a.max_atlas_px or prof.get("atlas_px", 4096 * 2048), a.max_clip_s, not a.no_view)
     b.view_anims = not a.no_view_anims and prof.get("view_anims", True)
     b.skel = not a.no_skel
+    if a.skel_half:
+        b.prof = dict(b.prof, skel_half=True)
+    if a.skel_float:
+        b.prof = dict(b.prof, skel_half=False)
     if a.player_classes != "all":
         pc = {c.strip().lower() for c in a.player_classes.split(",") if c.strip()}
         bad = pc - set(prof["classes"])

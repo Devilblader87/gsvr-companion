@@ -169,6 +169,14 @@ for _n, _s in PACKS.items():
     if _s["kind"] != "avatar":
         PACK_REV[_n] = PACK_REV.get(_n, 0) + rose_music.MUSIC_REV
 del _n, _s
+NO_NIGHT_MUSIC_ZONES = frozenset((56,))      # dungeon / underground zones: day track only (owner 2026-11-21)
+# ROSE w24 NIGHT MUSIC: the zones whose LIST_ZONE night track (cell 6) differs from the day track (Luna, Mana Snowfields, Arumic Valley, Crystal Snowfields, Freezing Plateau,
+# Forgotten Temple) carry a second whole track bgm/night (+8.4 .. 9.1 MB each) and rebuild once; every other pack is byte-identical and keeps its version.
+# Owner decision 2026-11-21: NO night music in dungeons / underground zones (NO_NIGHT_MUSIC_ZONES: the Forgotten Temple, zone 56, always plays its day track, ~9 MB less),
+# so the temple pack is byte-identical to before and keeps its version.
+for _n in ("luna", "manasnowfields", "arumicvalley", "crystalsnowfields", "freezingplateau"):
+    PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
+del _n
 PACK_REV["avatar"] = 5          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 #                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform
@@ -422,7 +430,7 @@ def _zone_bytes(spec, install_dir, run):
     pack, man, _side = RP.convert(vfs, zone, center, size, 2.5, 2, ZONE_MAX_SLOPE.get(zone_id, 1.0), 1.0,
                                   chars=True, avatar=True, anim_fps=RP.C.FPS_OUT, with_actj=False, window=window,
                                   atlas_mips=RP.ATLAS_MIPS, atlas_slot=RP.SLOT_PX, env=True, lightmaps=True, sky_px=1024, ui=spec["ui"],
-                                  audio=True, audio_opts={},
+                                  audio=True, audio_opts=dict(night_music=zone_id not in NO_NIGHT_MUSIC_ZONES),   # w24: bgm/night where LIST_ZONE cell 6 differs from cell 5 (zones 51 - 55, 57), nothing for the others and never in a dungeon (56)
                                   lobby=dict(positions=lobby_positions, camera=lobby_camera) if lobby else None,
                                   log=run.log)
     warnings = ["%s (x%d)" % (k, v) for k, v in sorted((man.get("warnings") or {}).items())]

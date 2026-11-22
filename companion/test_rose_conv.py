@@ -70,12 +70,16 @@ class VersionAndTable(unittest.TestCase):
         for n, s in rose_conv.PACKS.items():          # ROSE w23 MUSIC: every pack with SNDS (zones + login) carries the full-length zone BGM (rose_music.py)
             if s["kind"] != "avatar":
                 want[n] += 1
+        night = ("luna", "manasnowfields", "arumicvalley", "crystalsnowfields", "freezingplateau")          # owner 2026-11-21: the Forgotten Temple (56) keeps its day track only
+        self.assertEqual(rose_conv.NO_NIGHT_MUSIC_ZONES, frozenset((56,)))
+        for n in night:          # ROSE w24 NIGHT MUSIC: bgm/night where LIST_ZONE cell 6 differs
+            want[n] += 1
         self.assertEqual(rose_conv.PACK_REV, want)
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
         self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p5")
         self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p5")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3, w20: + zone ambient effects)
         for n in rose_conv.PACKS:
-            if n not in ("birthisland", "avatar") + tiny + amb + dun + dun2:
+            if n not in ("birthisland", "avatar") + tiny + amb + dun + dun2 + night:
                 self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + "-p2")
         self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p4")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)

@@ -16,7 +16,7 @@
 # sequences are stored relative to the attach bone (the pelvis: the gait bone the upper body hangs from, player row field 6); the shader
 # places them on the gait layer's attach bone, which equals the original's local-space merge of the two sequences.
 #
-# Bone texture (RGBAFloat, SKL_TEX_W texels wide, row-major, linear texel index i -> (i % W, i / W)), per skinned model and key:
+# Bone texture (RGBAFloat, or RGBAHalf when header int 15 = 1 [profile skel_half]; SKL_TEX_W texels wide, row-major, linear texel index i -> (i % W, i / W)), per skinned model and key:
 #   texel base + 2 b     quaternion of bone b (x, y, z, w) in Unity axes (model space of the W frame: GoldSrc (x, y, z) ->
 #                        Unity (-y, z, x) · 0.0254, a reflection, so the rotation is C·R·Cᵀ)
 #   texel base + 2 b + 1 bone origin (x, y, z, 0), metres
@@ -375,8 +375,9 @@ def parse_skl1(b):
     """SKL1 payload bytes -> dict of the tables (lists) + the texture as a float array. Raises ValueError on a size mismatch."""
     h = struct.unpack_from("<16i", b, 0)
     ver, ns, tw, th, nmr, nc, na, nr, nbm, nv, nk, nu, npl, nps, npt = h[:15]
-    need = 64 + 4 * (24 * ns + 4 * nmr + 8 * nc + 6 * na + 8 * nr + nbm + 7 * nv + 4 * nk + nu + 8 * npl + 16 * nps + npt) + 16 * tw * th
-    if ver != SKL_VERSION or need != len(b):
+    half = h[15] == 1                       # header int 15: 0 = RGBAFloat texture (16 B / texel), 1 = RGBAHalf (8 B / texel)
+    need = 64 + 4 * (24 * ns + 4 * nmr + 8 * nc + 6 * na + 8 * nr + nbm + 7 * nv + 4 * nk + nu + 8 * npl + 16 * nps + npt) + (8 if half else 16) * tw * th
+    if ver != SKL_VERSION or h[15] not in (0, 1) or need != len(b):
         raise ValueError(f"SKL1 version {ver} / size {len(b)} != {need}")
     q = [64]
 
@@ -406,7 +407,12 @@ def parse_skl1(b):
     out["pseq"] = take("i", 8 * nps)
     out["pseqf"] = take("f", 8 * nps)
     out["ptimes"] = take("f", npt)
-    out["tex"] = take("f", 4 * tw * th)
+    if half:        # decode to floats so every consumer sees the same array (the values are the half-rounded ones the GPU reads)
+        a = struct.unpack_from("<%de" % (4 * tw * th), b, q[0])
+        out["tex"] = array.array("f", a)
+    else:
+        out["tex"] = take("f", 4 * tw * th)
+    out["half"] = half
     out["models"] = [dict(zip(("kind", "owner", "nb", "stride", "key0", "keys", "ctl0", "nctl", "att0", "natt", "mask0", "mesh0", "nmesh",
                                 "anim0", "nanim", "nslots"), out["model"][r * 16:(r + 1) * 16])) for r in range(ns)]
     out["mesh_of"] = {out["mesh"][e * 4]: e for e in range(nmr)}
@@ -442,6 +448,7 @@ class SkelPack:
 
     def __init__(self):
         self.models = []        # dict(kind, owner, nb, nslots, key0 (texel), keys, ctl0, nctl, att0, natt, mask0, mesh0, nmesh, anim0, nanim, bounds)
+        self.half = False       # bone texture as RGBAHalf (modelpack profile flag skel_half); header int 15 = 1
         self.texels = []        # flat float rows (4 floats each)
         self.meshes = []        # (mesh index, model row, vert0, nverts)
         self.verts_i = array.array("i")
@@ -472,6 +479,8 @@ class SkelPack:
         for r in self.texels:
             tex.extend(r)
         tex.extend([0.0] * (w * h * 4 - len(tex)))
+        if self.half:       # IEEE binary16, little endian (struct 'e', round to nearest even); the byteswap below must skip it
+            htex = struct.pack("<%de" % len(tex), *tex)
         mi, mf = array.array("i"), array.array("f")
         for mo in self.models:
             mi.extend([mo["kind"], mo["owner"], mo["nb"], 2 * mo["nb"] + mo["nslots"], mo["key0"], mo["keys"], mo["ctl0"], mo["nctl"],
@@ -486,11 +495,13 @@ class SkelPack:
             sk_f.extend(uvs)
         tabs = [mi, mf, me, self.ctl_i, self.ctl_f, self.att_i, self.att_f, self.anim_i, self.anim_f, self.masks,
                 self.verts_i, self.verts_f, sk_i, sk_f, self.prow_i, self.pseq_i, self.pseq_f, self.ptimes, tex]
+        if self.half:
+            tabs = tabs[:-1]
         if sys.byteorder != "little":
             for t in tabs:
                 t.byteswap()
         hdr = struct.pack("<16i", SKL_VERSION, len(self.models), w, h, len(self.meshes), len(self.ctl_i) // 4, len(self.att_i) // 2,
                           len(self.anim_i) // 4, len(self.masks), len(self.verts_i), len(self.skins), len(sk_f),
-                          len(self.prow_i) // 8, len(self.pseq_i) // 8, len(self.ptimes), 0)
-        body = hdr + b"".join(t.tobytes() for t in tabs)
+                          len(self.prow_i) // 8, len(self.pseq_i) // 8, len(self.ptimes), 1 if self.half else 0)
+        body = hdr + b"".join(t.tobytes() for t in tabs) + (htex if self.half else b"")
         return b"SKL1" + struct.pack("<i", len(body)) + body
