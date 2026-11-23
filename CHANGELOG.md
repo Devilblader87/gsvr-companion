@@ -2,6 +2,26 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.57
+
+**ROSE Online**
+- Carts like the original: your cart is now an animated vehicle with its driver and passenger poses. It drives and attacks with its own motions, and a party member can ride along on it.
+- Character select: the waiting room no longer lifts you up while the scene loads, also after "Change character".
+- Smoother play: monsters that sleep or stand far away cost less, and the HUD only redraws when something changes (about a quarter less frame time in towns and fields than in 0.9.55).
+- Debuffs from monsters now also hit players, like in the original (since 0.9.56).
+- The text size slider now also works in the bag, skill and quest windows, and item tooltips fit their text.
+- Fixed: travelling to Canyon City of Zant or Eldeon could send you back to the previous zone.
+
+**Half-Life family**
+- Kill feed like the original: newest line at the bottom, a suicide shows only the victim.
+- Chase camera after death like the original.
+- More client code ported from the original.
+
+**Worlds**
+- START HERE boards show one clear next step for every status, and a reminder after 20 seconds when the companion is not found yet.
+
+Needs companion 0.9.57: the ROSE packs rebuild once in the background; you can keep playing meanwhile.
+
 ## 0.9.55
 
 **ROSE Online**

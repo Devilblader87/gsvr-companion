@@ -13,7 +13,7 @@ Layout (little endian, 4-byte aligned, section version 1):
   text blob at textOff: UTF-8, equal strings stored once.
 Readers: binary search on (domain, sub, key); a missing entry = use the legacy (English) text. Unknown domains are ignored.
 
-Fallback rules (Stefan 2026-11-15, `pick`): the STL has 5 language columns 0 Korean, 1 English, 2 Japanese, 3 traditional Chinese, 4 simplified Chinese.
+Fallback rules (owner 2026-11-15, `pick`): the STL has 5 language columns 0 Korean, 1 English, 2 Japanese, 3 traditional Chinese, 4 simplified Chinese.
   English text  = English, else Japanese, traditional Chinese, simplified Chinese, and Korean only when nothing else exists.
   Japanese text = Japanese, else the English text above.
 No text of the game is committed; everything is read at conversion time on the player's machine.

@@ -56,7 +56,7 @@ class VersionAndTable(unittest.TestCase):
         LOAD PACKAGE 5: every zone + the login pack one revision more (BONT, the pre-baked bone texture), the avatar pack (no clips) keeps its version; Birth Island had 2 already.
         ROSE w14 effects: only the avatar pack rebuilds (EFCT, rose_effects.py). fx11: avatar 3 (EFCT version 2: effect meshes, dummy bones, statuses). w15 skilltips: WRAPPER_REV 6 (SKDB skill descriptions).
         w17-fx: avatar 4 (EFCT version 3: full resolution textures, per-part materials, transform animations, cast frame events)."""
-        self.assertEqual(rose_conv.WRAPPER_REV, 8)          # ROSE w25 SKILL VISUALS: the skills' motion clips + SKMO in every zone / login pack (rose_skillvis.py)
+        self.assertEqual(rose_conv.WRAPPER_REV, 9)          # ROSE w27 CART ANIMATION: vehicle clips (SKMO rows) in every zone / login pack, skinned parts (ACRS) in the avatar pack (rose_cartvis.py); 8 = w25 skill visuals
         self.assertEqual(rose_conv.BONT_REV, 1)
         tiny = ("junonpolis", "adventurersplain", "zant", "elverloondesert", "animalake", "forestofwisdom", "kenjibeach", "gorgeofsilence", "dolphinisland")
         dun = ("goblincaveb1", "goblincaveb2", "goblincaveb3", "forgottentemple")          # ROSE w20: the monsters' skill table in AIPS (rose_npcskills.py)
@@ -78,14 +78,18 @@ class VersionAndTable(unittest.TestCase):
         for n, s in rose_conv.PACKS.items():          # ROSE w25 DROPS: every zone pack carries the zone drop row + the zone triggers (rose_zonerow.py); login + avatar keep theirs
             if s["kind"] == "zone":
                 want[n] += 1
+        self.assertEqual(rose_conv.SKELCAP_REV, 1)
+        for n in ("zant", "eldeon"):          # w27 zonefix: SKEL <= 64 (rose_cartvis skeleton budget), only these two were over it
+            want[n] += 1
         self.assertEqual(rose_conv.PACK_REV, want)
         self.assertEqual(rose_conv.ZONE_MAX_SLOPE, {20: 2.0})
         self.assertEqual(rose_conv.pack_version("birthisland"), rose_conv.VERSION + "-p6")
         self.assertEqual(rose_conv.pack_version("avatar"), rose_conv.VERSION + "-p5")          # ROSE w14: QGLB global quest texts + EFCT effects (w17-fx: EFCT v3, w20: + zone ambient effects)
         for n in rose_conv.PACKS:
-            if n not in ("birthisland", "avatar") + tiny + amb + dun + dun2 + night:
+            if n not in ("birthisland", "avatar", "eldeon") + tiny + amb + dun + dun2 + night:
                 self.assertEqual(rose_conv.pack_version(n), rose_conv.VERSION + ("-p2" if n == "login" else "-p3"))
         self.assertEqual(rose_conv.pack_version("junonpolis"), rose_conv.VERSION + "-p5")
+        self.assertEqual(rose_conv.pack_version("eldeon"), rose_conv.VERSION + "-p4")          # w27 zonefix: skeleton budget
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", rose_conv.SOURCE), rose_conv.SOURCE)
 
     def test_tiny_dxt_keeps_alpha(self):
@@ -149,7 +153,7 @@ class VersionAndTable(unittest.TestCase):
         self.assertIn("rose_pack.py", listed)
         for name, h in listed.items():
             self.assertEqual(_sha(os.path.join(HERE, name)), h, "%s edited locally: change rose-vrchat and run tools/sync_rose_converter.sh" % name)
-        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py", "rose_music.py", "rose_skillvis.py", "rose_zonerow.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
+        own = {"__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py", "rose_music.py", "rose_skillvis.py", "rose_zonerow.py", "rose_cartvis.py"}          # rose_qglob: companion-owned (ROSE w14 global quest texts)
         extra = [f for f in os.listdir(HERE) if f.endswith(".py") and f not in listed and f not in own]
         self.assertEqual(extra, [], "unlisted modules in rose_conv/")
 

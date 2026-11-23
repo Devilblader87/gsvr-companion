@@ -198,13 +198,16 @@ class Ammo(unittest.TestCase):
 class Installed(unittest.TestCase):
     def test_hooks(self):
         self.assertTrue(V._orig)
-        self.assertIs(rose_bont.from_sections, V._patched_from_sections)
-        self.assertIs(rose_bont.mark_lazy, V._patched_mark_lazy)
+        import rose_cartvis as CV           # w27: the cart lane wraps both around these (its clips stay out of the skill BONT decision)
+        self.assertIs(rose_bont.from_sections, CV._patched_from_sections)
+        self.assertIs(CV._orig['from_sections'], V._patched_from_sections)
+        self.assertIs(rose_bont.mark_lazy, CV._patched_mark_lazy)
+        self.assertIs(CV._orig['mark_lazy'], V._patched_mark_lazy)
         self.assertIsNot(RC.CharBuilder.add_avatar, V._orig['add_avatar'])
         self.assertIsNot(E.enc_efct, V._orig['enc_efct'])
         V.install()                          # idempotent
-        self.assertIs(rose_bont.from_sections, V._patched_from_sections)
-        self.assertEqual(rose_conv.WRAPPER_REV, 8)
+        self.assertIs(CV._orig['from_sections'], V._patched_from_sections)
+        self.assertEqual(rose_conv.WRAPPER_REV, 9)          # w27 CART ANIMATION bumped it again (rose_cartvis.py); 8 = these skill clips
         self.assertEqual(rose_conv.PACK_REV["avatar"], 5)          # the ammo table rides on WRAPPER_REV 8 (VERSION of every pack changes)
         self.assertIn(b"SKMO", [V.TAG_SKMO])
 

@@ -28,7 +28,7 @@ class RosePackaging(unittest.TestCase):
     def test_hash_list_complete(self):
         mods = _hash_modules()
         self.assertGreaterEqual(len(mods), 23)
-        on_disk = {os.path.splitext(n)[0] for n in os.listdir(CONV) if n.endswith(".py") and n not in ("__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py", "rose_music.py", "rose_skillvis.py", "rose_zonerow.py")}
+        on_disk = {os.path.splitext(n)[0] for n in os.listdir(CONV) if n.endswith(".py") and n not in ("__init__.py", "rose_qglob.py", "rose_skilltips.py", "rose_npcskills.py", "rose_music.py", "rose_skillvis.py", "rose_zonerow.py", "rose_cartvis.py")}
         self.assertEqual(set(mods), on_disk)
 
     def test_spec_hiddenimports_use_rose_modules(self):
@@ -41,7 +41,7 @@ class RosePackaging(unittest.TestCase):
         s = _spec()
         ns = {"os": os, "COMP": HERE}
         exec(s[s.index("ROSE_CONV = "):s.index("ICON = ")], ns)      # noqa: S102 - our own spec text
-        self.assertEqual(set(ns["ROSE_MODULES"]), set(_hash_modules()) | {"rose_conv", "rose_qglob", "rose_skilltips", "rose_npcskills", "rose_music", "rose_skillvis", "rose_zonerow"})
+        self.assertEqual(set(ns["ROSE_MODULES"]), set(_hash_modules()) | {"rose_conv", "rose_qglob", "rose_skilltips", "rose_npcskills", "rose_music", "rose_skillvis", "rose_zonerow", "rose_cartvis"})
         self.assertEqual(sorted(os.path.basename(p) for p, d in ns["ROSE_DATA"]), ["VERSION_SOURCE", "lobby_default.json"])
         for p, d in ns["ROSE_DATA"]:
             self.assertTrue(os.path.isfile(p), p)

@@ -56,8 +56,10 @@ import rose_skillvis                     # noqa: E402
 rose_skillvis.install()                  # ROSE w25 SKILL VISUALS: the skills' own motions (SKMO + CANM clips, every avatar pack) + the ammo projectiles in EFCT (avatar pack), companion-owned
 import rose_zonerow                      # noqa: E402
 rose_zonerow.install()                   # ROSE w25 DROPS: the ZONE row of ITEM_DROP in DROP + the zone join / kill / dead triggers of LIST_ZONE in QUST (companion-owned, the vendored rose_gameplay.py / rose_quest.py stay as they are)
+import rose_cartvis                      # noqa: E402
+rose_cartvis.install()                   # ROSE w27 CART ANIMATION: driver + vehicle clips on extended skeletons (SKMO rows, every zone + the login pack), skinned cart parts as ACRS (avatar pack), companion-owned; after rose_skillvis
 
-WRAPPER_REV = 8                          # 8 = ROSE w25 SKILL VISUALS: every player skill's casting / repeat / action motion as avatar clips + SKMO (rose_skillvis.py) in every zone + the login pack (all packs rebuild); 7 = ROSE w20: monster skill table in AIPS for EVERY zone (owner 2026-11-18: all zones at once); bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
+WRAPPER_REV = 9                          # 9 = ROSE w27 CART ANIMATION: cart / castle gear motions (driver re-parented to the seat dummy) as SKMO clips on extended skeletons in every zone + the login pack, skinned part meshes in ACRS (rose_cartvis.py; all packs rebuild); 8 = ROSE w25 SKILL VISUALS: every player skill's casting / repeat / action motion as avatar clips + SKMO (rose_skillvis.py) in every zone + the login pack (all packs rebuild); 7 = ROSE w20: monster skill table in AIPS for EVERY zone (owner 2026-11-18: all zones at once); bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
 # per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
 # birthisland 2: walk grid slope limit 2.0 (ROSE w11 leveling: at 1.0 the five arms of the island were separate walk components, 67 of 81 monster points unreachable from the start)
 PACK_REV = {"birthisland": 2}
@@ -189,6 +191,13 @@ for _n, _s in PACKS.items():
     if _s["kind"] == "zone":
         PACK_REV[_n] = PACK_REV.get(_n, 0) + ZONEROW_REV
 del _n, _s
+# w27 zonefix (round r127): rose_cartvis keeps SKEL <= GsvrRpg1Chars.MaxSkeletons (64): the summon picker reserves the 2 avatar + 4 extended (cart) skeletons. Only Zant (59 npc
+# skeletons -> 65, characters refused, the travel 21 -> 1 went back) and Eldeon (60 -> 66) change; every other pack stays below the cap and keeps its bytes. A WRAPPER_REV 9 build of
+# these two is unloadable, so they rebuild.
+SKELCAP_REV = 1
+for _n in ("zant", "eldeon"):
+    PACK_REV[_n] = PACK_REV.get(_n, 0) + SKELCAP_REV
+del _n
 PACK_REV["avatar"] = 5          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 #                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform
