@@ -52,13 +52,15 @@ def open_world(root, url):
 
 
 class FirstRun:
-    def __init__(self, root, c, bg, on_advanced, on_lang):
-        """c = gui.Controller, bg = run-in-thread helper, on_advanced() = leave for the tabbed window, on_lang(code) = language chosen"""
+    def __init__(self, root, c, bg, on_advanced, on_lang, on_check=None):
+        """c = gui.Controller, bg = run-in-thread helper, on_advanced() = leave for the tabbed window, on_lang(code) = language chosen,
+        on_check() = run an update check now (the home screen's "Check for updates"; the result comes back through update_result)"""
         import tkinter as tk
         from tkinter import ttk
         self.tk, self.ttk = tk, ttk
         self.root, self.c, self.bg = root, c, bg
-        self.on_advanced, self.on_lang = on_advanced, on_lang
+        self.on_advanced, self.on_lang, self.on_check = on_advanced, on_lang, on_check
+        self.upd = ("", None)            # (state, latest) of the inline update line: "", "checking", "current", "available", "failed"
         self.frame = ttk.Frame(root, padding=18)
         self.q = queue.Queue()
         self.entries = []
@@ -393,6 +395,63 @@ class FirstRun:
         bar = ttk.Frame(f)
         bar.pack(fill="x", pady=14)
         ttk.Button(bar, text=tr("fr.redo"), command=self.show).pack(side="left")
+        if self.on_check is not None:                             # small version line + inline update check, kept quiet
+            from version import VERSION
+            vf = ttk.Frame(f)
+            vf.pack(anchor="w")
+            ttk.Label(vf, text=tr("fr.version", v=VERSION), foreground="#777").pack(side="left")
+            lnk = self.tk.Label(vf, text=tr("fr.check_upd"), fg="#2b6cb0", cursor="hand2", font=(self.font(), 9, "underline"))
+            lnk.pack(side="left", padx=10)
+            lnk.bind("<Button-1>", lambda _e: self.check_clicked())
+            self.lbl_upd = ttk.Label(vf, text=self.upd_text(), foreground="#555")
+            self.lbl_upd.pack(side="left")
+
+    # ---------------------------------------------------------------- inline update check (simple view)
+    def upd_text(self):
+        """text of the update line under the version (empty = nothing to say): checking / up to date / update available (the banner has Install) / failed"""
+        state, latest = self.upd
+        if state == "checking":
+            return tr("fr.upd_checking")
+        if state == "current":
+            return tr("fr.upd_current")
+        if state == "available":
+            return tr("fr.upd_avail", b=latest or "?")
+        if state == "failed":
+            return tr("fr.upd_failed")
+        return ""
+
+    def update_result(self, info):
+        """gui: result of an update check (updater dict, None = failed). Quiet when nothing was asked on this screen and nothing is new."""
+        if info is None:
+            state, latest = "failed", None
+        elif info.get("status") == "available":
+            state, latest = "available", info.get("latest")
+        else:
+            state, latest = "current", None
+        asked = self.upd[0] == "checking"
+        if state == "current" and not asked:
+            self.upd = ("", None)                        # a background check that found nothing: keep the screen quiet
+        elif state == "failed" and not asked:
+            return                                       # background failure: the log has it, no red text on the home screen
+        else:
+            self.upd = (state, latest)
+        self._show_upd()
+
+    def _show_upd(self):
+        lbl = getattr(self, "lbl_upd", None)
+        if lbl is None or self.phase != "home":
+            return
+        try:
+            lbl.configure(text=self.upd_text())
+        except self.tk.TclError:
+            pass
+
+    def check_clicked(self):
+        if self.on_check is None or self.upd[0] == "checking":
+            return
+        self.upd = ("checking", None)
+        self._show_upd()
+        self.on_check()
 
     def copy(self, url):
         copy_to_clipboard(self.root, url)

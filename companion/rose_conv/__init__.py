@@ -52,8 +52,12 @@ import rose_npcskills                    # noqa: E402
 rose_npcskills.install()                 # ROSE w20 DUNGEON: the monsters' skill table behind the AIPS records (companion-owned, the vendored rose_aips.py stays as it is)
 import rose_music                        # noqa: E402
 rose_music.install()                     # ROSE w23 music: the zone BGM as the WHOLE track with its natural loop (companion-owned, the vendored rose_audio.py keeps its 64 s excerpt code)
+import rose_skillvis                     # noqa: E402
+rose_skillvis.install()                  # ROSE w25 SKILL VISUALS: the skills' own motions (SKMO + CANM clips, every avatar pack) + the ammo projectiles in EFCT (avatar pack), companion-owned
+import rose_zonerow                      # noqa: E402
+rose_zonerow.install()                   # ROSE w25 DROPS: the ZONE row of ITEM_DROP in DROP + the zone join / kill / dead triggers of LIST_ZONE in QUST (companion-owned, the vendored rose_gameplay.py / rose_quest.py stay as they are)
 
-WRAPPER_REV = 7                          # 7 = ROSE w20: monster skill table in AIPS for EVERY zone (Stefan 2026-11-18: all zones at once); bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
+WRAPPER_REV = 8                          # 8 = ROSE w25 SKILL VISUALS: every player skill's casting / repeat / action motion as avatar clips + SKMO (rose_skillvis.py) in every zone + the login pack (all packs rebuild); 7 = ROSE w20: monster skill table in AIPS for EVERY zone (owner 2026-11-18: all zones at once); bump when this file or lobby_default.json changes what EVERY pack contains (all packs rebuild); 6 = ROSE w15 skill tooltips (SKDB description table + TXJA skill descriptions, rose_skilltips.py); 5 = ROSE w13 weapon-class motions in the AVAT clip map (every zone pack); 4 = ROSE w12 summons (SKDB item skills + summon actors)
 # per-pack revision: bump ONE entry when only that pack changes, so only it rebuilds (pack_version). birthisland 1: the whole zone (ROSE w8 mob streaming);
 # birthisland 2: walk grid slope limit 2.0 (ROSE w11 leveling: at 1.0 the five arms of the island were separate walk components, 67 of 81 monster points unreachable from the start)
 PACK_REV = {"birthisland": 2}
@@ -177,11 +181,20 @@ NO_NIGHT_MUSIC_ZONES = frozenset((56,))      # dungeon / underground zones: day 
 for _n in ("luna", "manasnowfields", "arumicvalley", "crystalsnowfields", "freezingplateau"):
     PACK_REV[_n] = PACK_REV.get(_n, 0) + 1
 del _n
+# ROSE w25 DROPS (docs/design/rose_w25_drops.md): every ZONE pack carries the zone's ITEM_DROP row in DROP (the original rolls it when the npc row roll fails) and the LIST_ZONE
+# join / kill / dead triggers in QUST (the Forgotten Temple party entry + key rules) and rebuilds once; the login (lobby) pack gets no zone rows (rose_zonerow.ZONE None) and the
+# avatar pack has neither section: both keep their version. One revision per zone entry instead of a WRAPPER_REV bump for exactly that reason.
+ZONEROW_REV = 1
+for _n, _s in PACKS.items():
+    if _s["kind"] == "zone":
+        PACK_REV[_n] = PACK_REV.get(_n, 0) + ZONEROW_REV
+del _n, _s
 PACK_REV["avatar"] = 5          # ROSE w14: the avatar pack carries QGLB (global quest texts, rose_qglob.py) + EFCT (skill / npc / weapon effects, rose_effects.py); only it rebuilds.
 #                                 3 = fx11: EFCT version 2 (real effect meshes + ZMO vertex animation, dummy bones, status / item / level-up effects, 64 emitters per effect)
 #                                 4 = w17-fx: EFCT version 3 (textures at full resolution in variable-size cells, per-part blend / z / cull / lighting flags, part transform
 #                                     animations, cast effects on the motion frame events, the party level-up effect)
 #                                 5 = w20 OPTICS: + the zone ambient effects (morph object waves, effect object files; file ids 40000+, rose_ambient.py)
+#                                 (w25 SKILL VISUALS: the EFCT ammo projectile table, rose_skillvis.py, rides on WRAPPER_REV 8 - VERSION changes for every pack, the avatar pack rebuilds too)
 
 
 # ------------------------------------------------------------------ install check
@@ -414,6 +427,7 @@ def _zone_bytes(spec, install_dir, run):
         zone_id = 20
     vfs = _Vfs(install_dir, run)
     size = 2 if lobby else 5
+    rose_zonerow.ZONE = None if lobby else zone_id          # ROSE w25: the zone rows (drop row, zone triggers) of this pack; none for the lobby
     zone = RP.zone_row(vfs, zone_id)
     zon = RP.F.zon(vfs.read(zone["zon"]))
     window = None
@@ -433,6 +447,7 @@ def _zone_bytes(spec, install_dir, run):
                                   audio=True, audio_opts=dict(night_music=zone_id not in NO_NIGHT_MUSIC_ZONES),   # w24: bgm/night where LIST_ZONE cell 6 differs from cell 5 (zones 51 - 55, 57), nothing for the others and never in a dungeon (56)
                                   lobby=dict(positions=lobby_positions, camera=lobby_camera) if lobby else None,
                                   log=run.log)
+    rose_zonerow.ZONE = None
     warnings = ["%s (x%d)" % (k, v) for k, v in sorted((man.get("warnings") or {}).items())]
     return pack, warnings
 

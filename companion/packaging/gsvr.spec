@@ -27,7 +27,7 @@ if _miss:
 JVM_FILES = sorted(f for f in os.listdir(os.path.join(TOOLS, "jvm")) if f.endswith(".py") and not f.startswith("test_"))
 COMPANION_MODULES = ["companion", "gui", "updater", "runtime", "version", "builder", "models", "prebuilt", "games", "steam",
                      "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild",
-                     "rose_conv_stub", "modules", "ed25519", "hostinfo", "i18n", "i18n_catalog", "i18n_catalog_worlds", "firstrun", "firstrun_ui", "worlds"]    # --selftest runs one stub ROSE build in a child (gsvr-cli --run-rose-build)
+                     "rose_conv_stub", "modules", "ed25519", "hostinfo", "i18n", "i18n_catalog", "i18n_catalog_worlds", "firstrun", "firstrun_ui", "updsched", "worlds"]    # --selftest runs one stub ROSE build in a child (gsvr-cli --run-rose-build)
 # w3pack.py decodes BLP (JPEG inside) with Pillow; the tools run via runpy, so PyInstaller must be told
 PILLOW_MODULES = ["PIL", "PIL.Image", "PIL.ImageChops", "PIL.JpegImagePlugin", "PIL.BlpImagePlugin",
                   "PIL.ImageFont", "PIL.ImageDraw", "PIL.TgaImagePlugin", "PIL.PngImagePlugin"]   # HUD / menu fonts, previews
@@ -43,7 +43,7 @@ MUSIC_MODULES = ["miniaudio", "_miniaudio", "_cffi_backend"]
 # every module of SOURCE_HASHES is a hidden import, rose_conv/ is on pathex so PyInstaller finds them. test_rose_packaging.py guards this list.
 ROSE_CONV = os.path.join(COMP, "rose_conv")
 with open(os.path.join(ROSE_CONV, "SOURCE_HASHES"), encoding="utf-8") as _f:
-    ROSE_MODULES = ["rose_conv", "rose_qglob", "rose_skilltips", "rose_npcskills", "rose_music"] + [os.path.splitext(ln.split()[-1])[0] for ln in _f.read().splitlines() if ln.strip()]
+    ROSE_MODULES = ["rose_conv", "rose_qglob", "rose_skilltips", "rose_npcskills", "rose_music", "rose_skillvis", "rose_zonerow"] + [os.path.splitext(ln.split()[-1])[0] for ln in _f.read().splitlines() if ln.strip()]
 ROSE_DATA = [(os.path.join(ROSE_CONV, f), "rose_conv") for f in ("VERSION_SOURCE", "lobby_default.json")]
 ICON = os.path.join(SPEC_DIR, "gsvr.ico")                # optional: drop a gsvr.ico here
 icon = ICON if os.path.isfile(ICON) else None

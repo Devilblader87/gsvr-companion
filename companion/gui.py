@@ -21,7 +21,7 @@ import collections, json, os, queue, shutil, socket, subprocess, sys, threading,
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                            # -I drops the script dir from sys.path
-import cachedir, companion, firstrun, firstrun_ui, games, i18n, logwatch, modules, rosefind, runtime, steam, updater, worlds                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+import cachedir, companion, firstrun, firstrun_ui, games, i18n, logwatch, modules, rosefind, runtime, steam, updater, updsched, worlds                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
 from i18n import tr                                                                   # noqa: E402
 from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION                    # noqa: E402
 
@@ -1251,7 +1251,16 @@ def run_gui():
         btn_toggle.configure(state="disabled" if installing.is_set() or cache_busy.is_set() else "normal", text=tr("m.stop") if run else tr("m.start"),
                              fg="#a00000" if run else "#006000")
 
+    sched = updsched.Scheduler(time.time())          # periodic / on-restore re-checks (updsched.py); the startup check below is the first
+
     def check_now(quiet=False):
+        if installing.is_set():                      # never touch update_info / the banner while an install runs (a second Install click would be possible)
+            if not quiet:
+                first.update_result(c.update_info)   # a simple-view click must not stay on "checking"
+            return
+        if sched.inflight:                           # one check at a time; its result reaches every label (banner, Settings, simple view)
+            return
+        sched.started()
         remember()
         btn_check.configure(state="disabled")
         upd_lbl.configure(text="checking %s …" % base_var.get())
@@ -1375,7 +1384,8 @@ def run_gui():
     lang_cb.bind("<<ComboboxSelected>>", lang_changed)
 
     built_lang = i18n.lang()
-    first = firstrun_ui.FirstRun(root, c, bg, on_advanced=lambda: leave_first_run(), on_lang=lambda code: (i18n.set_lang(code), save_lang(code)))
+    first = firstrun_ui.FirstRun(root, c, bg, on_advanced=lambda: leave_first_run(), on_lang=lambda code: (i18n.set_lang(code), save_lang(code)),
+                                 on_check=lambda: check_now(quiet=False))
 
     upd_state = {"avail": False}
 
@@ -1478,6 +1488,10 @@ def run_gui():
 
     def show_update(info):
         btn_check.configure(state="normal")
+        sched.finished(info is not None, time.time())
+        if installing.is_set():                      # a check that was in flight when Install was pressed: leave the install banner alone
+            return
+        first.update_result(info)
         if info is None:
             upd_lbl.configure(text=tr("d.update_check_failed", why=c.update_error or "?"))
             return
@@ -1621,6 +1635,27 @@ def run_gui():
     rose_detect(silent=True)                         # fills the ROSE row of the Spiele table (off the Tk thread)
     if c.settings.get("auto_update_check", True):
         root.after(800, lambda: check_now(quiet=True))
+
+    def auto_enabled():
+        return bool(c.settings.get("auto_update_check", True))
+
+    def update_tick():
+        """the companion runs for days: re-check every 6 h (backoff after errors), never during an install"""
+        try:
+            if sched.due(time.time(), auto_enabled(), installing.is_set()):
+                check_now(quiet=True)
+        finally:
+            try:
+                root.after(60000, update_tick)
+            except tk.TclError:
+                pass
+    root.after(60000, update_tick)
+
+    def on_map(e):
+        """window restored from the tray / minimised state (autostart --minimized): look for an update if the last one is old"""
+        if e.widget is root and sched.on_restore(time.time(), auto_enabled(), installing.is_set()):
+            root.after(500, lambda: check_now(quiet=True))
+    root.bind("<Map>", on_map)
     # players just want it running: start the companion right away (Windows autostart passes --minimized)
     start_view = "firstrun" if os.environ.get("GSVR_FIRSTRUN") == "1" else firstrun.start_view(c.settings, c.fresh_install)
     if start_view == "firstrun":

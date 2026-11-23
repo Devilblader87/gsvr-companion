@@ -2,6 +2,28 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.55
+
+**ROSE Online**
+- Skills look like the original: every skill plays its own original animation, and arrows, bullets and spells fly visibly to their target; the damage number appears on impact.
+- Loot like the original: monsters drop from their own list or the zone's list, and equipment drops get random values (sockets, grade, durability, unappraised gems).
+- The Forgotten Temple quest chain can be played through, and the group quests are offered by their NPC (learn the Luna language first, like in the original).
+- Desktop: the menus now have the right size for your screen and field of view (100 % = like the original at 1024x768). New "Interface" window (MENU > Options): size 75-200 %, text size, reset. Shortcuts Ctrl + Plus / Ctrl + Minus / Ctrl + 0.
+- Desktop: drag windows by their title bar (bag, chat, minimap, skills, quests, party ...); your layout is saved for your next visit.
+- Fixed: picked-up drops keep their rolled values.
+
+**Companion**
+- The app now checks for updates every 6 hours while it runs, and the simple view shows its version with a "Check for updates" link.
+- The START HERE board in the worlds tells you when your companion is outdated.
+
+**Half-Life family**
+- More client code ported from the original.
+
+**Worlds**
+- START HERE boards: all lines fit on the board in every language.
+
+Needs companion 0.9.55: all ROSE packs rebuild once in the background; you can keep playing meanwhile.
+
 ## 0.9.54
 
 **ROSE Online**
