@@ -159,7 +159,8 @@ class GuiWiring(unittest.TestCase):
         self.assertIn('bg(lambda: ui_q.put(("rose_applied", c.rose_post(q))))', ap)
         ba = self.body(g, "def rose_build_all(", "def rose_built(")
         self.assertIn('bg(lambda: ui_q.put(("rose_built", c.rose_post("/rose/build_all"))))', ba)
-        self.assertEqual(g.count("c.rose_post("), 2)                     # both inside bg()
+        self.assertIn('command=lambda p=r["rebuild"]: bg(lambda: c.rose_post(p))', g)   # 'Neu bauen' button (worlds list)
+        self.assertEqual(g.count("c.rose_post("), 3)                     # all three inside bg()
         self.assertIn('st["_rose_state"] = c.rose_state()', self.body(g, "def poll_once(", "def poll_status("))
         self.assertNotIn("rosebuild.state()", g)                          # the GUI reads GET /rose/state, not its own process
 

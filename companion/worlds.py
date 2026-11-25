@@ -17,8 +17,9 @@ WORLDS = {
     "hl": ("wrld_b0402df7-7bfb-44b2-9406-7aafd8e67e1a", "GSVR - Half-Life", ("valve", "gearbox", "bshift", "svencoop")),   # Sven Co-op is part of the hub, no own row
     "war3": ("wrld_71563253-4115-40d3-b165-7cdba23bff06", "Warcraft III VR (bring your own game)", ("war3",)),   # W3VR (own unity project, ~/dev/decomp/warcraft3)
     "cs": ("wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb", "GSVR - Counter-Strike", ("cstrike",)),
+    "ro": ("wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c", "GSVR - RO", ("ro",)),   # Ragnarok Online world (BYOG, public since companion 0.9.62)
 }
-WORLD_ORDER = ("rose", "hl", "cs", "war3")
+WORLD_ORDER = ("rose", "hl", "cs", "ro", "war3")
 SVEN_SCENE_WORLD_ID = "wrld_19508790-4711-46f7-bf73-e5b96f944db9"   # old separate Sven scene: no row/button, id kept for reference
 
 

@@ -86,6 +86,7 @@ class FakeFirstRun:
         self.phase = "home"
         self.calls = 0
         self.on_check = self._cb
+        self.visible = False
         self.tk = type("T", (), {"TclError": Exception})
 
     def _cb(self):
@@ -144,9 +145,17 @@ class SimpleViewLine(unittest.TestCase):
         self.assertNotEqual(i18n.tr("fr.check_upd"), "Check for updates")
 
     def test_home_screen_builds_the_line(self):
-        src = open(os.path.join(HERE, "firstrun_ui.py"), encoding="utf-8").read()
-        self.assertIn('tr("fr.version", v=VERSION)', src)
-        self.assertIn('tr("fr.check_upd")', src)
+        """the version row of the checklist carries the update state (simple view = firstrun.checklist)"""
+        import firstrun
+        rows = {u: firstrun.checklist([], None, False, upd=(u, "0.9.99"), version="0.9.57")["rows"][2] for u in
+                ("", "checking", "current", "available", "failed")}
+        self.assertEqual(rows["available"]["button"], ("d.install", "install"))
+        self.assertIn("0.9.99", rows["available"]["text"])
+        self.assertEqual(rows[""]["button"], ("fr.check_upd", "check"))
+        self.assertEqual(rows["failed"]["button"], ("fr.check_upd", "check"))
+        self.assertIsNone(rows["current"]["button"])
+        for r in rows.values():
+            self.assertIn("0.9.57", r["text"])
 
     def test_real_widgets_if_tk_available(self):
         try:
@@ -158,7 +167,7 @@ class SimpleViewLine(unittest.TestCase):
             import firstrun_ui
 
             class C:
-                settings = {}
+                settings = {"first_run_done": True}
 
                 def running(self):
                     return False
@@ -169,15 +178,16 @@ class SimpleViewLine(unittest.TestCase):
                 def save_settings(self):
                     pass
             got = []
-            f = firstrun_ui.FirstRun(root, C(), lambda fn: None, lambda: None, lambda code: None, on_check=lambda: got.append(1))
-            f.phase, f.visible = "home", True
+            f = firstrun_ui.FirstRun(root, C(), lambda fn: None, lambda: None, lambda code: None, on_check=lambda: got.append(1),
+                                     detect_fn=lambda s: [], vrc_fn=lambda s, conn: "unknown")
+            f.visible = True
             f.frame.pack()
-            f.draw()
-            self.assertIn("v", f.lbl_upd.master.winfo_children()[0].cget("text"))
+            f.apply()
+            self.assertIn(".", f.w["row_version"].cget("text"))
             f.check_clicked()
-            self.assertEqual(f.lbl_upd.cget("text"), i18n.tr("fr.upd_checking"))
+            self.assertIn(i18n.tr("cl.ver_checking", v="").strip(" ·"), f.w["row_version"].cget("text"))
             f.update_result({"status": "current"})
-            self.assertEqual(f.lbl_upd.cget("text"), i18n.tr("fr.upd_current"))
+            self.assertIn(i18n.tr("cl.ver_current", v="").strip(" ·"), f.w["row_version"].cget("text"))
             self.assertEqual(got, [1])
         finally:
             root.destroy()

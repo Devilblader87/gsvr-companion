@@ -33,9 +33,9 @@ def free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
 
-def http(port, path, host=None, method="GET", timeout=10):
+def http(port, path, host=None, method="GET", timeout=10, headers=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
-                                 headers={"User-Agent": "gsvr-selftest", **({"Host": host} if host else {})})
+                                 headers={"User-Agent": "gsvr-selftest", **({"Host": host} if host else {}), **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read()
@@ -45,6 +45,11 @@ def http(port, path, host=None, method="GET", timeout=10):
 
 def status(port):
     return json.loads(http(port, "/status.json")[1])
+
+
+def gui_status(port):
+    """the full status (GUI only route): internal req / models state also inside a non-allowed world"""
+    return json.loads(http(port, "/gui/status.json", headers={"X-GSVR-Gui": "1"})[1])
 
 
 def wait_status(port, pred, timeout=60):
@@ -432,14 +437,17 @@ def world_gate(work, game_root):
         wait_status(port, lambda s: True, 20)
         append(lg, "[Behaviour] Joining wrld_evil:1", "[GSVR-REQ] map=cstrike/de_dust2 req=9")
         s = wait_status(port, lambda s: s["world"] == "wrld_evil", 10); time.sleep(1.0); s = status(port)
+        check(s["world_ok"] is False and "games" not in s and "req" not in s, "a non-allowed world gets the minimal status only")
+        check(http(port, "/gui/status.json")[0] == 403, "GUI status route 403 without the GUI header")
+        s = gui_status(port)
         check(s["world_ok"] is False and s["req"] is None, "requests from a non-allowed world are ignored")
         check(http(port, "/index.json")[0] == 403, "index.json/pack 403 inside a non-allowed world")
         append(lg, "[GSVR-REQ] models=cstrike req=m9")
         time.sleep(1.0)
-        check(status(port)["models"]["req"] is None and http(port, "/pack/models.bin")[0] == 403,
+        check(gui_status(port)["models"]["req"] is None and http(port, "/pack/models.bin")[0] == 403,
               "models request ignored and models.bin 403 inside a non-allowed world")
         append(lg, "[Behaviour] Joining wrld_good:1", "[GSVR-REQ] map=cstrike/de_dust2 req=10")
-        s = wait_status(port, lambda s: s["req"] == "10" and s["state"] == "ready")
+        s = wait_status(port, lambda s: s.get("req") == "10" and s.get("state") == "ready")   # minimal status until the log names wrld_good
         check(s is not None and http(port, "/pack/current.bin")[0] == 200, "allowed world gets the pack")
         append(lg, "[Behaviour] Joining " + LATE_WORLD + ":1")
         s = wait_status(port, lambda s: s["world"] == LATE_WORLD, 10)

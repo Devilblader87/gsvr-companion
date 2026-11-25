@@ -26,8 +26,8 @@ if _miss:
 # the W5+ engine tables and JASS compiler of w3pack_jvm.py: package tools/jvm (synced without its tests)
 JVM_FILES = sorted(f for f in os.listdir(os.path.join(TOOLS, "jvm")) if f.endswith(".py") and not f.startswith("test_"))
 COMPANION_MODULES = ["companion", "gui", "updater", "runtime", "version", "builder", "models", "prebuilt", "games", "steam",
-                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild",
-                     "rose_conv_stub", "modules", "ed25519", "hostinfo", "i18n", "i18n_catalog", "i18n_catalog_worlds", "firstrun", "firstrun_ui", "updsched", "worlds"]    # --selftest runs one stub ROSE build in a child (gsvr-cli --run-rose-build)
+                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild", "ro", "rofind",
+                     "rose_conv_stub", "ro_conv_stub", "modules", "ed25519", "hostinfo", "i18n", "i18n_catalog", "i18n_catalog_worlds", "firstrun", "firstrun_ui", "ui_theme", "gui_sim", "tray", "updsched", "worlds"]    # --selftest runs one stub ROSE build in a child (gsvr-cli --run-rose-build)
 # w3pack.py decodes BLP (JPEG inside) with Pillow; the tools run via runpy, so PyInstaller must be told
 PILLOW_MODULES = ["PIL", "PIL.Image", "PIL.ImageChops", "PIL.JpegImagePlugin", "PIL.BlpImagePlugin",
                   "PIL.ImageFont", "PIL.ImageDraw", "PIL.TgaImagePlugin", "PIL.PngImagePlugin"]   # HUD / menu fonts, previews
@@ -45,6 +45,12 @@ ROSE_CONV = os.path.join(COMP, "rose_conv")
 with open(os.path.join(ROSE_CONV, "SOURCE_HASHES"), encoding="utf-8") as _f:
     ROSE_MODULES = ["rose_conv", "rose_qglob", "rose_skilltips", "rose_npcskills", "rose_music", "rose_skillvis", "rose_zonerow", "rose_cartvis"] + [os.path.splitext(ln.split()[-1])[0] for ln in _f.read().splitlines() if ln.strip()]
 ROSE_DATA = [(os.path.join(ROSE_CONV, f), "rose_conv") for f in ("VERSION_SOURCE", "lobby_default.json")]
+# Ragnarok converter (companion/ro_conv, BYOG: map + Novice sprites from the player's own data.grf; docs/design/ro_pack.md, ro_sprites.md). A real package
+# (relative imports); it reuses rpg1 / rosedds of rose_conv (already bundled through ROSE_MODULES + the rose_conv pathex). rosebuild flavor RO imports "ro_conv".
+RO_MODULES = ["ro_conv", "ro_conv.api", "ro_conv.grf", "ro_conv.rofmt", "ro_conv.img", "ro_conv.mappack", "ro_conv.sprite", "ro_conv.__main__"]
+_ro_missing = [m for m in RO_MODULES if not os.path.isfile(os.path.join(COMP, *m.split(".")) + ".py") and not os.path.isfile(os.path.join(COMP, m, "__init__.py"))]
+if _ro_missing:
+    raise SystemExit("gsvr.spec: ro_conv modules missing: " + ", ".join(_ro_missing))
 ICON = os.path.join(SPEC_DIR, "gsvr.ico")                # optional: drop a gsvr.ico here
 icon = ICON if os.path.isfile(ICON) else None
 
@@ -54,10 +60,10 @@ a = Analysis(
     binaries=[],
     datas=[(os.path.join(TOOLS, f), "tools") for f in TOOL_FILES] + [(os.path.join(TOOLS, "jvm", f), "tools/jvm")
                                                                     for f in JVM_FILES]
-          + [(os.path.join(COMP, "README.md"), ".")] + ROSE_DATA,
+          + [(os.path.join(COMP, "README.md"), ".")] + ROSE_DATA + ([(ICON, ".")] if icon else []),   # gsvr.ico: tray + window icon at runtime (ui_theme.icon_path)
     hiddenimports=COMPANION_MODULES + [os.path.splitext(f)[0] for f in TOOL_FILES]
                   + ["jvm"] + ["jvm." + os.path.splitext(f)[0] for f in JVM_FILES if f != "__init__.py"] + ["tkinter", "tkinter.ttk",
-                                                                                    "tkinter.messagebox"] + PILLOW_MODULES + MUSIC_MODULES + ROSE_MODULES,
+                                                                                    "tkinter.messagebox"] + PILLOW_MODULES + MUSIC_MODULES + ROSE_MODULES + RO_MODULES,
     hookspath=[],
     runtime_hooks=[],
     excludes=["unittest", "pydoc_data", "test", "lib2to3", "idlelib", "ensurepip", "distutils", "setuptools", "pip"],

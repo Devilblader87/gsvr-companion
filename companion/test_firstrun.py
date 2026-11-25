@@ -108,9 +108,11 @@ class Validate(Base):
         self.assertIn("hl.exe", msg)
 
     def test_messages_in_each_language(self):
-        for lang, needle in (("en", "was not found"), ("de", "nicht gefunden"), ("ja", "見つかりません")):
+        for lang, needle in (("en", ""), ("de", ""), ("ja", "")):
             i18n.set_lang(lang)
-            self.assertIn(needle, firstrun.not_found_text("rose"))
+            if needle:
+                self.assertIn(needle, firstrun.not_found_text("rose"))
+            self.assertIn("Discord", firstrun.not_found_text("rose"))
             self.assertIn("data.idx", firstrun.not_found_text("rose"))
             self.assertIn("hl.exe", firstrun.not_found_text("valve"))
 
@@ -301,7 +303,7 @@ class WorldList(Base):
               "packs": {"a": {"state": "fresh"}, "b": {"state": "stale"}}}
         r = {x["key"]: x for x in firstrun.world_rows(e, {"rose_build": rb, "build": [{"mod": "valve", "pct": 40}]}, True)}
         self.assertEqual(r["rose"]["light"], "yellow")
-        self.assertIn("%", r["rose"]["state"])
+        self.assertIn("(1/2)", r["rose"]["state"])
         self.assertEqual(r["hl"]["state"], "building 40 %")
         rb2 = dict(rb, current=None)
         r = {x["key"]: x for x in firstrun.world_rows(e, {"rose_build": rb2, "build": []}, True)}
@@ -435,10 +437,11 @@ class Views(Base):
     def test_start_view(self):
         sv = firstrun.start_view
         self.assertEqual(sv({}, True), "firstrun")
-        self.assertEqual(sv({"first_run_done": False}, False), "main")        # existing user who never ran the wizard: tabbed window
-        self.assertEqual(sv({"first_run_done": True}, False), "simple")       # default after the first run
+        self.assertEqual(sv({"first_run_done": False}, False), "simple")      # owner 2026-11-24: ALWAYS the simple view
+        self.assertEqual(sv({"first_run_done": True}, False), "simple")
         self.assertEqual(sv({"first_run_done": True, "view": "simple"}, False), "simple")
-        self.assertEqual(sv({"first_run_done": True, "view": "advanced"}, False), "main")
+        self.assertEqual(sv({"first_run_done": True, "view": "advanced"}, False), "simple")   # a stored Advanced view is ignored
+        self.assertEqual(sv({"first_run_done": False, "view": "advanced"}, False), "simple")
         self.assertEqual(sv({"first_run_done": True}, True), "simple")
 
     def test_view_default_in_settings_and_texts(self):
@@ -467,6 +470,88 @@ class Views(Base):
         r = {r["key"]: r for r in firstrun.world_rows(ents, st, True)}["war3"]
         self.assertEqual((r["light"], r["can_open"]), ("yellow", True))
         self.assertEqual(firstrun.apply_choices({}, [{"id": "war3", "found": True, "root": "D:/W3", "picked": True}]), {"war3_root": "D:/W3"})
+
+
+class RoInNewDesign(Base):
+    """ro-main merge (2026-11-25): the RO world in the redesigned simple view + Worlds tab"""
+
+    def ents(self, **found):
+        return [{"id": g, "name": firstrun.game_name(g), "found": found.get(g, False), "root": "x" if found.get(g) else "",
+                 "how": "registry", "world": worlds.world_for_game(g), "picked": False} for g in firstrun.ORDER]
+
+    def test_simple_view_with_rose_and_ro(self):
+        """ROSE + RO found, setup done: the checklist offers the RO world as a second button (was a KeyError = no simple view)"""
+        fresh = {"conv": "v", "install_ok": True, "current": None, "packs": {"a": {"state": "fresh"}}}
+        st = {"world_ok": True, "build": [], "rose_build": fresh, "ro_build": fresh}
+        m = firstrun.checklist(self.ents(rose=True, ro=True), st, True, "running", None, ("", None), "0.9.60", True)
+        self.assertEqual(m["primary"]["action"], "open:rose")
+        self.assertIn({"label": "Ragnarok Online", "action": "open:ro"}, m["secondary"])
+        m = firstrun.checklist(self.ents(ro=True), st, True, "running", None, ("", None), "0.9.60", True)
+        self.assertEqual(m["primary"]["action"], "open:ro")
+        self.assertIn("Ragnarok Online", m["primary"]["label"])
+
+    def test_ro_world_row_follows_ro_build(self):
+        """the RO row is green only with every RO pack built (ro_build), not because the ROSE packs are"""
+        fresh = {"conv": "v", "install_ok": True, "current": None, "packs": {"a": {"state": "fresh"}}}
+        half = {"conv": "v", "install_ok": True, "current": {"progress": 0.5}, "queue": ["b"],
+                "packs": {"a": {"state": "fresh"}, "b": {"state": "missing"}}}
+        e = self.ents(rose=True, ro=True)
+        rows = {r["key"]: r for r in firstrun.world_rows(e, {"rose_build": fresh, "ro_build": half, "build": []}, True)}
+        self.assertEqual(rows["rose"]["light"], "green")
+        self.assertEqual(rows["ro"]["light"], "yellow")
+        self.assertEqual(rows["ro"]["state"], "building (1/2)")
+        self.assertEqual(rows["ro"]["name"], "Ragnarok Online")
+        rows = {r["key"]: r for r in firstrun.world_rows(e, {"rose_build": half, "ro_build": fresh, "build": []}, True)}
+        self.assertEqual(rows["ro"]["light"], "green")
+        self.assertEqual(rows["rose"]["light"], "yellow")
+        rows = {r["key"]: r for r in firstrun.world_rows(e, {"rose_build": fresh, "ro_build": dict(fresh, conv=None), "build": []}, True)}
+        self.assertEqual(rows["ro"]["light"], "red")
+        self.assertIn("Ragnarok", rows["ro"]["hint"])
+
+
+class StaleRows(unittest.TestCase):
+    """w41: stale packs rebuild by themselves; no row ever asks to press Start while the helper runs"""
+    def setUp(self):
+        i18n.set_lang("de")
+
+    def tearDown(self):
+        i18n.set_lang("en")
+
+    def rows(self, ro_build):
+        e = [{"id": "ro", "found": True, "root": "x"}]
+        return {x["key"]: x for x in firstrun.world_rows(e, {"ro_build": ro_build, "rose_build": None, "build": []}, True)}
+
+    def test_label_no_private_test(self):
+        for lang in ("en", "de", "ja"):
+            i18n.set_lang(lang)
+            self.assertNotIn("test", firstrun.tr("w.name.ro").lower().replace("ragnarok", ""))
+            self.assertNotIn("テスト", firstrun.tr("w.name.ro"))
+        self.assertEqual(firstrun.tr("w.name.ro"), "Ragnarok Online")
+
+    def test_stale_idle_has_rebuild_and_no_press_start(self):
+        rb = {"conv": "v", "install_ok": True, "current": None, "queue": [], "packs": {"a": {"state": "fresh"}, "b": {"state": "stale"}}}
+        r = self.rows(rb)["ro"]
+        self.assertTrue(r["can_rebuild"])
+        self.assertEqual(r["rebuild"], "/ro/build_all")
+        for lang in ("en", "de", "ja"):
+            i18n.set_lang(lang)
+            r = self.rows(rb)["ro"]
+            self.assertNotIn("Start", r["hint"].replace("Neu bauen", ""))
+            self.assertNotIn("スタート", r["hint"])
+            self.assertNotIn("Start", firstrun.tr("help.update"))
+            self.assertNotIn("スタート", firstrun.tr("help.update"))
+        i18n.set_lang("de")
+        self.assertEqual(firstrun.tr("w.rebuild"), "Neu bauen")
+
+    def test_building_shows_x_of_n(self):
+        packs = {"p%d" % i: {"state": "fresh" if i < 5 else "stale"} for i in range(43)}
+        rb = {"conv": "v", "install_ok": True, "current": {"name": "p5", "progress": 0.5}, "queue": ["p6"], "packs": packs}
+        r = self.rows(rb)["ro"]
+        self.assertEqual(r["state"], "wird gebaut (5/43)")
+        self.assertFalse(r["can_rebuild"])
+        done = {"conv": "v", "install_ok": True, "current": None, "queue": [], "packs": {k: {"state": "fresh"} for k in packs}}
+        r = self.rows(done)["ro"]
+        self.assertEqual((r["light"], r["can_rebuild"]), ("green", False))
 
 
 if __name__ == "__main__":

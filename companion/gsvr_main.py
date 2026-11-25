@@ -10,6 +10,8 @@
     <exe> --run-rose-build NAME INSTALL OUT
                                      build one ROSE pack in this process (the companion's build child, rosebuild.py:
                                      @progress / @result / @error lines on stdout)
+    <exe> --run-ro-build NAME INSTALL OUT
+                                     the same for a Ragnarok Online pack (converter ro_conv)
     <exe> --selftest                 headless GUI-controller self-test (gui.py --selftest)
     <exe> --update-check             print the update check result (no install)
     <exe> --version                  print the version
@@ -152,6 +154,9 @@ def main(argv=None):
     if argv[:1] == ["--run-rose-build"]:                 # one ROSE pack build in this child process (rosebuild.py)
         import rosebuild
         return rosebuild.child_main(argv[1:])
+    if argv[:1] == ["--run-ro-build"]:                   # one Ragnarok Online pack build in this child process (rosebuild.RO)
+        import rosebuild
+        return rosebuild.child_main(argv[1:], rosebuild.RO)
     if argv[:1] == ["--version"]:
         print(VERSION)
         return 0

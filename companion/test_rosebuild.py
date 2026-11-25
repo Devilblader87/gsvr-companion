@@ -808,7 +808,7 @@ class Live(unittest.TestCase):
         self.assertEqual(body["rose_build"]["install"], os.path.abspath(inst))
         # audit 5: status.json (any world reads it) has no user folder; the full state is GUI only (GET /rose/state + header)
         s = st.wait_status(port, lambda s: s["rose_build"]["install_ok"], 10)
-        self.assertEqual(s["rose_build"]["install"], "<home>" + os.sep + "inst")
+        self.assertNotIn("install", s["rose_build"])                       # w32: no install path at all for a world
         self.assertNotIn(work, json.dumps(s))
         self.assertEqual(get_state(port, hdr=False)[0], 403)
         code, full = get_state(port)
@@ -895,6 +895,32 @@ class Live(unittest.TestCase):
         self.assertEqual(os.path.normcase(got["install"]), os.path.normcase(os.path.abspath(inst)))
         self.assertNotIn("install search failed", txt)
         self.assertIn("[rose] install: ", txt)
+
+
+class AutoRebuild(Base):
+    def test_ensure_fresh_rebuilds_stale_by_itself(self):
+        """w41: set_install prebuilt once; a game patch while running makes packs stale; the watchdog tick queues + builds them"""
+        self.m.set_install(self.inst)
+        self.assertTrue(self.m.wait_idle(30))
+        self.assertEqual(self.m.ensure_fresh(), [])                 # all fresh: nothing to do
+        idx = os.path.join(self.inst, "data.idx")
+        with open(idx, "ab") as fh:
+            fh.write(b"patch")
+        os.utime(idx, (time.time() + 100, time.time() + 100))
+        self.assertEqual({self.m.pack_state(n) for n in stub.PACKS}, {"stale"})
+        n = len(stub.CALLS)
+        queued = self.m.ensure_fresh()
+        self.assertEqual(sorted(queued), sorted(stub.PACKS))
+        self.assertTrue(self.m.wait_idle(30))
+        self.assertEqual({self.m.pack_state(k) for k in stub.PACKS}, {"fresh"})
+        self.assertGreater(len(stub.CALLS), n)
+
+    def test_ensure_fresh_idle_when_building_or_no_install(self):
+        self.assertEqual(self.m.ensure_fresh(), [])                 # no install
+        self.m.set_install(self.inst, prebuild=False)
+        self.assertEqual(self.m.request(A)["state"], "building")
+        self.assertEqual(self.m.ensure_fresh(), [])                 # on-demand build running: the demand goes first
+        self.assertTrue(self.m.wait_idle(30))
 
 
 if __name__ == "__main__":

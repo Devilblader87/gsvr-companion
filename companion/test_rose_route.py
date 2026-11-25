@@ -139,8 +139,14 @@ def live_test():
         append(lg, f"[GSVR-REQ] rose={name} req={rid}")
         s = wait_status(port, lambda s: s["rose"]["req"] == rid and s["rose"]["state"] in ("ready", "error"), 20)
         return s["rose"] if s else None
+    def gui_status():
+        """the full status (GUI route): before / outside an allowed world a world only gets the minimal one (w32 privacy)"""
+        import json
+        return json.loads(http(port, "/gui/status.json", headers={"X-GSVR-Gui": "1"})[1])
     try:
         s = wait_status(port, lambda s: True, 20)
+        check(s is not None and "rose" not in s and s.get("world_ok") is False, "no allowed world yet: minimal status for the world")
+        s = gui_status()
         idle = {"state": "idle", "req": None, "name": None, "size": 0, "error": None}
         if not check(s is not None and {k: s.get("rose", {}).get(k) for k in idle} == idle
                      and isinstance(s["rose"].get("text"), str) and s["rose"].get("all_ready") is False
@@ -154,7 +160,7 @@ def live_test():
         append(lg, "[GSVR-REQ] rose=good req=g0")
         import time
         time.sleep(1.5)
-        s = wait_status(port, lambda s: True, 5)
+        s = gui_status()
         check(s["rose"]["state"] == "idle", "request from a foreign world is ignored")
         check(http(port, "/pack/rose.rpg1")[0] == 403, "rose.rpg1 403 in a foreign world")
         append(lg, "Joining wrld_ok")

@@ -27,7 +27,7 @@ the same code also runs from source. Files:
 | `buildprog.py` | build progress: converters print `@plan stage=weight ...` / `@progress <stage> <done> <total>` (`tools/bprog.py`), the companion streams their stdout per job and publishes `status.json` `build`: `[{kind: map\|models\|hologram\|war3, mod, name, pct 0-100, eta_s (-1 unknown), state}]` (empty = idle; eta from the rate, or the last build of the same key in `<cache>/build_times.json`); GUI bars + world HUD (`GsvrBuildHud`) read it |
 | `rose.py` | ROSE pack route: serves a ready `rose__<name>.rpg1` (RPG1) from `--rose-dir` (default `<cache>/rose`) as `/pack/rose.rpg1`, `rose=<name>` command, header check (magic, major 1, fileSize, <= 100 MB, no path traversal), `status.json` `rose`. The conversion itself lives in `rosebuild.py` + `rose_conv/` (see the ROSE section below); a pack copied in by hand (no install configured) is still served as is |
 | `i18n.py` / `i18n_catalog*.py` | ONE string catalog (en / de / ja), `tr()`, language auto-detect (Windows UI language), Japanese-capable UI font |
-| `firstrun.py` / `firstrun_ui.py` / `worlds.py` | 1-click first run (detect games, Start, progress, Open world), per-world status list + Help (Discord), `vrchat://` links; see `docs/design/companion_first_run.md` |
+| `firstrun.py` / `firstrun_ui.py` / `worlds.py` | Simple view = one dark checklist screen (Your games / VRChat / Allow Untrusted URLs / World connected / App version, next open row highlighted, one big Open-world button, Advanced view link); 1-click preparation, per-world status list + Help (Discord), `vrchat://` links. Screenshots without a real install: `GSVR_UI_DEMO=start\|first\|step\|ready GSVR_LANG=ja GSVR_UI_SHOT=x.png python3 -I companion/ui_demo.py` (simulated, no folders/network); see `docs/design/companion_first_run.md` |
 | `rosefind.py` / `rosebuild.py` / `rose_conv/` | ROSE install detection, build manager (on demand + background), vendored converter; see **ROSE** below |
 | `holo.py` | map hologram bundle for the mod hub (GSPV, `tools/previewpack.py`): `/pack/hologram.bin`, `holo=` command, `validate_hologram`, cache, `--prebuilt-dir` `<mod>__hologram.gspv` |
 | `selftest.py` / `selftest.sh` | end-to-end self-test (`--sabotage` = must fail); also runs `selftest_update.py` |
@@ -400,7 +400,7 @@ Source: `companion/mapshare.py`, service in `relay/` (own README: API, limits, d
 2. Download `gsvr-companion-windows-x64.zip` from the release page, unpack it, for example to `Documents\GSVR`.
 3. Double-click `GSVR\GSVR.exe` and press **Start**. The Status tab lists the games it found.
    (SmartScreen may warn about an unknown publisher until the exe is code-signed: "More info" → "Run anyway".)
-4. In VRChat: Settings → search for **"Allow Untrusted URLs"** and turn it on (one-time setting).
+4. In VRChat: Settings → **Comfort & Safety** → **Allow Untrusted URLs** on (or search "untrusted"; one-time setting). Closing the companion window keeps it running in the system tray; quit it from the tray icon.
 5. Join the GSVR world and pick a map on the panel. The first load of a map converts it (seconds);
    after that it comes from the cache.
 6. Updates: when the yellow banner appears, press **Install** — no re-download needed.

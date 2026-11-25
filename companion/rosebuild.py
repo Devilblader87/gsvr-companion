@@ -37,9 +37,9 @@ request path (the real converter's install_extra() walks the Sound folder, far t
 Log lines:  [rose] build <name> started / NN% <stage> / done in N s / failed: ... / cancelled
 Converter selection: `import rose_conv`; GSVR_ROSE_CONV=stub selects companion/rose_conv_stub.py (tests / dev only).
 """
-import collections, datetime, glob, hashlib, json, os, re, subprocess, sys, threading, time
+import collections, datetime, glob, hashlib, importlib, json, os, re, subprocess, sys, threading, time
 
-import rose
+import rose, ro
 import runtime
 
 NO_INSTALL = "ROSE install not found: set the ROSE folder in the companion"
@@ -56,20 +56,58 @@ PARALLEL_MAX = 2            # LOAD PACKAGE 5: child builds at once (never two zo
 LAST_ZONE_FILE = "rosebuild_last.json"      # in the rose folder: {"zone": name}, the last zone pack the world asked for (likely zone of the next first load)
 
 
-def load_conv(log=None):
-    """-> the converter module (rose_conv, or rose_conv_stub when GSVR_ROSE_CONV=stub) or None when it is not bundled."""
+class Flavor:
+    """What differs between the game flavours that share this build manager: ROSE (rose__<name>.rpg1, converter rose_conv) and
+    Ragnarok Online (ro__<name>.pack, converter ro_conv, companion/ro.py). The manager itself is the same code."""
+    def __init__(self, tag, label, prefix, ext, child_flag, env, conv_module, stub_module, mod):
+        self.tag, self.label, self.prefix, self.ext = tag, label, prefix, ext
+        self.child_flag, self.env = child_flag, env
+        self.conv_module, self.stub_module, self.mod = conv_module, stub_module, mod
+        self.no_install = f"{label} install not found: set the {label} folder in the companion"
+        self.no_conv = f"{label} converter not bundled with this companion"
+
+    def pack_file(self, name):
+        return f"{self.prefix}__{name}{self.ext}"
+
+
+ROSE = Flavor("rose", "ROSE", "rose", ".rpg1", CHILD_FLAG, "GSVR_ROSE_CONV", "rose_conv", "rose_conv_stub", rose)
+RO = Flavor("ro", "Ragnarok", "ro", ".pack", "--run-ro-build", "GSVR_RO_CONV", "ro_conv", "ro_conv_stub", ro)
+
+
+def load_conv(log=None, fl=None):
+    """-> the converter module (rose_conv, or rose_conv_stub when GSVR_ROSE_CONV=stub; fl=RO: ro_conv / GSVR_RO_CONV) or None when it
+    is not bundled."""
+    fl = fl or ROSE
     try:
-        if os.environ.get("GSVR_ROSE_CONV", "") == "stub":
-            import rose_conv_stub as m
-        else:
-            import rose_conv as m
+        m = importlib.import_module(fl.stub_module if os.environ.get(fl.env, "") == "stub" else fl.conv_module)
         return m
     except ImportError:
         return None
     except Exception as e:                       # noqa: BLE001 - a broken converter must not take the companion down
         if log:
-            log(f"[rose] converter failed to load: {e}")
+            log(f"[{fl.tag}] converter failed to load: {e}")
         return None
+
+
+class _AudioMerged:
+    """the RO converter as the build manager sees it: PACKS = the map packs + AUDIO_PACKS (snd_common, snd_<map>), everything else delegated.
+    A view, not a mutation: ro_conv.PACKS stays the map list the world loads (tests + converter CLI read it); the audio packs are built after the maps
+    (they are not in PREBUILD_ORDER, so prebuild_order appends them) and served by name like any pack."""
+
+    def __init__(self, conv):
+        self._conv = conv
+        self.PACKS = dict(conv.PACKS)
+        self.PACKS.update(conv.AUDIO_PACKS)
+
+    def __getattr__(self, name):
+        return getattr(self._conv, name)
+
+
+def merge_audio(conv):
+    """PACKS.update(AUDIO_PACKS) for a converter that has AUDIO_PACKS (ro_conv); any other converter (ROSE, stubs) is returned unchanged"""
+    if conv is None or isinstance(conv, _AudioMerged) or not isinstance(getattr(conv, "AUDIO_PACKS", None), dict) or not isinstance(getattr(conv, "PACKS", None), dict):
+        return conv
+    return _AudioMerged(conv)
 
 
 def conv_version(conv, name):
@@ -114,14 +152,23 @@ def first_contact(conv, zone=None):
 
 
 def prebuild_order(conv, names, zone=None):
-    """background prebuild order: the first-contact packs first (lobby, avatar, likely zone), then the rest in PACKS order"""
+    """background prebuild order: the first-contact packs first (lobby, avatar, likely zone), then the rest in PACKS order.
+    A converter with PREBUILD_ORDER (ro_conv: the RO world loads every map at once, start map first) keeps that fixed order instead."""
+    names = [n for n in names if n not in getattr(conv, "NO_PREBUILD", ())]       # ro_conv NO_PREBUILD: on-demand packs (the dungeons lane), built only when the world asks
+    fixed = getattr(conv, "PREBUILD_ORDER", None)
+    if fixed:
+        return [n for n in fixed if n in names] + [n for n in names if n not in fixed]
     fc = first_contact(conv, zone)
     return [n for n in fc if n in names] + [n for n in names if n not in fc]
 
 
 def warm_after(conv, name, zone=None):
     """W10 warm-up: when the world asks for `name`, the packs it will ask for next (they go to the front of the background queue, so their
-    build overlaps the lobby instead of starting at the pick): login -> avatar + likely zone, avatar -> likely zone, anything else -> none"""
+    build overlaps the lobby instead of starting at the pick): login -> avatar + likely zone, avatar -> likely zone, anything else -> none.
+    A converter with warm_after(name) (ro_conv: the maps the RO world asks for after `name`) answers itself."""
+    wa = getattr(conv, "warm_after", None)
+    if callable(wa):
+        return list(wa(name))
     fc = first_contact(conv, zone)
     return fc[fc.index(name) + 1:] if name in fc else []
 
@@ -149,15 +196,16 @@ def write_last_zone(rose_dir, name):
 
 
 def conv_env_value(conv):
-    """GSVR_ROSE_CONV for a child build that must load the same converter as this process ("stub" / None = rose_conv)."""
-    return "stub" if getattr(conv, "__name__", "") == "rose_conv_stub" else None
+    """GSVR_ROSE_CONV / GSVR_RO_CONV for a child build that must load the same converter as this process ("stub" / None = the real one)."""
+    return "stub" if getattr(conv, "__name__", "").endswith("_conv_stub") else None
 
 
-def child_argv(name, install, out):
+def child_argv(name, install, out, fl=None):
     """argv of the child process that builds one pack (frozen: gsvr-cli, source: python -I gsvr_main.py)."""
+    flag = (fl or ROSE).child_flag
     if runtime.FROZEN:
-        return [runtime.cli_exe(), CHILD_FLAG, name, install, out]
-    return [runtime.console_python(), "-X", "utf8", "-I", "-u", os.path.join(runtime.HERE, "gsvr_main.py"), CHILD_FLAG,
+        return [runtime.cli_exe(), flag, name, install, out]
+    return [runtime.console_python(), "-X", "utf8", "-I", "-u", os.path.join(runtime.HERE, "gsvr_main.py"), flag,
             name, install, out]
 
 
@@ -203,12 +251,12 @@ def _watch_stdin():
     os._exit(3)
 
 
-def child_main(argv):
+def child_main(argv, fl=None):
     """`<exe> --run-rose-build NAME INSTALL OUT`: build one pack with the converter (GSVR_ROSE_CONV=stub: the stub) in this
-    process and report on stdout: `@progress <frac> <stage>` lines, then `@result {"conv", "result"}` (exit 0) or
+    process (fl=RO: the Ragnarok converter) and report on stdout: `@progress <frac> <stage>` lines, then `@result {"conv", "result"}` (exit 0) or
     `@error {"error", "cancelled"}` (exit 1). Converter output goes to stderr. -> exit code."""
     if len(argv) != 3:
-        print("usage: %s NAME INSTALL OUT" % CHILD_FLAG, file=sys.stderr)
+        print("usage: %s NAME INSTALL OUT" % (fl or ROSE).child_flag, file=sys.stderr)
         return 2
     name, install, out = argv
     if sys.platform != "win32":
@@ -228,9 +276,9 @@ def child_main(argv):
             except (OSError, ValueError):
                 os._exit(3)                              # the companion is gone
     if os.environ.get("GSVR_ROSE_CHILD_STDIN_WATCH", "1") != "1":
-        return _child_build(name, install, out, emit, lock)
+        return _child_build(name, install, out, emit, lock, fl)
     threading.Thread(target=_watch_stdin, name="rose-stdin", daemon=True).start()
-    rc = _child_build(name, install, out, emit, lock)
+    rc = _child_build(name, install, out, emit, lock, fl)
     for s in (proto, sys.stderr):                        # the stdin reader blocks in read(): a normal interpreter shutdown
         try:                                             # would abort on its buffer lock -> leave at once
             s.flush()
@@ -239,10 +287,11 @@ def child_main(argv):
     os._exit(rc)
 
 
-def _child_build(name, install, out, emit, lock):
-    conv = load_conv(lambda m: print(m, file=sys.stderr))
+def _child_build(name, install, out, emit, lock, fl=None):
+    fl = fl or ROSE
+    conv = load_conv(lambda m: print(m, file=sys.stderr), fl)
     if conv is None:
-        emit("error", json.dumps({"error": NO_CONV, "cancelled": False}))
+        emit("error", json.dumps({"error": fl.no_conv, "cancelled": False}))
         return 1
     last = {"f": -1.0, "stage": None, "t": 0.0}
 
@@ -274,12 +323,12 @@ class ChildCancelled(Exception):
     pass
 
 
-def pack_path(rose_dir, name):
-    return os.path.join(rose_dir, f"rose__{name}.rpg1")
+def pack_path(rose_dir, name, fl=None):
+    return os.path.join(rose_dir, (fl or ROSE).pack_file(name))
 
 
-def sidecar_path(rose_dir, name):
-    return pack_path(rose_dir, name) + ".json"
+def sidecar_path(rose_dir, name, fl=None):
+    return pack_path(rose_dir, name, fl) + ".json"
 
 
 def index_files(conv, install):
@@ -315,17 +364,17 @@ def fingerprint(conv, install):
     return h.hexdigest()[:32]
 
 
-def read_sidecar(rose_dir, name):
+def read_sidecar(rose_dir, name, fl=None):
     try:
-        with open(sidecar_path(rose_dir, name), encoding="utf-8") as fh:
+        with open(sidecar_path(rose_dir, name, fl), encoding="utf-8") as fh:
             d = json.load(fh)
         return d if isinstance(d, dict) else None
     except (OSError, ValueError):
         return None
 
 
-def write_sidecar(rose_dir, name, data):
-    p = sidecar_path(rose_dir, name)
+def write_sidecar(rose_dir, name, data, fl=None):
+    p = sidecar_path(rose_dir, name, fl)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1, sort_keys=True)
@@ -366,13 +415,18 @@ def public_state(st):
 
 
 class Manager:
-    def __init__(self, rose_dir, conv=None, log=print, on_update=None, autoload=True, isolate=None, child_env=None, parallel=None):
+    def __init__(self, rose_dir, conv=None, log=print, on_update=None, autoload=True, isolate=None, child_env=None, parallel=None,
+                 flavor=None):
+        self.fl = flavor or ROSE
+        self._fk = {} if self.fl is ROSE else {"fl": self.fl}     # ROSE keeps the plain call shape (tests patch these helpers)
         self.rose_dir = rose_dir
         self.log = log or (lambda m: None)
-        self.conv = conv if conv is not None else (load_conv(self.log) if autoload else None)
+        self.conv = conv if conv is not None else (load_conv(self.log, self.fl) if autoload else None)
+        if self.fl is not ROSE:
+            self.conv = merge_audio(self.conv)            # RO: PACKS.update(AUDIO_PACKS) - the sound lane's snd_* packs are built + served too
         # builds in a child process: the default for the companion (auto-loaded converter); GSVR_ROSE_INPROC=1 = in-process
         if isolate is None:
-            isolate = conv is None and os.environ.get("GSVR_ROSE_INPROC", "") != "1"
+            isolate = conv is None and os.environ.get("GSVR_ROSE_INPROC", "") != "1" and os.environ.get("GSVR_RO_INPROC", "") != "1"
         self.isolate = bool(isolate)
         # LOAD PACKAGE 5: builds at once (child processes: PARALLEL_MAX; in-process: 1 unless a test asks for more with the stub)
         self.parallel = max(1, int(parallel if parallel is not None else (PARALLEL_MAX if self.isolate else 1)))
@@ -475,19 +529,19 @@ class Manager:
         """Leftovers of a crash / kill: rose__*.rpg1.part and sidecar .tmp files."""
         if not self.rose_dir or not os.path.isdir(self.rose_dir):
             return
-        for p in glob.glob(os.path.join(self.rose_dir, "rose__*.rpg1.part")) + \
-                glob.glob(os.path.join(self.rose_dir, "rose__*.rpg1.json.tmp")):
+        for p in glob.glob(os.path.join(self.rose_dir, f"{self.fl.prefix}__*{self.fl.ext}.part")) + \
+                glob.glob(os.path.join(self.rose_dir, f"{self.fl.prefix}__*{self.fl.ext}.json.tmp")):
             _rm(p)
-            self.log(f"[rose] removed leftover {os.path.basename(p)}")
+            self.log(f"[{self.fl.tag}] removed leftover {os.path.basename(p)}")
 
     def pack_state(self, name, fp=None):
         """-> "fresh" | "stale" | "missing" (see the module doc). fp: the install fingerprint (computed when None).
         Disk IO: the manager never calls it with its lock held."""
-        if not os.path.isfile(pack_path(self.rose_dir, name)):
+        if not os.path.isfile(pack_path(self.rose_dir, name, **self._fk)):
             return "missing"
         if not self.usable():
             return "fresh"                       # nothing to compare with: a hand-dropped / older pack is served as is
-        sc = read_sidecar(self.rose_dir, name)
+        sc = read_sidecar(self.rose_dir, name, **self._fk)
         if not sc or sc.get("conv") != conv_version(self.conv, name):
             return "stale"
         if sc.get("install") != (fp if fp is not None else fingerprint(self.conv, self.install)):
@@ -496,10 +550,10 @@ class Manager:
 
     def _no_install_text(self):
         if self.conv is None:
-            return NO_CONV
+            return self.fl.no_conv
         if self.install and not self.install_ok:
-            return f"ROSE install not usable ({self.install_reason}): set the ROSE folder in the companion"
-        return NO_INSTALL
+            return f"{self.fl.label} install not usable ({self.install_reason}): set the {self.fl.label} folder in the companion"
+        return self.fl.no_install
 
     def _eta(self, cur, now=None):
         el = (now or time.monotonic()) - cur["t0"]
@@ -521,7 +575,7 @@ class Manager:
             try:
                 self.on_update(name, fields)
             except Exception as e:               # noqa: BLE001
-                self.log(f"[rose] slot update failed: {e}")
+                self.log(f"[{self.fl.tag}] slot update failed: {e}")
 
     def _ensure_thread(self):
         self.threads = [t for t in self.threads if t.is_alive()]
@@ -565,19 +619,19 @@ class Manager:
             if usable and known:
                 self._remember_zone(name)
             if not usable or not known:
-                r = rose.prepare(self.rose_dir, name)
-                if r["state"] == "error" and "no rose__" in (r["error"] or "") and known:
-                    r["error"] = f"{self._no_install_text()} (no rose__{name}.rpg1 in the rose folder)"
-                elif r["state"] == "error" and "no rose__" in (r["error"] or "") and self.conv is not None \
+                r = self.fl.mod.prepare(self.rose_dir, name)
+                if r["state"] == "error" and f"no {self.fl.prefix}__" in (r["error"] or "") and known:
+                    r["error"] = f"{self._no_install_text()} (no {self.fl.pack_file(name)} in the {self.fl.tag} folder)"
+                elif r["state"] == "error" and f"no {self.fl.prefix}__" in (r["error"] or "") and self.conv is not None \
                         and not usable:
                     r["error"] = f"{r['error']}; {self._no_install_text()}"
                 return r
             fp = fingerprint(self.conv, install)
             if self.pack_state(name, fp) == "fresh":
-                r = rose.prepare(self.rose_dir, name)
+                r = self.fl.mod.prepare(self.rose_dir, name)
                 if r["state"] == "ready":
                     return r
-                self.log(f"[rose] {name}: cached pack unusable ({r['error']}), rebuilding")
+                self.log(f"[{self.fl.tag}] {name}: cached pack unusable ({r['error']}), rebuilding")
             now = time.monotonic()
             with self.cv:
                 if gen != self.gen:
@@ -586,8 +640,8 @@ class Manager:
                 if f:
                     left = max(1, int(FAIL_RETRY_S - (now - f["t"])))
                     return {"state": "error", "size": 0, "path": None,
-                            "error": f"ROSE build of {name} failed: {f['err']} (next try in {left} s, or after the ROSE "
-                                     f"install changed / Build all ROSE zones now in the companion)"}
+                            "error": f"{self.fl.label} build of {name} failed: {f['err']} (next try in {left} s, or after the {self.fl.label} "
+                                     f"install changed / Build all now in the companion)"}
                 self.errors.pop(name, None)
                 cur = self._run_of(name)
                 if cur:
@@ -612,12 +666,12 @@ class Manager:
                             self._preempt(victim, name)
                         elif bl:
                             k = bl[0]
-                            self.log(f"[rose] {name} runs next: {k['name']} is {int(k['progress'] * 100)}% done (not pre-empted)")
+                            self.log(f"[{self.fl.tag}] {name} runs next: {k['name']} is {int(k['progress'] * 100)}% done (not pre-empted)")
                     self._ensure_thread()
                     self.cv.notify_all()
                 self._warm_next(name, fp, now)
                 return self._building(name)
-        return {"state": "error", "size": 0, "path": None, "error": f"ROSE install changed while asking for {name}: ask again"}
+        return {"state": "error", "size": 0, "path": None, "error": f"{self.fl.label} install changed while asking for {name}: ask again"}
 
     def _warm_next(self, name, fp, now):
         """caller holds the lock. W10 FIRST LOAD: the packs the world asks for after `name` (warm_after) go to the front of the background
@@ -630,7 +684,7 @@ class Manager:
             return
         for n in reversed(nxt):
             self._requeue_front(n)
-        self.log(f"[rose] warm-up after {name}: {', '.join(nxt)} next")
+        self.log(f"[{self.fl.tag}] warm-up after {name}: {', '.join(nxt)} next")
         self._invalidate()
         self._ensure_thread()
         self.cv.notify_all()
@@ -645,7 +699,7 @@ class Manager:
         build; a pending on-demand pack is rebuilt from the new install. -> (ok, reason)."""
         path = os.path.abspath(path) if path else None
         if self.conv is None:
-            ok, reason = False, NO_CONV
+            ok, reason = False, self.fl.no_conv
         elif path is None:
             ok, reason = False, "not set"
         else:
@@ -667,7 +721,7 @@ class Manager:
             self.demand, self.queue, self.errors, self.failed, self.forced = None, [], {}, {}, set()
             self.prebuild_started = False
             self._invalidate()
-            self.log(f"[rose] install: {path or '-'} ({'ok' if ok else reason})")
+            self.log(f"[{self.fl.tag}] install: {path or '-'} ({'ok' if ok else reason})")
             if ok:
                 if resume:
                     self.demand = resume
@@ -705,11 +759,21 @@ class Manager:
                 self.forced.update(add)
             self.queue.extend(add)
             if add:
-                self.log("[rose] background prebuild: " + ", ".join(add))
+                self.log(f"[{self.fl.tag}] background prebuild: " + ", ".join(add))
                 self._invalidate()
                 self._ensure_thread()
                 self.cv.notify_all()
         return add
+
+    def ensure_fresh(self):
+        """watchdog tick (companion, every few seconds): when nothing is building or queued but a pack is stale / missing (the
+        game was patched while the helper ran, or the first prebuild was dropped), queue it in the background - packs in their
+        failure cool-down stay out. Idle + all fresh = one cheap disk check. -> queued names."""
+        with self.cv:
+            if self.stopped or not self.usable() or self.demand or self.queue or self.running:
+                return []
+            gen = self.gen
+        return self._prebuild(gen)
 
     def build_all(self, force=False):
         """GUI "Build all ROSE zones now": queue every pack that is not fresh (force=True: every pack). An explicit retry:
@@ -740,7 +804,7 @@ class Manager:
                     c["cancel"].set()
                 self.demand, self.queue, self.forced = None, [], set()
         for name in dict.fromkeys(names):
-            self._notify(name, {"state": "error", "size": 0, "path": None, "error": f"ROSE build of {name} cancelled"})
+            self._notify(name, {"state": "error", "size": 0, "path": None, "error": f"{self.fl.label} build of {name} cancelled"})
 
     def stop(self):
         with self.cv:
@@ -767,9 +831,9 @@ class Manager:
         fp = fingerprint(self.conv, self.install) if self.usable() else None
         packs = {}
         for n in self.packs():
-            sc = read_sidecar(self.rose_dir, n) or {}
+            sc = read_sidecar(self.rose_dir, n, **self._fk) or {}
             try:
-                size = os.path.getsize(pack_path(self.rose_dir, n))
+                size = os.path.getsize(pack_path(self.rose_dir, n, **self._fk))
             except OSError:
                 size = 0
             spec = self.conv.PACKS.get(n) if isinstance(self.conv.PACKS, dict) else None
@@ -790,7 +854,7 @@ class Manager:
             try:
                 packs = self._pack_rows()
             except Exception as e:                       # noqa: BLE001 - keep the old rows
-                self.log(f"[rose] state refresh failed: {e}")
+                self.log(f"[{self.fl.tag}] state refresh failed: {e}")
                 time.sleep(STATE_CACHE_S)
                 continue
             with self.cv:
@@ -862,7 +926,7 @@ class Manager:
                 cur["logged"] = pct
             fields = self._building(cur["name"]) if push and cur["kind"] == "demand" and not cur["cancel"].is_set() else None
         if logit:
-            self.log(f"[rose] build {cur['name']} {pct}% {stage}")
+            self.log(f"[{self.fl.tag}] build {cur['name']} {pct}% {stage}")
         if fields:
             self._notify(cur["name"], fields)
 
@@ -890,7 +954,7 @@ class Manager:
                 self._invalidate()
             fp = fingerprint(self.conv, install)
             fresh = not forced and self.pack_state(name, fp) == "fresh"
-            sc = read_sidecar(self.rose_dir, name) or {}
+            sc = read_sidecar(self.rose_dir, name, **self._fk) or {}
             with self.cv:
                 if fresh and cur["kind"] == "background" and not cur["cancel"].is_set():
                     self.running.remove(cur)                 # built meanwhile (or never stale): nothing to do
@@ -900,7 +964,7 @@ class Manager:
                 cur["hist_s"] = sc.get("seconds") if isinstance(sc.get("seconds"), (int, float)) else None
                 kind = cur["kind"]
                 fields = self._building(name) if kind == "demand" else None
-            self.log(f"[rose] build {name} started ({kind}, conv {getattr(self.conv, 'VERSION', '?')})")
+            self.log(f"[{self.fl.tag}] build {name} started ({kind}, conv {getattr(self.conv, 'VERSION', '?')})")
             if fields:
                 self._notify(name, fields)
             self._build_one(cur, install, fp, gen)
@@ -909,9 +973,9 @@ class Manager:
         env = dict(os.environ)
         v = conv_env_value(self.conv)
         if v:
-            env["GSVR_ROSE_CONV"] = v
+            env[self.fl.env] = v
         else:
-            env.pop("GSVR_ROSE_CONV", None)
+            env.pop(self.fl.env, None)
         env["PYTHONUTF8"] = "1"
         env.update(self.child_env)
         return env
@@ -932,10 +996,10 @@ class Manager:
         (cur["cancel"] was set: the child was terminated) or RuntimeError (the build failed)."""
         name = cur["name"]
         try:
-            proc = subprocess.Popen(child_argv(name, install, out), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            proc = subprocess.Popen(child_argv(name, install, out, **self._fk), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, env=self._child_env(), cwd=self.rose_dir, **child_popen_kwargs())
         except OSError as e:
-            raise RuntimeError(f"could not start the ROSE build process: {e}")
+            raise RuntimeError(f"could not start the {self.fl.label} build process: {e}")
         cur["pid"] = proc.pid
         got = {"result": None, "error": None}
         tail = collections.deque(maxlen=20)
@@ -982,16 +1046,16 @@ class Manager:
             raise RuntimeError(str(got["error"].get("error") or "unknown error"))
         if rc != 0 or got["result"] is None:
             more = (": " + " | ".join(list(tail)[-3:])) if tail else ""
-            raise RuntimeError(f"ROSE build process exited with code {rc}{more}"[:500])
+            raise RuntimeError(f"{self.fl.label} build process exited with code {rc}{more}"[:500])
         want = conv_version(self.conv, name)
         if got["result"].get("conv") != want:
-            raise RuntimeError(f"ROSE converter version mismatch (build process {got['result'].get('conv')}, companion "
+            raise RuntimeError(f"{self.fl.label} converter version mismatch (build process {got['result'].get('conv')}, companion "
                                f"{want}): restart the companion")
         return got["result"].get("result") or {}
 
     def _build_one(self, cur, install, fp, gen):
         name = cur["name"]
-        out = pack_path(self.rose_dir, name)
+        out = pack_path(self.rose_dir, name, **self._fk)
         result, err, cancelled = None, None, False
         try:
             os.makedirs(self.rose_dir, exist_ok=True)
@@ -1000,9 +1064,9 @@ class Manager:
             else:
                 res = self.conv.build(name, install, out, progress=lambda s, f: self._progress(cur, s, f),
                                       cancel=cur["cancel"].is_set)
-            size = rose.validate(out)
+            size = self.fl.mod.validate(out)
             secs = round(time.monotonic() - cur["t0"], 1)
-            write_sidecar(self.rose_dir, name, {"conv": conv_version(self.conv, name), "install": fp, "bytes": size,
+            write_sidecar(self.rose_dir, name, **self._fk, data={"conv": conv_version(self.conv, name), "install": fp, "bytes": size,
                                                 "built": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
                                                 "seconds": secs,
                                                 "warnings": list((res or {}).get("warnings") or [])[:20]
@@ -1033,7 +1097,7 @@ class Manager:
                 if gen == self.gen:
                     self.failed[name] = {"t": time.monotonic(), "fp": fp, "conv": conv_version(self.conv, name), "err": err}
                 if cur["kind"] == "demand":
-                    notify = {"state": "error", "size": 0, "path": None, "error": f"ROSE build of {name} failed: {err}"}
+                    notify = {"state": "error", "size": 0, "path": None, "error": f"{self.fl.label} build of {name} failed: {err}"}
             else:
                 self.forced.discard(name)
                 self.failed.pop(name, None)
@@ -1043,16 +1107,16 @@ class Manager:
             self.cv.notify_all()
         if cancelled:
             by = cur["preempted_by"]
-            self.log(f"[rose] build {name} cancelled" + (f" (pre-empted by {by}, requeued)" if by and cur["requeue"] else ""))
+            self.log(f"[{self.fl.tag}] build {name} cancelled" + (f" (pre-empted by {by}, requeued)" if by and cur["requeue"] else ""))
         elif err is not None:
-            self.log(f"[rose] build {name} failed: {err}")
+            self.log(f"[{self.fl.tag}] build {name} failed: {err}")
         else:
-            self.log(f"[rose] build {name} done in {result:.0f} s")
+            self.log(f"[{self.fl.tag}] build {name} done in {result:.0f} s")
         try:
             if pb_gen is not None:
                 self._prebuild(pb_gen)
             if notify == "ready":
-                self._notify(name, rose.prepare(self.rose_dir, name))
+                self._notify(name, self.fl.mod.prepare(self.rose_dir, name))
             elif notify:
                 self._notify(name, notify)
         finally:

@@ -27,8 +27,9 @@ class Catalog(unittest.TestCase):
 
     def test_japanese_is_japanese(self):
         jp = re.compile(r"[぀-ヿ一-鿿]")
-        same_ok = {"game.cstrike", "game.valve", "game.svencoop", "game.gearbox", "game.war3", "row.rose", "w.name.rose", "w.name.cs",
-                   "w.name.sven", "how.steam", "how.steam-manifest", "how.none", "fr.game_pct", "tab.log", "g.ok"}
+        same_ok = {"game.cstrike", "game.valve", "game.svencoop", "game.gearbox", "game.war3", "row.rose", "w.name.rose", "w.name.ro", "w.name.cs",
+                   "w.name.sven", "how.steam", "how.steam-manifest", "how.none", "fr.game_pct", "tab.log", "g.ok",
+                   "cl.wname.rose", "cl.wname.hl", "cl.wname.cs", "cl.wname.war3", "cl.short.rose", "cl.short.cs", "cl.short.war3"}
         for k, v in i18n.CATALOG.items():
             if k not in same_ok:
                 self.assertTrue(jp.search(v[2]), "ja text of %s has no Japanese: %r" % (k, v[2]))

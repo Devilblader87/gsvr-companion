@@ -21,21 +21,24 @@ import collections, json, os, queue, shutil, socket, subprocess, sys, threading,
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                            # -I drops the script dir from sys.path
-import cachedir, companion, firstrun, firstrun_ui, games, i18n, logwatch, modules, rosefind, runtime, steam, updater, updsched, worlds                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
+import cachedir, companion, firstrun, firstrun_ui, games, tray as tray_mod, i18n, ui_theme, logwatch, modules, rofind, rosefind, runtime, steam, updater, updsched, worlds                                 # noqa: E402  (PORT_CANDIDATES, APP, default cache)
 from i18n import tr                                                                   # noqa: E402
+import worlds as worlds_mod                                                          # noqa: E402  (argv: the local name worlds is the settings string)
 from version import DEFAULT_UPDATE_BASE, REPO_NAME, REPO_OWNER, VERSION                    # noqa: E402
 
 REPO = os.path.dirname(HERE)                                        # source checkout root (test data in work/)
 DEFAULT_WORLDS = "wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb"
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0          # CREATE_NO_WINDOW
 STATUS_TIMEOUT_S = 3.0      # status.json poll timeout (was 1 s: a busy companion flipped the headline to "Starting")
+GIL_SWITCH_S = 0.001        # GUI process: hand the GIL back to the Tk thread quickly (see run_gui)
 STATUS_MISSES_MAX = 3       # this many failed polls in a row before the last good status is dropped ("Starting")
 DEFAULT_SETTINGS = {"worlds": DEFAULT_WORLDS, "extra": "", "war3_root": "", "war3_maps": "", "hl_root": "",
                     "relay_url": "https://w3relay.heimserver.me", "map_autodownload": "on",
                     "update_base": DEFAULT_UPDATE_BASE, "update_token": "",
-                    "auto_update_check": True, "prereleases": True, "auto_start": True,
-                    "cache_dir": "", "rose_install": "", "vrchat_log_dir": "",
+                    "auto_update_check": True, "tray_hint_shown": False, "prereleases": True, "auto_start": True,
+                    "cache_dir": "", "rose_install": "", "ro_install": "", "vrchat_log_dir": "",
                     "lang": "auto", "first_run_done": False, "view": "simple"}                             # "" = default cache folder
+# "view" is kept for old gui.json files only: the window ALWAYS opens in the simple view (firstrun.start_view)
 
 
 def settings_path():
@@ -105,6 +108,7 @@ class Controller:
         self.update_info = None          # last updater.check_for_update() result
         self.update_error = None
         self._tail = collections.deque(maxlen=40)
+        self._start_lock = threading.Lock()   # start() runs off the Tk thread (argv() may fetch the world list, Popen is slow on Windows)
         self.fresh_install = not os.path.isfile(settings_path())     # no gui.json yet = first start on this PC -> first-run screen
         self.load_settings()
 
@@ -155,7 +159,9 @@ class Controller:
     def argv(self):
         a = runtime.companion_argv()
         worlds = self.settings.get("worlds", "").strip().replace(" ", "")
-        extra_w = [w for w in self.official_worlds() if w not in worlds.split(",")]
+        # built-in worlds.py ids too (the private RO test world is not in the public worlds.txt)
+        builtin = [v[0] for v in worlds_mod.WORLDS.values()]
+        extra_w = list(dict.fromkeys(w for w in list(self.official_worlds()) + builtin if w not in worlds.split(",")))
         if extra_w:
             worlds = ",".join([w for w in worlds.split(",") if w] + extra_w)
         if worlds:
@@ -174,6 +180,9 @@ class Controller:
         rose = self.settings.get("rose_install", "").strip()        # ROSE: own install folder (empty = auto-detect)
         if rose:
             a += ["--rose-install", rose]
+        ro = self.settings.get("ro_install", "").strip()            # Ragnarok Online: own client folder with data.grf (empty = auto-detect)
+        if ro:
+            a += ["--ro-install", ro]
         relay = self.settings.get("relay_url", "").strip()          # MAP-RELAY: empty = feature off
         if relay:
             a += ["--relay-url", relay]
@@ -194,6 +203,27 @@ class Controller:
         return env
 
     def start(self):
+        lock = getattr(self, "_start_lock", None)
+        if lock is None:
+            return self._start()
+        with lock:                                   # two background starts (button + auto start) must not spawn two companions
+            return self._start()
+
+    def shutdown(self):
+        """quit / restart: wait for a start in flight (background thread), then stop; no later start may spawn an orphan companion"""
+        lock = getattr(self, "_start_lock", None)
+        if lock is None:
+            self.closing = True
+            return self.stop()
+        with lock:
+            self.closing = True
+            return self.stop()
+
+    closing = False
+
+    def _start(self):
+        if self.closing:
+            return False
         if self.running():
             self.log("[gui] companion already running (pid %d)" % self.proc.pid)
             return False
@@ -322,9 +352,17 @@ class Controller:
         except OSError:
             return None, None
         try:
-            req = urllib.request.Request("http://127.0.0.1:%d/status.json" % port, headers={"Host": "127.0.0.1"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                d = json.loads(r.read(1 << 20).decode("utf-8"))
+            d = None
+            for path in ("/gui/status.json", "/status.json"):    # GUI route (full, with paths); 404 / 403 = an older companion
+                req = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path),
+                                             headers={"Host": "127.0.0.1", companion.GUI_HEADER: "1"})   # not world contact
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as r:
+                        d = json.loads(r.read(1 << 20).decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code not in (403, 404) or path == "/status.json":   # older companion: 403 "world not allowed" outside an allowed world
+                        raise
         except urllib.error.HTTPError:
             return "foreign", None
         except socket.timeout:
@@ -383,6 +421,10 @@ class Controller:
                 return r.status == 200
         except OSError:
             return False
+
+    def ro_post(self, path):
+        """Ragnarok build control in the running companion (POST /ro/install?dir=... | /ro/build_all | /ro/cancel; same header as rose_post)"""
+        return self.rose_post(path)
 
     def rose_post(self, path):
         """ROSE build control in the running companion (POST /rose/install?dir=... | /rose/build_all; custom header = no CSRF
@@ -606,28 +648,68 @@ def describe(st, foreign=()):
 
 
 # ===================================================================================================== GUI
-def run_gui():
+def restart_argv(argv, advanced):
+    """argv of the restarted GUI: a one-shot '--advanced' only when the player was in / asked for the Advanced view"""
+    argv = [a for a in argv if a != "--advanced"]
+    return argv + ["--advanced"] if advanced else argv
+
+
+def run_gui(sim=None):
+    """sim = gui_sim.Sim (demo / screenshots / timing harness): simulated controller, games, VRChat, no tray, no network"""
     import tkinter as tk
     from tkinter import ttk, messagebox, filedialog
     from tkinter import font as tkfont
+    demo = os.environ.get("GSVR_UI_DEMO")
+    if demo and sim is None:
+        if demo.startswith("advanced") or demo == "simple":    # the whole window (both views) with simulated inputs
+            import gui_sim
+            sim = gui_sim.Sim(os.environ.get("GSVR_LANG", "en"), view="advanced" if demo.startswith("advanced") else "simple",
+                              tab=os.environ.get("GSVR_UI_TAB", "worlds"), shot=os.environ.get("GSVR_UI_SHOT") or None)
+        else:                                          # simple view states only: no settings, folders or network
+            firstrun_ui.run_demo(demo, os.environ.get("GSVR_LANG", "en"), os.environ.get("GSVR_UI_SHOT") or None)
+            return
 
-    c = Controller()
-    i18n.set_lang(os.environ.get("GSVR_LANG") or i18n.resolve(c.settings.get("lang", "auto")))
-    threading.Thread(target=lambda: updater.cleanup_old(retries=20), daemon=True).start()   # *.gsvr-old of the last update
+    # Tk releases the GIL on every Tcl call and must win it back from the background scans (drive walk, Steam libraries, status
+    # polls): with the default 5 ms switch interval one redraw of ~40 Tcl calls took 200+ ms while a scan ran = the window lagged
+    # while dragged until the games were found. 1 ms keeps the main thread responsive; the scans barely slow down.
+    sys.setswitchinterval(GIL_SWITCH_S)
+    c = sim.controller if sim else Controller()
+    i18n.set_lang((sim.lang if sim else None) or os.environ.get("GSVR_LANG") or i18n.resolve(c.settings.get("lang", "auto")))
+    if not sim:
+        threading.Thread(target=lambda: updater.cleanup_old(retries=20), daemon=True).start()   # *.gsvr-old of the last update
+        threading.Thread(target=c.official_worlds, daemon=True).start()   # the (existing) world-list fetch, never on the Tk thread
+    firstrun_ui.dpi_aware()                            # Windows: sharp text at 125-200 % (must run before the first Tk())
     root = tk.Tk()
+    ui_theme.set_window_icon(root)
+    if sim:
+        sim.attach(root)
+    C = ui_theme.COL
+    root_bg = C["bg"]
+    root.configure(bg=root_bg)
     root.title("GSVR Companion %s" % VERSION)
-    root.geometry("780x520")
+    ui_theme.dark_title_bar(root)                      # Windows: dark caption in our palette (simple + Advanced view share this window)
+    sc = min(3.0, max(1.0, ui_theme.scale(root)))      # the Advanced view's start size follows the display scaling (fonts do already)
+    PX = lambda n: ui_theme.px(root, n)                # noqa: E731
+    root.geometry("%dx%d" % (min(int(820 * sc), max(620, root.winfo_screenwidth() - 40)),
+                             min(int(560 * sc), max(420, root.winfo_screenheight() - 110))))
     root.minsize(620, 420)
-    UIF = i18n.pick_font(tkfont.families(root), i18n.lang()) or "Segoe UI"       # Segoe UI has no Japanese glyphs
+    UIF = ui_theme.family(root) or "Segoe UI"          # Segoe UI has no Japanese glyphs; cached (enumerating fonts is slow on Windows)
     for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkTooltipFont"):
         try:
             tkfont.nametofont(fname).configure(family=UIF)
         except tk.TclError:
             pass
+    ui_theme.apply_ttk(root, UIF)                      # the Advanced view in the same dark design system as the simple view
+    MUTED, BAD, MONO = C["muted"], C["bad"], ui_theme.mono(root)
     ui_q = queue.Queue()                 # Tk may only be touched from the main thread → background results go here
 
     def bg(fn):                          # run blocking actions off the UI thread
         threading.Thread(target=fn, daemon=True).start()
+
+    def start_bg():
+        """start the companion off the Tk thread: argv() may fetch the world list (first call) and Popen takes 50-500 ms on Windows
+        (virus scan) - on the Tk thread that froze the window while it was dragged in the first seconds"""
+        bg(lambda: (c.start(), ui_q.put(("refresh", None))))
 
     def scrollable(tab_title, padding):
         """Add a scrollable tab to the notebook: Canvas + vertical Scrollbar + inner Frame (width follows the canvas).
@@ -689,34 +771,36 @@ def run_gui():
         return inner
 
     # ---- top: big Start/Stop + headline ----
-    top = ttk.Frame(root, padding=(10, 10, 10, 4))
+    top = ttk.Frame(root, padding=(PX(16), PX(14), PX(16), PX(10)))
     top.pack(fill="x")
-    btn_toggle = tk.Button(top, text=tr("m.start"), width=9, font=(UIF, 16, "bold"))
+    btn_toggle = ttk.Button(top, text=tr("m.start"), width=9, style="Primary.TButton")
     btn_toggle.pack(side="left")
-    lamp = tk.Label(top, text="●", fg="grey", font=(UIF, 22))
-    lamp.pack(side="left", padx=(14, 4))
-    head_lbl = tk.Label(top, text=tr("head.stopped"), font=(UIF, 13), anchor="w")
+    lamp = tk.Label(top, text="\u25cf", fg=ui_theme.LIGHTS["grey"], bg=root_bg, font=(UIF, 20))
+    lamp.pack(side="left", padx=(PX(14), PX(4)))
+    head_lbl = tk.Label(top, text=tr("head.stopped"), font=(UIF, 13, "bold"), anchor="w", bg=root_bg, fg=C["text"])
     head_lbl.pack(side="left", fill="x", expand=True)
     lang_var = tk.StringVar(value=i18n.LANG_NAMES[i18n.lang()])
     lang_cb = ttk.Combobox(top, textvariable=lang_var, values=[i18n.LANG_NAMES[l] for l in i18n.LANGS], state="readonly", width=9)
     lang_cb.pack(side="right")
-    ttk.Label(top, text=tr("m.language") + ": ").pack(side="right")
-    btn_easy = ttk.Button(top, text=tr("fr.easy"))
-    btn_easy.pack(side="right", padx=(0, 12))
+    ttk.Label(top, text=tr("m.language") + ": ", style="Muted.TLabel").pack(side="right")
+    btn_easy = ttk.Button(top, text=tr("fr.easy"), style="Link.TButton")     # back to the simple view
+    btn_easy.pack(side="right", padx=(0, PX(14)))
+    top_line = tk.Frame(root, bg=C["line"], height=1)
 
     # ---- update banner (hidden until an update is found) ----
-    banner = tk.Frame(root, background="#fff4c2", padx=10, pady=6)
-    banner_lbl = tk.Label(banner, text="", background="#fff4c2", anchor="w", justify="left")
+    banner = tk.Frame(root, background=C["panel"], padx=PX(12), pady=PX(7), highlightthickness=1, highlightbackground=C["line"])
+    banner_lbl = tk.Label(banner, text="", background=C["panel"], foreground=C["text"], anchor="w", justify="left", font=(UIF, 10))
     banner_lbl.pack(side="left", fill="x", expand=True)
     btn_install = ttk.Button(banner, text=tr("d.install"))
     btn_install.pack(side="right")
 
     # ---- build progress (hidden while idle): one bar per running converter job (status.json "build") ----
-    prog_frame = ttk.Frame(root, padding=(10, 2, 10, 2))
+    prog_frame = ttk.Frame(root, padding=(PX(10), PX(4), PX(10), PX(2)))
     prog_widgets = []                                        # (label, bar, pct/eta label)
 
     nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+    top_line.pack(fill="x")
+    nb.pack(fill="both", expand=True, padx=PX(12), pady=(PX(8), PX(12)))
 
     def show_build(rows):
         while len(prog_widgets) < len(rows):
@@ -748,8 +832,8 @@ def run_gui():
             prog_frame.pack_forget()
 
     # ---- Worlds tab: one row per GSVR world (traffic light, state, Open world, Help + a one-line hint) ----
-    wd_tab = scrollable(tr("tab.worlds"), 10)
-    ttk.Label(wd_tab, text=tr("w.title"), font=(UIF, 14, "bold")).grid(row=0, column=0, sticky="w")
+    wd_tab = scrollable(tr("tab.worlds"), PX(14))
+    ttk.Label(wd_tab, text=tr("w.title"), style="Head.TLabel").grid(row=0, column=0, sticky="w")
     wd_frame = ttk.Frame(wd_tab)
     wd_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
     wd_tab.columnconfigure(0, weight=1)
@@ -758,43 +842,48 @@ def run_gui():
     def worlds_draw(st=None):
         st = st if st is not None else last_status.get("st")
         gs = (gm_state.get("val") or ([], False))[0]
-        rows = firstrun.world_rows(firstrun.entries_from_view(gs, rose_found["path"]), st, c.running())
-        sig = [(r["key"], r["light"], r["state"], r["hint"], r["can_open"]) for r in rows]
+        rows = firstrun.world_rows(firstrun.entries_from_view(gs, rose_found["path"], ro_found["path"]), st, c.running())
+        sig = [(r["key"], r["light"], r["state"], r["hint"], r["can_open"], r["can_rebuild"]) for r in rows]
         if sig == wd_state["sig"]:
             return
         wd_state["sig"] = sig
         for w in wd_frame.winfo_children():
             w.destroy()
-        for i, r in enumerate(rows):
-            cell = ttk.Frame(wd_frame)
-            cell.grid(row=i, column=0, sticky="we", pady=6)
+        for i, r in enumerate(rows):                         # one dark card per world (same panel/line colours as the simple view)
+            card = tk.Frame(wd_frame, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"], highlightcolor=C["line"])
+            card.grid(row=i, column=0, sticky="we", pady=(0, PX(8)))
+            cell = ttk.Frame(card, style="Panel.TFrame", padding=(PX(12), PX(10)))
+            cell.pack(fill="x")
             wd_frame.columnconfigure(0, weight=1)
-            tk.Label(cell, text="\u25cf", fg=firstrun_ui.LIGHTS[r["light"]], font=(UIF, 20)).grid(row=0, column=0, rowspan=2, padx=(0, 8))
-            ttk.Label(cell, text=r["name"], font=(UIF, 11, "bold")).grid(row=0, column=1, sticky="w")
-            ttk.Label(cell, text=r["state"]).grid(row=0, column=2, sticky="w", padx=12)
-            bf = ttk.Frame(cell)
+            tk.Label(cell, text="\u25cf", fg=ui_theme.LIGHTS[r["light"]], bg=C["panel"], font=(UIF, 18)).grid(
+                row=0, column=0, rowspan=2, padx=(0, PX(10)), sticky="n")
+            ttk.Label(cell, text=r["name"], style="PanelName.TLabel", wraplength=PX(330), justify="left").grid(row=0, column=1, sticky="w")
+            ttk.Label(cell, text=r["state"], style="Panel.TLabel").grid(row=0, column=2, sticky="w", padx=PX(12))
+            bf = ttk.Frame(cell, style="Panel.TFrame")
             bf.grid(row=0, column=3, sticky="e")
             cell.columnconfigure(2, weight=1)
             if r["can_open"]:
                 ttk.Button(bf, text=tr("w.open"), command=lambda u=r["url"]: firstrun_ui.open_world(root, u)).pack(side="left")
                 ttk.Button(bf, text=tr("fr.copy_link"), command=lambda u=r["url"]: firstrun_ui.copy_to_clipboard(root, u)).pack(side="left", padx=4)
+            if r["can_rebuild"]:
+                ttk.Button(bf, text=tr("w.rebuild"), command=lambda p=r["rebuild"]: bg(lambda: c.rose_post(p))).pack(side="left", padx=(0, 4))
             if r["help"]:
                 ttk.Button(bf, text=tr("w.help"), command=lambda k=r["help"]: firstrun_ui.help_dialog(root, k)).pack(side="left")
-            ttk.Label(cell, text=r["hint"], foreground="#555" if r["light"] != "red" else "#a00", wraplength=620,
-                      justify="left").grid(row=1, column=1, columnspan=3, sticky="w")
+            ttk.Label(cell, text=r["hint"], style="PanelMuted.TLabel" if r["light"] != "red" else "PanelBad.TLabel", wraplength=PX(620),
+                      justify="left").grid(row=1, column=1, columnspan=3, sticky="w", pady=(PX(2), 0))
 
     # ---- Status tab ----
-    st_tab = scrollable(tr("tab.status"), 10)
-    fatal_lbl = tk.Label(st_tab, text="", fg="#c00000", justify="left", anchor="w", font=("Consolas", 9, "bold"))
+    st_tab = scrollable(tr("tab.status"), PX(14))
+    fatal_lbl = tk.Label(st_tab, text="", fg=BAD, bg=root_bg, justify="left", anchor="w", font=(MONO, 9, "bold"))
     fatal_lbl.grid(row=0, column=0, columnspan=2, sticky="we")
     rows_frame = ttk.Frame(st_tab)
     rows_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
     row_widgets = []
     ttk.Label(st_tab, text=tr("m.vrc_hint"),
-              foreground="#555").grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+              foreground=MUTED).grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
     st_upd = ttk.Frame(st_tab)                               # always visible (the Settings tab can be taller than the window)
     st_upd.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
-    ttk.Label(st_upd, text=tr("m.version", v=VERSION), foreground="#555").pack(side="left", padx=(0, 10))
+    ttk.Label(st_upd, text=tr("m.version", v=VERSION), foreground=MUTED).pack(side="left", padx=(0, 10))
     st_btn_check = ttk.Button(st_upd, text=tr("m.check_updates"), command=lambda: check_now())
     st_btn_check.pack(side="left")
     st_tab.columnconfigure(0, weight=1)
@@ -817,20 +906,20 @@ def run_gui():
                 v.configure(text="")
 
     # ---- Spiele tab (GAME-FOLDERS): game | folder | source | Aendern... / Zuruecksetzen ----
-    gm_tab = scrollable(tr("tab.games"), 8)
+    gm_tab = scrollable(tr("tab.games"), PX(14))
     gm_tab_scroll = gm_tab.scroll_bar
     #                                   # 2nd tab (Status first); insert(1, …) needs an existing tab 1
     gm_frame = ttk.Frame(gm_tab)
     gm_frame.grid(row=0, column=0, sticky="nsew")
-    gm_note = ttk.Label(gm_tab, text="", foreground="#555", wraplength=700, justify="left")
+    gm_note = ttk.Label(gm_tab, text="", foreground=MUTED, wraplength=700, justify="left")
     gm_note.grid(row=1, column=0, sticky="w", pady=(8, 0))
     ttk.Label(gm_tab, text=tr("g.legal"),
-              foreground="#555", wraplength=700, justify="left").grid(row=2, column=0, sticky="w", pady=(4, 0))
+              foreground=MUTED, wraplength=700, justify="left").grid(row=2, column=0, sticky="w", pady=(4, 0))
     gm_tab.columnconfigure(0, weight=1)
 
     # ---- game modules (modules.py, docs/design/companion_modules.md): version / update / rollback per module; off by default ----
-    mod_box = ttk.LabelFrame(gm_tab, text="Module (experimentell)", padding=6)
-    mod_box.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+    mod_box = ttk.LabelFrame(gm_tab, text="Module (experimentell)", padding=PX(10))
+    mod_box.grid(row=4, column=0, sticky="ew", pady=(12, 0))          # below the folder box (both sat on row 3)
     mod_on = tk.BooleanVar(value=modules.enabled())
     mod_info = {"avail": {}, "msg": ""}
 
@@ -895,9 +984,9 @@ def run_gui():
             ttk.Button(bf, text="Zur\u00fcck auf %s" % (r["previous"] or "-"), command=lambda n=r["name"]: mod_work("rollback", n),
                        state="normal" if r["can_rollback"] else "disabled").pack(side="left", padx=(4, 0))
             if r["error"]:
-                ttk.Label(mod_box, text="eingebaute/vorherige Version aktiv: " + r["error"], foreground="#a00", wraplength=620,
+                ttk.Label(mod_box, text="eingebaute/vorherige Version aktiv: " + r["error"], foreground=BAD, wraplength=620,
                           justify="left").grid(row=i + 1, column=0, columnspan=6, sticky="w")
-        ttk.Label(mod_box, text=mod_info["msg"], foreground="#555").grid(row=99, column=0, columnspan=6, sticky="w", pady=(4, 0))
+        ttk.Label(mod_box, text=mod_info["msg"], foreground=MUTED).grid(row=99, column=0, columnspan=6, sticky="w", pady=(4, 0))
     mod_draw()
     gm_state = {"rows": None, "val": None}
     ROSE_HOW = {"registry": "registry", "steam": "steam", "common folder": "common", "drive scan": "scan", "configured": "configured"}
@@ -927,6 +1016,84 @@ def run_gui():
         rose_set("")
         rose_detect()
 
+    # ---- Ragnarok Online row (iRO client folder with data.grf; same flow as the ROSE row, own setting ro_install) ----
+    ro_found = {"path": "", "how": "", "busy": False, "gen": 0}     # gen: a scan started before a folder pick must not undo the pick
+
+    def ro_row():
+        if ro_found["path"]:
+            return ("ro", tr("game.ro"), ro_found["path"], firstrun.how_text(ROSE_HOW.get(ro_found["how"], "none")), True)
+        if ro_found["busy"]:
+            return ("ro", tr("game.ro"), tr("g.searching"), "-", True)
+        typed = c.settings.get("ro_install", "").strip()
+        if typed:
+            return ("ro", tr("game.ro"), tr("g.ro_invalid", p=typed), firstrun.how_text("configured"), False)
+        return ("ro", tr("game.ro"), tr("g.hint_ro"), "-", False)
+
+    def ro_apply(path):
+        bg(lambda: c.ro_post("/ro/install?dir=" + urllib.parse.quote(path or "")))
+
+    def ro_set(path):
+        c.settings.update(ro_install=path)
+        try:
+            c.save_settings()
+        except OSError as e:
+            c.log("[gui] could not save settings: %s" % e)
+        if c.running():
+            ro_apply(path)
+        ro_found.update(path="", how="")
+
+    def ro_redraw(ask=True):
+        """the Spiele table + the Worlds tab follow the RO row at once (owner 2026-11-25: a picked folder only showed up after a
+        second search); without a games list yet, ask for one (it draws both)"""
+        gm_state["rows"] = None
+        wd_state["sig"] = None
+        if gm_state["val"] is not None:
+            show_games(gm_state["val"])
+        elif ask:
+            bg(lambda st=last_status.get("st"): ui_q.put(("games", c.games_view(st))))
+
+    def ro_detect():
+        ro_found["gen"] += 1
+        ro_found["busy"] = True
+        gen = ro_found["gen"]
+        ro_redraw(ask=False)                           # 'Searching ...' now, not the old row until the slow drive scan is over
+
+        def work():
+            ui_q.put(("ro_found", (gen, rofind.find(configured=c.settings.get("ro_install", "").strip() or None, with_reasons=True))))
+        bg(work)
+
+    def ro_picked(d):
+        """a checked folder pick: saved, sent to the running companion and shown in the row NOW - no rescan (the drive scan of
+        rofind.find takes seconds and used to keep the old row until it was over)"""
+        ro_set(d)
+        ro_found["gen"] += 1                           # a scan still running from before the pick is ignored
+        ro_found.update(path=d, how="configured", busy=False)
+        ro_redraw()
+
+    def ro_change():
+        d = filedialog.askdirectory(initialdir=c.settings.get("ro_install", "") or None, title=tr("fr.pick_title", game=tr("game.ro")))
+        if not d:
+            return
+
+        def work():
+            ok, why = rofind.check(d)
+            if not ok:                                     # the pick may be the parent of the client folder
+                for q in rofind.rosefind.child_dirs(d):
+                    ok2, _w = rofind.check(q)
+                    if ok2:
+                        d2, ok, why = q, True, ""
+                        break
+                else:
+                    d2 = d
+            else:
+                d2 = d
+            ui_q.put(("ro_picked", (d2, ok, why)))
+        bg(work)
+
+    def ro_reset():
+        ro_set("")
+        ro_detect()
+
     def game_changed(gid, path):
         key = c.set_game_folder(gid, path)
         (war3_var if key == "war3_root" else hl_var).set(path or "")
@@ -944,7 +1111,7 @@ def run_gui():
         gm_state["val"] = val
         worlds_draw()
         gs, live = val
-        rows = game_rows(gs) + [rose_row()]
+        rows = game_rows(gs) + [rose_row(), ro_row()]
         if rows == gm_state["rows"]:
             return
         gm_state["rows"] = rows
@@ -955,11 +1122,11 @@ def run_gui():
         for i, (gid, name, folder, src, found) in enumerate(rows, 1):
             ttk.Label(gm_frame, text=name).grid(row=i, column=0, sticky="nw", padx=(0, 10), pady=2)
             ttk.Label(gm_frame, text=folder, wraplength=330, justify="left",
-                      foreground="" if found else "#a00").grid(row=i, column=1, sticky="nw", padx=(0, 10), pady=2)
+                      foreground=C["text"] if found else BAD).grid(row=i, column=1, sticky="nw", padx=(0, 10), pady=2)
             ttk.Label(gm_frame, text=src).grid(row=i, column=2, sticky="nw", padx=(0, 10), pady=2)
             bf = ttk.Frame(gm_frame)
             bf.grid(row=i, column=3, sticky="ne", pady=2)
-            chg, rst = ((rose_change, rose_reset) if gid == "rose" else
+            chg, rst = ((rose_change, rose_reset) if gid == "rose" else (ro_change, ro_reset) if gid == "ro" else
                         ((lambda g=gid: game_change(g)), (lambda g=gid: game_changed(g, ""))))
             ttk.Button(bf, text=tr("g.change"), command=chg).pack(side="left")
             ttk.Button(bf, text=tr("g.reset"), command=rst).pack(side="left", padx=(4, 0))
@@ -968,7 +1135,7 @@ def run_gui():
     # ---- Log tab ----
     log_tab = ttk.Frame(nb, padding=4)
     nb.add(log_tab, text=tr("tab.log"))
-    log_txt = tk.Text(log_tab, wrap="none", font=("Consolas", 9))
+    log_txt = ui_theme.style_text(tk.Text(log_tab, wrap="none", font=(MONO, 9), padx=PX(6), pady=PX(4)))
     ys = ttk.Scrollbar(log_tab, orient="vertical", command=log_txt.yview)
     log_txt.configure(yscrollcommand=ys.set)
     log_txt.grid(row=0, column=0, sticky="nsew")
@@ -985,7 +1152,7 @@ def run_gui():
     ttk.Button(lb, text=tr("s.clear"), command=lambda: log_txt.delete("1.0", "end")).pack(side="left", padx=3)
 
     # ---- Settings tab ----
-    se = scrollable(tr("tab.settings"), 10)
+    se = scrollable(tr("tab.settings"), PX(14))
     worlds_var = tk.StringVar(value=c.settings.get("worlds", ""))
     extra_var = tk.StringVar(value=c.settings.get("extra", ""))
     base_var = tk.StringVar(value=c.settings.get("update_base", DEFAULT_UPDATE_BASE))
@@ -998,7 +1165,7 @@ def run_gui():
     rose_var = tk.StringVar(value=c.settings.get("rose_install", ""))
     vlog_var = tk.StringVar(value=c.settings.get("vrchat_log_dir", ""))
     # GAME-FOLDERS (maintainer 2026-10-29): folder settings live only on the Spiele tab, not on Settings
-    gx = ttk.LabelFrame(gm_tab, text=tr("g.manual_box"), padding=8)
+    gx = ttk.LabelFrame(gm_tab, text=tr("g.manual_box"), padding=PX(10))
     gx.grid(row=3, column=0, sticky="we", pady=(10, 0))
     gx.columnconfigure(0, weight=1)
     r = 0
@@ -1009,7 +1176,7 @@ def run_gui():
     ttk.Button(gx, text=tr("g.browse"), command=lambda: hl_var.set(filedialog.askdirectory(initialdir=hl_var.get() or None) or hl_var.get())
                ).grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
     hl_lbl = ttk.Label(gx, text="",
-                       foreground="#555", wraplength=640, justify="left")
+                       foreground=MUTED, wraplength=640, justify="left")
     hl_lbl.grid(row=r + 2, column=0, columnspan=2, sticky="w")
 
     def hl_validate(*_):
@@ -1026,7 +1193,7 @@ def run_gui():
             ui_q.put(("hl_found", cands))
         bg(work)
     ttk.Button(gx, text=tr("g.search"), command=hl_search).grid(row=r + 2, column=2, sticky="w", padx=(6, 0))
-    hl_list = tk.Listbox(gx, height=3, width=70)
+    hl_list = ui_theme.style_text(tk.Listbox(gx, height=3, width=70, font=(UIF, 10)))
     hl_list.grid(row=r + 3, column=0, columnspan=2, sticky="we")
     hl_items = []
 
@@ -1046,7 +1213,7 @@ def run_gui():
         ttk.Button(gx, text=tr("g.browse"), command=lambda v=var: v.set(filedialog.askdirectory(initialdir=v.get() or None) or v.get())
                    ).grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
         r += 2
-    w3_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
+    w3_lbl = ttk.Label(gx, text="", foreground=MUTED, wraplength=640, justify="left")
     w3_lbl.grid(row=r, column=0, columnspan=2, sticky="w")
 
     def war3_detect():
@@ -1063,7 +1230,7 @@ def run_gui():
     rose_ent.bind("<Return>", lambda _e: (remember(), rose_show()))      # Enter = save the typed folder (and tell the companion)
     rose_btns = ttk.Frame(gx)
     rose_btns.grid(row=r + 1, column=2, sticky="w", padx=(6, 0))
-    rose_lbl = ttk.Label(gx, text="", foreground="#555", wraplength=640, justify="left")
+    rose_lbl = ttk.Label(gx, text="", foreground=MUTED, wraplength=640, justify="left")
     rose_lbl.grid(row=r + 2, column=0, columnspan=2, sticky="w")
     # VRChat log folder (Linux/Proton/Steam Deck): empty = auto-detect; set = used as-is
     ttk.Label(gx, text=tr("g.vlog_label")
@@ -1136,7 +1303,8 @@ def run_gui():
         rose_redraw()
 
         def work():
-            ui_q.put(("rose_found", rosefind.find(configured=rose_var.get().strip() or None, with_reasons=True)))
+            find = sim.rose_find if sim else rosefind.find
+            ui_q.put(("rose_found", find(configured=rose_var.get().strip() or None, with_reasons=True)))
         bg(work)
 
     def rose_browse():
@@ -1197,11 +1365,11 @@ def run_gui():
     btn_clear = ttk.Button(sb, text=tr("s.clear_cache"))
     for b in (btn_check, btn_cache, btn_clear):
         b.pack(side="left", padx=(0, 6))
-    upd_lbl = ttk.Label(se, text="", foreground="#555", wraplength=640, justify="left")
+    upd_lbl = ttk.Label(se, text="", foreground=MUTED, wraplength=640, justify="left")
     upd_lbl.grid(row=r + 5, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Label(se, text="Version %s · %s install (%s) · %s" % (VERSION, runtime.install_kind(), updater.platform_key(),
                                                               runtime.install_root()),
-              foreground="#555").grid(row=r + 6, column=0, columnspan=3, sticky="w", pady=(12, 0))
+              foreground=MUTED).grid(row=r + 6, column=0, columnspan=3, sticky="w", pady=(12, 0))
     se.columnconfigure(0, weight=1)
 
     rose_sent = {"v": c.settings.get("rose_install", "").strip()}     # the ROSE folder the running companion knows
@@ -1241,15 +1409,15 @@ def run_gui():
             bg(lambda: (c.stop(), ui_q.put(("refresh", None))))
             return
         remember()
-        c.start()
+        btn_toggle.configure(state="disabled")                 # until the background start reports back ("refresh")
+        start_bg()
         nb.select(getattr(st_tab, "tab", st_tab))
-        refresh_buttons()
     btn_toggle.configure(command=toggle)
 
     def refresh_buttons():
         run = c.running()
         btn_toggle.configure(state="disabled" if installing.is_set() or cache_busy.is_set() else "normal", text=tr("m.stop") if run else tr("m.start"),
-                             fg="#a00000" if run else "#006000")
+                             style="Stop.TButton" if run else "Primary.TButton")
 
     sched = updsched.Scheduler(time.time())          # periodic / on-restore re-checks (updsched.py); the startup check below is the first
 
@@ -1359,14 +1527,18 @@ def run_gui():
     btn_clear.configure(command=clear_cache)
 
     # ---- language switch (the whole window is built with one language: restart the app) and first run ----
-    def restart_app():
+    def restart_app(advanced=False):
+        """advanced=True: the new process opens the Advanced view (--advanced), because the player was in it / just asked for it;
+        the plain start is always the simple view"""
         argv = [sys.executable] + (sys.argv[1:] if runtime.FROZEN else sys.argv)
+        argv = restart_argv(argv, advanced)
         try:
-            c.stop()
+            c.shutdown()
             subprocess.Popen(argv, cwd=runtime.install_root(), creationflags=NO_WINDOW)
         except OSError as e:
             c.log("[gui] restart failed: %s" % e)
             return
+        tray.stop()                                      # no ghost icon of the old process
         root.destroy()
 
     def save_lang(code):
@@ -1380,12 +1552,13 @@ def run_gui():
         code = next((l for l in i18n.LANGS if i18n.LANG_NAMES[l] == lang_var.get()), "en")
         if code != i18n.lang():
             save_lang(code)
-            restart_app()
+            restart_app(advanced=True)                   # the language box is on the Settings tab = the Advanced view
     lang_cb.bind("<<ComboboxSelected>>", lang_changed)
 
     built_lang = i18n.lang()
     first = firstrun_ui.FirstRun(root, c, bg, on_advanced=lambda: leave_first_run(), on_lang=lambda code: (i18n.set_lang(code), save_lang(code)),
-                                 on_check=lambda: check_now(quiet=False))
+                                 on_check=lambda: check_now(quiet=False), on_install=lambda: install(), tray_ok=lambda: tray.ok,
+                                 detect_fn=sim.detect if sim else None, vrc_fn=sim.vrc if sim else None)
 
     upd_state = {"avail": False}
 
@@ -1395,40 +1568,68 @@ def run_gui():
         banner.pack_forget()
         if not upd_state["avail"]:
             return
-        anchor = first.frame if first.visible else nb
+        anchor = first.frame if first.visible else nb       # both views are dark: one bar style
         try:
-            banner.pack(fill="x", padx=8, before=anchor)
+            banner.pack(fill="x", padx=PX(12), pady=(PX(8), 0), before=anchor)
         except tk.TclError:
-            banner.pack(fill="x", padx=8, side="top")
+            banner.pack(fill="x", padx=PX(12), side="top")
+
+    adv = {"shown": False}
 
     def show_main():
-        nb.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        root.configure(bg=root_bg)
+        nb.pack(fill="both", expand=True, padx=PX(12), pady=(PX(8), PX(12)))
         top.pack(fill="x", before=nb)
+        top_line.pack(fill="x", before=nb)
         place_banner()
+        fit_advanced()
+
+    def fit_advanced():
+        """Advanced view: never smaller than its content (JA / DE texts are longer than EN) - grow only, capped to the screen;
+        minsize back to the base (the simple view sets its own content size as minsize)"""
+        try:
+            root.update_idletasks()
+            need_w = nb.winfo_reqwidth() + 2 * PX(12)
+            need_h = top.winfo_reqheight() + top_line.winfo_reqheight() + nb.winfo_reqheight() + PX(20)
+            w = min(max(root.winfo_width(), need_w), max(620, root.winfo_screenwidth() - 40))
+            h = min(max(root.winfo_height(), need_h), max(420, root.winfo_screenheight() - 110))
+            root.minsize(min(w, 620), min(h, 420))
+            if (w, h) != (root.winfo_width(), root.winfo_height()):
+                root.geometry("%dx%d" % (w, h))
+        except tk.TclError:
+            pass
 
     def leave_first_run():
+        """'Advanced view' button: the tabs, for this session only (the next start opens the simple view again)"""
         first.hide()
         if last_status.get("st") is not None:              # tabs were not redrawn while the simple view was on top
             show_status(last_status["st"])
-        c.settings.update(first_run_done=True, view="advanced")
-        try:
-            c.save_settings()
-        except OSError:
-            pass
-        if i18n.lang() != built_lang:
-            restart_app()
+        if not c.settings.get("first_run_done"):
+            c.settings.update(first_run_done=True)
+            try:
+                c.save_settings()
+            except OSError:
+                pass
+        if i18n.lang() != built_lang:                      # language picked in the simple view: rebuild, but come back to the Advanced view
+            restart_app(advanced=True)
             return
         show_main()
+        if not adv["shown"]:                               # first time this session: ROSE row + games table (scans off the Tk thread)
+            adv["shown"] = True
+            rose_detect(silent=True)
+            ro_detect()
+        bg(lambda st=last_status.get("st"): ui_q.put(("games", c.games_view(st))))
         try:
             nb.select(0)                                   # Worlds tab first
         except tk.TclError:
             pass
         if c.settings.get("auto_start", True) and not c.running():
-            c.start()
+            start_bg()
         refresh_buttons()
 
     def hide_main():
         top.pack_forget()
+        top_line.pack_forget()
         banner.pack_forget()
         nb.pack_forget()
 
@@ -1438,17 +1639,12 @@ def run_gui():
         place_banner()
 
     def enter_simple():
-        """the simple view = home screen of the first run (setup already done); remembered as the last used view"""
+        """the simple view = home screen of the first run (setup already done); the window always opens here"""
         hide_main()
-        c.settings.update(view="simple")
-        try:
-            c.save_settings()
-        except OSError:
-            pass
         first.show_home()
         place_banner()
         if c.settings.get("auto_start", True) and not c.running():
-            c.start()
+            start_bg()
     btn_easy.configure(command=lambda: enter_simple() if c.settings.get("first_run_done") else enter_first_run())
 
     # ---- periodic work ----
@@ -1476,7 +1672,8 @@ def run_gui():
             if st is not None:
                 st["_rose_state"] = c.rose_state()        # GUI-only full ROSE state (GET /rose/state), off the Tk thread
             ui_q.put(("status", st))
-            ui_q.put(("games", c.games_view(st)))
+            if not first.visible:                         # the simple view scans the games itself; the tabs get them when shown
+                ui_q.put(("games", c.games_view(st)))
         finally:
             polling.clear()
 
@@ -1531,7 +1728,7 @@ def run_gui():
             if key not in asked:
                 ask_map(key)
         colour, text = headline(st, c.running(), c.fatal)
-        lamp.configure(fg=colour)
+        lamp.configure(fg=ui_theme.LIGHTS.get(colour, colour))
         head_lbl.configure(text=text)
         fatal_lbl.configure(text=(tr("m.fatal") + c.fatal) if (c.fatal and not c.running()) else "")
         show_rows(status_rows(st, c.foreign))
@@ -1570,6 +1767,7 @@ def run_gui():
                 elif kind == "installed":
                     if val:
                         updater.spawn_detached(val, cwd=runtime.install_root())
+                        tray.stop()
                         root.destroy()
                         return
                     installing.clear()
@@ -1601,6 +1799,22 @@ def run_gui():
                         if not rose_found["silent"]:
                             rose_lbl.configure(text=tr("g.not_found_pick"))
                     rose_redraw()
+                elif kind == "ro_found":
+                    gen, found = val
+                    if gen == ro_found["gen"]:                 # else: a folder was picked / reset while this scan ran
+                        ro_found["busy"] = False
+                        if found:
+                            ro_found["path"], ro_found["how"] = found[0][0], found[0][1]
+                        else:
+                            ro_found["path"] = ""
+                        ro_redraw()
+                elif kind == "ro_picked":
+                    d, ok, why = val
+                    if ok:
+                        ro_picked(d)
+                        gm_note.configure(text=tr("g.ro_saved"))
+                    else:
+                        gm_note.configure(text=tr("err.bad.ro", why=why))
                 elif kind == "rose_picked":
                     d, ok, why = val
                     if ok:
@@ -1618,11 +1832,58 @@ def run_gui():
         except queue.Empty:
             pass
 
-    def on_close():
+    def quit_app():
         remember()
-        c.stop()
+        try:
+            tray.stop()
+        except Exception:                                # noqa: BLE001
+            pass
+        c.shutdown()
         root.destroy()
+
+    def show_window():
+        try:
+            root.deiconify()
+            root.lift()
+            root.focus_force()
+        except tk.TclError:
+            pass
+
+    def on_close():
+        """closing the window keeps the companion running (tray icon: Open / Quit); without a tray it only minimises"""
+        what, hint = tray_mod.close_action(tray.ok, bool(c.settings.get("tray_hint_shown")))
+        remember()
+        if hint and what == "hide":                      # one-time hint, shown before the window disappears
+            c.settings["tray_hint_shown"] = True
+            try:
+                c.save_settings()
+                messagebox.showinfo("GSVR", tr("tray.hint"), parent=root)
+            except Exception:                            # noqa: BLE001
+                pass
+        if what == "hide":
+            root.withdraw()
+        else:
+            root.iconify()
+
+    def tray_pump():
+        try:
+            while True:
+                ev = tray.events.get_nowait()
+                if ev == "open":
+                    show_window()
+                elif ev == "quit":
+                    quit_app()
+                    return
+        except queue.Empty:
+            pass
+        try:
+            root.after(300, tray_pump)
+        except tk.TclError:
+            pass
+    tray = sim.tray() if sim else tray_mod.Tray(tr("tray.tip"), tr("tray.open"), tr("tray.quit"))
+    tray.start()
     root.protocol("WM_DELETE_WINDOW", on_close)
+    root.after(300, tray_pump)
 
     c.log("[gui] GSVR companion %s (%s install, %s) in %s" % (VERSION, runtime.install_kind(), updater.platform_key(),
                                                             runtime.install_root()))
@@ -1632,7 +1893,7 @@ def run_gui():
     pump_logs()
     poll_status()
     pump_ui()
-    rose_detect(silent=True)                         # fills the ROSE row of the Spiele table (off the Tk thread)
+    # the ROSE + Ragnarok Online rows of the Spiele table is detected when the Advanced view opens (leave_first_run): no second drive scan at start
     if c.settings.get("auto_update_check", True):
         root.after(800, lambda: check_now(quiet=True))
 
@@ -1657,15 +1918,19 @@ def run_gui():
             root.after(500, lambda: check_now(quiet=True))
     root.bind("<Map>", on_map)
     # players just want it running: start the companion right away (Windows autostart passes --minimized)
+    # ALWAYS the simple view first (owner 2026-11-24); shown before the main loop, so the tabs never flash up
     start_view = "firstrun" if os.environ.get("GSVR_FIRSTRUN") == "1" else firstrun.start_view(c.settings, c.fresh_install)
     if start_view == "firstrun":
-        root.after(50, enter_first_run)                  # 1-click first run (docs/design/companion_first_run.md); the job starts the companion
-    elif start_view == "simple":
-        root.after(50, enter_simple)
-    elif c.settings.get("auto_start", True) and not c.running():
-        root.after(400, lambda: (c.start(), refresh_buttons()))
+        enter_first_run()                                # 1-click first run (docs/design/companion_first_run.md); the job starts the companion
+    elif "--advanced" in sys.argv:
+        leave_first_run()                                # restart after a language switch asked for the Advanced view (one-shot)
+    else:
+        enter_simple()
     if "--minimized" in sys.argv:
-        root.iconify()
+        root.withdraw() if tray.ok else root.iconify()
+    if sim:
+        sim.ready(leave_first_run=leave_first_run, nb=nb, tabs={"worlds": wd_tab, "status": st_tab, "games": gm_tab,
+                                                                "log": log_tab, "settings": se})
     root.mainloop()
 
 

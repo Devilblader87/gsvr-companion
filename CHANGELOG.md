@@ -2,6 +2,21 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.62
+
+**Ragnarok Online (new, bring your own game)**
+- New world [GSVR - RO](https://vrchat.com/home/world/wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c). You need your own Ragnarok Online client on this PC; the companion builds the maps, characters and monsters from your own install, on your PC (nothing from the game is in the world).
+- How to play: start the companion (choose the folder with `data.grf` in the Ragnarok Online row if it is not found), turn on *Allow Untrusted URLs* in VRChat, open the world. The first visit builds the packs (a few minutes, cached).
+- First alpha: walk Prontera, its houses and fields with your character, fight monsters and pick up items. The original interface and more come later.
+
+**Companion**
+- New look: one clear checklist screen (your games, VRChat, Allow Untrusted URLs, world connected, app version) with one big "Open world" button.
+- Ragnarok Online row in the world list, with its own folder choice.
+- Outdated ROSE and Ragnarok Online packs rebuild by themselves; a "Rebuild" button per world builds them again by hand.
+- Closing the window keeps the companion running in the system tray.
+
+Works with all current GSVR worlds (they need companion 0.9.57 or newer).
+
 ## 0.9.57
 
 **ROSE Online**

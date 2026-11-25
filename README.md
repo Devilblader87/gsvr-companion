@@ -1,6 +1,6 @@
 # GSVR Companion
 
-Play your own copy of **Half-Life** (+ Opposing Force, Blue Shift, Ricochet, DMC), **Counter-Strike 1.6**, **Sven Co-op**, **Warcraft III** and **ROSE Online** in VRChat. Bring your own game: the companion converts maps, models and sounds from the games installed on **your** PC.
+Play your own copy of **Half-Life** (+ Opposing Force, Blue Shift, Ricochet, DMC), **Counter-Strike 1.6**, **Sven Co-op**, **Warcraft III**, **ROSE Online** and **Ragnarok Online** in VRChat. Bring your own game: the companion converts maps, models and sounds from the games installed on **your** PC.
 
 **[Download & instructions](https://devilblader87.github.io/gsvr-companion/)** | **[Latest release](https://github.com/Devilblader87/gsvr-companion/releases/latest)** | **[Discord](https://discord.gg/nc2rw6Snx)** | [Changelog](CHANGELOG.md)
 
@@ -21,6 +21,7 @@ PC (Windows) VRChat only. Linux / Steam Deck: see [Proton](#linux--steam-deck-pr
 | GSVR - Counter-Strike | Counter-Strike 1.6 | alpha | [open](https://vrchat.com/home/world/wrld_5ab8566b-7e6a-4cfb-a0ac-b6d099b94ffb) |
 | Warcraft III | Warcraft III 1.21 - 1.31 | alpha | [open](https://vrchat.com/home/world/wrld_71563253-4115-40d3-b165-7cdba23bff06) |
 | GSVR - ROSE Online ローズオンライン | ROSE Online | alpha | [open](https://vrchat.com/home/world/wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2) |
+| GSVR - RO (Ragnarok Online) | Ragnarok Online (your own client install) | alpha | [open](https://vrchat.com/home/world/wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c) |
 
 Each world only needs the game it is built from. A banner at each world's spawn shows its current status and changes.
 
@@ -42,13 +43,20 @@ The companion reads your game install, converts maps, models and sounds on your 
 Zones (0.9.49): Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, Goblin Cave (B1-B3), Junon Polis, Dolphin Island, Junon Clan Field, clan hideout; Luna: Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields, Freezing Plateau, Luna Clan Field; Eldeon: Refuge Xita, Shady Jungle.
 Co-op up to 4, parties (with party voice), clans and a global chat. Original skill effects, skill tooltips, 3 x 30 bag, second job change, level cap 250, bows/guns use ammo, all NPCs and most quests run.
 
+**Ragnarok Online (alpha, since 0.9.62).** Bring your own game: you need your own Ragnarok Online client on this PC (start it once so it finishes updating). Short how-to:
+1. Install and start the companion. It looks for Ragnarok Online by itself (registry, Steam, usual folders); if it is not found, choose the game folder (the one with `data.grf`) in the Ragnarok Online row.
+2. In VRChat: **Settings -> Comfort & Safety -> Allow Untrusted URLs: on**.
+3. Open the world [GSVR - RO](https://vrchat.com/home/world/wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c) (or press "Open world" in the companion).
+On the first visit the maps, characters and monsters are built from your own install on your PC (a few minutes, cached; outdated packs rebuild by themselves, or press **Rebuild** in the world row). First alpha: walk Prontera, its houses and fields with your character, fight monsters and pick up items; the original interface and more come in later versions. Help on [Discord](https://discord.gg/nc2rw6Snx).
+
 ## 日本語クイックスタート
 
-自分のPCにインストールした Half-Life、Counter-Strike 1.6、Sven Co-op、Warcraft III、ROSE Online を VRChat で遊べるツールです(ゲームは各自でご用意ください)。
+自分のPCにインストールした Half-Life、Counter-Strike 1.6、Sven Co-op、Warcraft III、ROSE Online、Ragnarok Online(ラグナロクオンライン)を VRChat で遊べるツールです(ゲームは各自でご用意ください)。
 1. [ダウンロードページ](https://devilblader87.github.io/gsvr-companion/)から `GSVR-Setup.exe` をダウンロードしてインストールします。
 2. コンパニオンを起動すると、ゲームが自動で検出されます。「スタート」を押すと準備が始まります。
 3. VRChat の設定 → Comfort & Safety → 「Allow Untrusted URLs(信頼されていないURL)」をオンにします。
 4. 「VRChatでワールドを開く」を押して参加します。
+Ragnarok Online はご自身のクライアントのインストールが必要です(見つからない場合は、コンパニオンの Ragnarok Online の行で `data.grf` があるフォルダを選びます)。ワールド: [GSVR - RO](https://vrchat.com/home/world/wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c)
 Windows PC の VRChat のみ対応です。質問・不具合報告は [Discord](https://discord.gg/nc2rw6Snx) へ。
 
 ## Linux / Steam Deck (Proton)
@@ -79,4 +87,4 @@ GSVR Companion is free software under the [GNU GPL v3](LICENSE). The Windows bin
 
 ## Notice
 
-Fan project, not affiliated with Valve, Blizzard Entertainment, VRChat or the owners of ROSE Online. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment; ROSE Online is a trademark of its owners.
+Fan project, not affiliated with Valve, Blizzard Entertainment, VRChat, the owners of ROSE Online or Gravity. Counter-Strike and Half-Life are trademarks of Valve Corporation; Warcraft is a trademark of Blizzard Entertainment; ROSE Online is a trademark of its owners; Ragnarok Online is a trademark of Gravity Co., Ltd.
