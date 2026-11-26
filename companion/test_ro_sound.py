@@ -74,6 +74,34 @@ class NameTable(unittest.TestCase):
         self.assertEqual(A.bgm_for(t, 'PRT_CHURCH'), 'bgm\\10.mp3')
 
 
+class BgmLookup(unittest.TestCase):
+    """w42 r154: the BGM folder next to data.grf is found whatever its case / the separators of the table (Linux container, Proton), and a cached pack built without it goes stale"""
+
+    def test_case_and_separators(self):
+        with tempfile.TemporaryDirectory() as t:
+            os.makedirs(os.path.join(t, 'bGm'))
+            with open(os.path.join(t, 'bGm', '08.MP3'), 'wb') as f:
+                f.write(b'x')
+            for rel in ('bgm\\08.mp3', 'BGM/08.mp3', 'Bgm\\\\08.Mp3'):
+                hit = A.find_bgm(t, None, rel)
+                self.assertIsNotNone(hit, rel)
+                self.assertEqual(hit[0], 'file')
+            self.assertIsNone(A.find_bgm(t, None, 'bgm\\09.mp3'))
+
+    def test_install_extra_tracks_bgm_and_decoder(self):
+        with tempfile.TemporaryDirectory() as t:
+            make_client(t)
+            before = ro_conv.install_extra(t)
+            self.assertEqual(before[0].split()[:2], ['bgm', '0'])
+            os.makedirs(os.path.join(t, 'bgm'))
+            with open(os.path.join(t, 'bgm', '01.mp3'), 'wb') as f:
+                f.write(b'x')
+            after = ro_conv.install_extra(t)
+            self.assertNotEqual(before, after, 'copying BGM\\ next to data.grf changes the fingerprint lines (cached music-less packs rebuild)')
+            self.assertEqual(after[0].split()[:3], ['bgm', '1', '1'])
+            self.assertTrue(after[1].startswith('decoder '))
+
+
 class StrFormat(unittest.TestCase):
     def test_roundtrip(self):
         e = sample_effect()

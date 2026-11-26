@@ -97,6 +97,9 @@ class _AudioMerged:
     def __init__(self, conv):
         self._conv = conv
         self.PACKS = dict(conv.PACKS)
+        ui = getattr(conv, "UI_PACKS", None)          # w42 ui-a: the 'roui' interface pack (ro_conv.UI_PACKS), served by name like the audio packs
+        if isinstance(ui, dict):
+            self.PACKS.update(ui)
         self.PACKS.update(conv.AUDIO_PACKS)
 
     def __getattr__(self, name):

@@ -43,11 +43,11 @@ The companion reads your game install, converts maps, models and sounds on your 
 Zones (0.9.49): Birth Island, Valley of Luxem Tower, Adventurer's Plain, Breezy Hills, Canyon City of Zant, El Verloon Desert, Anima Lake, Forest of Wisdom, Kenji Beach, Gorge of Silence, Goblin Cave (B1-B3), Junon Polis, Dolphin Island, Junon Clan Field, clan hideout; Luna: Magic City of Eucar, Mana Snowfields, Arumic Valley, Crystal Snowfields, Freezing Plateau, Luna Clan Field; Eldeon: Refuge Xita, Shady Jungle.
 Co-op up to 4, parties (with party voice), clans and a global chat. Original skill effects, skill tooltips, 3 x 30 bag, second job change, level cap 250, bows/guns use ammo, all NPCs and most quests run.
 
-**Ragnarok Online (alpha, since 0.9.62).** Bring your own game: you need your own Ragnarok Online client on this PC (start it once so it finishes updating). Short how-to:
+**Ragnarok Online (alpha, since 0.9.62; much extended in 0.9.63).** Bring your own game: you need your own Ragnarok Online client on this PC (start it once so it finishes updating). Short how-to:
 1. Install and start the companion. It looks for Ragnarok Online by itself (registry, Steam, usual folders); if it is not found, choose the game folder (the one with `data.grf`) in the Ragnarok Online row.
 2. In VRChat: **Settings -> Comfort & Safety -> Allow Untrusted URLs: on**.
 3. Open the world [GSVR - RO](https://vrchat.com/home/world/wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c) (or press "Open world" in the companion).
-On the first visit the maps, characters and monsters are built from your own install on your PC (a few minutes, cached; outdated packs rebuild by themselves, or press **Rebuild** in the world row). First alpha: walk Prontera, its houses and fields with your character, fight monsters and pick up items; the original interface and more come in later versions. Help on [Discord](https://discord.gg/nc2rw6Snx).
+On the first visit the maps, characters, monsters, interface and sounds are built from your own install on your PC (a few minutes, cached; outdated packs rebuild by themselves, or press **Rebuild** in the world row). Since 0.9.63: the original Ragnarok windows, ROSE-style laser/click controls, monsters on all maps including the culvert, dungeons and MVPs, the first jobs, skills on monsters, and sound and music from your install. Help on [Discord](https://discord.gg/nc2rw6Snx).
 
 ## 日本語クイックスタート
 
@@ -57,6 +57,7 @@ On the first visit the maps, characters and monsters are built from your own ins
 3. VRChat の設定 → Comfort & Safety → 「Allow Untrusted URLs(信頼されていないURL)」をオンにします。
 4. 「VRChatでワールドを開く」を押して参加します。
 Ragnarok Online はご自身のクライアントのインストールが必要です(見つからない場合は、コンパニオンの Ragnarok Online の行で `data.grf` があるフォルダを選びます)。ワールド: [GSVR - RO](https://vrchat.com/home/world/wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c)
+0.9.63 で、オリジナルのウィンドウ、ROSE風のレーザー/クリック操作、全マップのモンスター(下水道・ダンジョン・MVP含む)、1次職、モンスターへのスキル、お手持ちのクライアントからの効果音とBGMに対応しました。
 Windows PC の VRChat のみ対応です。質問・不具合報告は [Discord](https://discord.gg/nc2rw6Snx) へ。
 
 ## Linux / Steam Deck (Proton)

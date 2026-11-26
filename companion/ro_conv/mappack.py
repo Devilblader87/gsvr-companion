@@ -16,7 +16,7 @@ import os
 import struct
 import sys
 
-from . import rofmt, img
+from . import rofmt, img, atmo
 from .grf import norm
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +26,7 @@ if _ROSE not in sys.path:
 import rpg1 as P          # noqa: E402  (shared RPG1 container + section codecs, never edited here)
 import rosedds as D       # noqa: E402
 
-TOOL_VERSION = 4               # 4: GAT walk surface (GWLK) + interior shells; 3: ground lightmap atlas (TLMP) instead of subdivided tiles, DXT1 cut-outs, deduped OTEX; 2: subdivided ground (rebuilds old packs)
+TOOL_VERSION = 5               # 5: + RATM atmosphere section (fog / bgm number / light, atmo.py); 4: GAT walk surface (GWLK) + interior shells; 3: ground lightmap atlas (TLMP) instead of subdivided tiles, DXT1 cut-outs, deduped OTEX; 2: subdivided ground (rebuilds old packs)
 ZONE_ID = 900               # RO zones live at 900+ so they never collide with ROSE zone ids (1..200)
 SLOT_PX, GUTTER, ATLAS_MIPS = 320, 32, 4
 POOL_TERRAIN, POOL_CHUNKS = 80, 800          # GsvrSceneBuilder.Rose RoseTerrainPool / RoseObjectPool
@@ -1134,6 +1134,10 @@ def build(vfs, mapname, cell_m=1.0, tiles_per_block=None, max_chunks=700, model_
     sections.append((TAG_GWLK, GWLK_VERSION, len(ws['pieces']), enc_gwlk(ws, GW_INTERIOR if is_int else 0)))
     log('walk surface (GWLK): %d cells (%d raised / over the void), %d walls, %d pieces, %d vertices, %d triangles, %d listed bridge / stair cells' % (
         ws['cells'], ws['raised_cells'], ws['walls'], len(ws['pieces']), sum(len(v) for v, _t in ws['pieces']), sum(len(t_) for _v, t_ in ws['pieces']), len(ws['raised'])))
+    _aw = []
+    sections.append(atmo.build_section(vfs, mp, rw['light'], _aw))          # RATM: fog + bgm number + light (docs/design/ro_atmo.md)
+    for w_ in _aw:
+        warn[w_] += 1
     sections += list(extra_sections)
     tick('write', 0.0)
     pack = P.write_pack(sections)

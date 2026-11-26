@@ -12,7 +12,7 @@ map only (docs/design/ro_multimap.md: the world loads every map of PACKS at once
 import os
 import struct
 
-from . import items, jobs, mappack, sprite, towns, culvert, dungeons
+from . import items, jobs, mappack, sprite, towns, culvert, dungeons, jobmaps, ui
 from .grf import Vfs, GrfError, MAGICS
 
 VERSION = 'ro-%d.%d' % (mappack.TOOL_VERSION, sprite.RSAN_VERSION)
@@ -37,16 +37,23 @@ for _m in culvert.NAMES:
 # dungeons lane (docs/design/ro_dungeons.md, w37): Payon Cave, Ant Hell, Orc Dungeon + their entry maps = ids 31..42, appended after every earlier lane's maps
 for _m in dungeons.NAMES:
     PACKS.setdefault(_m, {'kind': 'zone', 'label': dungeons.LABEL[_m]})
+# first jobs lane (docs/design/ro_jobs1.md, w41): the guild / test maps of the six first-job tests = ids 43..49, on demand like the dungeons
+for _m in jobmaps.NAMES:
+    PACKS.setdefault(_m, {'kind': 'zone', 'label': jobmaps.LABEL[_m]})
 MAP_ORDER = tuple(PACKS)                                       # == GsvrRoMaps.mapNames in the scene (one index per map on both sides)
-PREBUILD_ORDER = tuple(m for m in MAP_ORDER if m not in dungeons.NAMES)                                     # rosebuild: background prebuild order (instead of the ROSE lobby / avatar rule)
-NO_PREBUILD = frozenset(dungeons.NAMES)                                    # never built in the background: only when the world asks (docs/design/ro_dungeons.md)
+PREBUILD_ORDER = tuple(m for m in MAP_ORDER if m not in dungeons.NAMES and m not in jobmaps.NAMES)
+# w42 ui-a (docs/design/ro_ui.md): the original interface atlas = its own small pack 'roui' (NOT in PACKS: the world loads every PACKS entry as a map). The build manager
+# serves it like the audio packs (rosebuild merges UI_PACKS); the world asks for it once, right after the start map (GsvrRoFetch ui). Prebuilt right after the start map.
+UI_PACKS = {ui.UI_PACK: {'kind': 'ui', 'label': 'Interface'}}
+PREBUILD_ORDER = PREBUILD_ORDER[:1] + (ui.UI_PACK,) + PREBUILD_ORDER[1:]                                     # rosebuild: background prebuild order (instead of the ROSE lobby / avatar rule)
+NO_PREBUILD = frozenset(dungeons.NAMES) | frozenset(jobmaps.NAMES)                                    # never built in the background: only when the world asks (docs/design/ro_dungeons.md)
 SPRITE_PACK = 'prontera'                                       # the ONLY pack with RSAT / RSAN: the world builds the sprite set once
 
 # w36 sound lane (docs/design/ro_sound.md): audio / effect packs next to the map packs. NOT in PACKS (the world loads every PACKS entry as a map); the lead merges them
 # into the build manager's table (PACKS.update(AUDIO_PACKS) in rosebuild) and the world asks for them by name: snd_common (sound effects + skill effects), snd_<map> (that map's BGM).
 AUDIO_PACKS = dict([('snd_common', {'kind': 'audio', 'label': 'Sounds and effects'})] + [('snd_' + _m, {'kind': 'audio', 'label': 'Music ' + _m}) for _m in PACKS])
 AUDIO_ORDER = tuple(AUDIO_PACKS)
-PACK_REV = {'prontera': 5, 'prt_fild08': 1}                   # prontera 1: start cell 156,191 (rAthena @go); 2: + the NPC sprites (docs/design/ro_npc.md); 3: + the w36 item looks / icons (and, on its own branch, the w37 jobs2 bodies); 4: NPC + items; 5: NPC + items + jobs2 bodies (w37 integrate); prt_fild08 1: w34 monster + item sprites
+PACK_REV = {'prontera': 6, 'prt_fild08': 1}                   # prontera 1: start cell 156,191 (rAthena @go); 2: + the NPC sprites (docs/design/ro_npc.md); 3: + the w36 item looks / icons (and, on its own branch, the w37 jobs2 bodies); 4: NPC + items; 5: NPC + items + jobs2 bodies (w37 integrate); 6: + the 16 first-job test NPC sprites (w41 jobs, docs/design/ro_jobs1.md); prt_fild08 1: w34 monster + item sprites
 JOB2_SPRITES = True                                            # w37 jobs2 (docs/design/ro_jobs2.md): append the second-job bodies body_j<id>_<sex> to the start pack
 SPRITE_SEX = 'm'                                               # body_m / head_m (the scene's GsvrRoSprite names)
 BuildError = mappack.BuildError
@@ -60,14 +67,16 @@ def warm_after(name):
     """rosebuild W10 warm-up hook: the world asked for `name` -> the maps it asks for next (they go to the front of the background queue).
     Towns: the world fetches only the maps resident around the player (GsvrRoMaps.LResident == towns.resident), in map id order; the culvert floors are built after each other once
     one is asked for; the dungeons lane never warms in the background (on demand only, docs/design/ro_dungeons.md)."""
-    if name not in MAP_ORDER or name in dungeons.NAMES:
+    if name not in MAP_ORDER or name in dungeons.NAMES or name in jobmaps.NAMES:          # w41: the job maps are on demand like the dungeons
         return []
     if name in culvert.NAMES:
         return culvert.warm_after(name)
-    return [m for m in towns.warm_after(name, names=MAP_ORDER) if m not in dungeons.NAMES and m not in culvert.NAMES]
+    return [m for m in towns.warm_after(name, names=MAP_ORDER) if m not in dungeons.NAMES and m not in culvert.NAMES and m not in jobmaps.NAMES]
 
 
 def pack_version(name):
+    if name in UI_PACKS:
+        return 'ro-ui-%d' % ui.UI_REV
     if name in AUDIO_PACKS:
         from . import audio
         return 'ro-snd-%d' % audio.AUDIO_REV
@@ -105,6 +114,31 @@ def install_files(folder):
     return _grf_names(folder)
 
 
+def install_extra(folder):
+    """lines for the build manager's install fingerprint besides the GRFs: the loose BGM folder next to data.grf (any case: found, file count, bytes, newest mtime) and the
+    mp3 decoder a build would use. Copying BGM\\ into the client or installing miniaudio / ffmpeg makes the cached snd_<map> packs (built without music) stale."""
+    import rose_audio as AU
+    found = n = size = mt = 0
+    try:
+        for nm in sorted(os.listdir(folder)):
+            d = os.path.join(folder, nm)
+            if nm.lower() == 'bgm' and os.path.isdir(d):
+                found = 1
+                for fn in os.listdir(d):
+                    try:
+                        st = os.stat(os.path.join(d, fn))
+                    except OSError:
+                        continue
+                    n += 1
+                    size += st.st_size
+                    mt = max(mt, int(st.st_mtime))
+                break
+    except OSError:
+        pass
+    dec = 'miniaudio' if getattr(AU, 'miniaudio', None) is not None else ('ffmpeg' if AU.ffmpeg_path() else 'none')
+    return ['bgm %d %d %d %d' % (found, n, size, mt), 'decoder %s' % dec]
+
+
 # monster anims baked into the atlas: idle walk attack hurt. 'dead' (anim 4) is left out on purpose: the iRO poring's death is an expanding
 # 3.6x-scaled ghost layer, 1.8 Mpx of composed frames (a 2048^2 RGBA page, 16 MB) for 11 frames; the world falls back to idle for it
 MONSTER_KEEP = (0, 1, 2, 3)
@@ -117,6 +151,17 @@ MONSTER_ALL = (0, 1, 2, 3, 4)
 MOB_MAX_SIDE = 128
 MOB_SPRITES = {'prt_fild08': ('lunatic', 'pupa', 'poring', 'drops')}
 DROP_ITEMS = {'prt_fild08': (507, 512, 515, 619, 620, 622, 705, 713, 909, 915, 935, 938, 949, 1002, 1010, 1202, 1602, 2102, 2262, 4001, 4003, 4004, 4006)}
+# w41 (docs/design/ro_mobs.md "w41 multi-map"): EVERY monster map's pack carries its own monsters + drop items (generated lists, ro_conv/mobsets.py); the w34 field keeps its
+# lists above (identical to the generated ones). Each such map's pack gets PACK_REV >= MOB_PACK_REV, so packs built before w41 (map only) are rebuilt with their sprites.
+from . import mobsets as _mobsets          # noqa: E402
+for _m, _v in _mobsets.MOB_SPRITES.items():
+    MOB_SPRITES.setdefault(_m, _v)
+for _m, _v in _mobsets.DROP_ITEMS.items():
+    DROP_ITEMS.setdefault(_m, _v)
+MOB_PACK_REV = 1
+for _m in MOB_SPRITES:
+    if _m != SPRITE_PACK and PACK_REV.get(_m, 0) < MOB_PACK_REV:
+        PACK_REV[_m] = MOB_PACK_REV
 PATH_MONSTER = 'data/sprite/몬스터/'                           # + <name>.spr / .act (CP949 in the GRF)
 PATH_ITEM = 'data/sprite/아이템/'
 ITEM_TABLE = 'data/idnum2itemresnametable.txt'
@@ -125,6 +170,10 @@ OTHER_SEX = {'m': 'f', 'f': 'm'}
 # NPC sprites of the Prontera NPCs (docs/design/ro_npc.md, Editor/ro_npcs.txt): rAthena sprite id -> client file name under data/sprite/npc (read-only lookup in the owner's
 # client: JT_<name> in npcidentity.lub gives the id, jobName.lub the file). The pack names them 'npc_<id>' (idle, 8 directions, the standing pose).
 NPC_SPRITES = {105: '8w_soldier', 53: '1_m_innkeeper', 54: '1_m_jobguider'}
+# w41 first jobs (docs/design/ro_jobs1.md, Editor/ro_jobs1.txt): the NPCs of the six job tests. Looked up ONCE in the owner's client 2026-11-25 (npcidentity.lub JT id ->
+# jobname.lub file, both files exist under data/sprite/npc); 111 = JT_HIDDEN_NPC (the Mixing Machine / Bookshelf: no sprite, the map model is the look).
+NPC_SPRITES.update({119: '2_m_swordmaster', 85: '4_m_03', 92: '4_f_03', 123: '2_f_magicmaster', 88: '4_m_orient01', 93: '4_f_04', 60: '1_m_pastor', 89: '4_m_orient02',
+                    95: '4_f_sister', 98: '4w_m_02', 86: '4_m_04', 83: '4_m_01', 47: '1_m_01', 116: '4_f_kafra2', 69: '1_f_04', 118: '2_m_thiefmaster'})
 NPC_PATH = 'data/sprite/npc/%s'
 
 
@@ -139,6 +188,7 @@ def npc_sprites(vfs, warn=None):
     """-> [sprite dict 'npc_<id>'] for every NPC_SPRITES entry the client has (idle only, kind monster = body only). A client without one gets a warning and the
     world draws a placeholder for that NPC; the other sprites are not affected."""
     out = []
+    miss = []
     _E = (sprite.FormatError, ValueError, IndexError, struct.error)
     for sid in sorted(NPC_SPRITES):
         base = NPC_PATH % NPC_SPRITES[sid]
@@ -149,11 +199,12 @@ def npc_sprites(vfs, warn=None):
                     sp['clips'][d] = sp['clips'][0]
             out.append(sp)
         except KeyError:
-            if warn is not None:
-                warn.append('sprites: npc %d not in the client data (placeholder in the world)' % sid)
+            miss.append(sid)
         except _E as e:
             if warn is not None:
                 warn.append('sprites: npc %d: %s' % (sid, e))
+    if miss and warn is not None:          # w41: ONE line for every missing NPC sprite (19 ids would push the other warnings out of the 40-line status list)
+        warn.append('sprites: %s not in the client data (placeholders in the world)' % ', '.join('npc %d' % s for s in miss))
     return out
 
 
@@ -258,6 +309,8 @@ def mob_sprite_sections(vfs, name, warn=None):
 
 
 def build(name, folder, out_path, progress=None, cancel=None, log=None):
+    if name in UI_PACKS:
+        return ui.build(name, folder, out_path, progress=progress, cancel=cancel, log=log)
     if name in AUDIO_PACKS:
         from . import audio
         return audio.build(name, folder, out_path, progress=progress, cancel=cancel, log=log)

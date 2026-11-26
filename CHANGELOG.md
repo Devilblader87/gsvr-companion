@@ -2,6 +2,20 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.63
+
+**Ragnarok Online (for the updated world GSVR - RO)**
+- The original Ragnarok windows: status, inventory, skills, chat and minimap pictures, built from your own install.
+- ROSE-style controls: point with the laser, click to walk, attack and talk.
+- Monsters on all maps, including the culvert, dungeons and MVPs, with the right look per map.
+- The first jobs, and skills that work on monsters.
+- Sound and music from your own install, including town and field music and ambient sound. Changed music or decoder settings rebuild the packs by themselves.
+
+**Companion**
+- The Windows installer carries the mp3 decoder used for the music.
+
+Works with all current GSVR worlds (they need companion 0.9.57 or newer). Help on Discord: https://discord.gg/nc2rw6Snx
+
 ## 0.9.62
 
 **Ragnarok Online (new, bring your own game)**

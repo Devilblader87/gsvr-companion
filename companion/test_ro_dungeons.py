@@ -56,7 +56,7 @@ class Table(unittest.TestCase):
             self.assertNotIn(n, api.PREBUILD_ORDER)               # never built in the background
         self.assertEqual(api.warm_after('prontera') and [m for m in api.warm_after('prontera') if m in dungeons.NAMES], [])
         self.assertEqual(api.warm_after('pay_dun00'), [])
-        self.assertEqual(api.NO_PREBUILD, frozenset(dungeons.NAMES))
+        self.assertTrue(frozenset(dungeons.NAMES) <= api.NO_PREBUILD)          # w41: + the job-test maps (test_ro_jobs1.py)
 
     def test_links_equal_the_warp_table(self):
         g = dungeons.links(WARPS)

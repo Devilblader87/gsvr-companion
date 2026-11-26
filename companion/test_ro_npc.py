@@ -59,7 +59,11 @@ class Table(unittest.TestCase):
     def test_table_matches_the_data_file(self):
         rows = npc_rows()
         self.assertEqual(len(rows), 3)
-        self.assertEqual(sorted(r[5] for r in rows), sorted(api.NPC_SPRITES))        # one sprite per NPC, nothing extra converted
+        # w41 first jobs: + the sprites of the job-test NPCs (Editor/ro_jobs1.txt npc rows; 111 = JT_HIDDEN_NPC has no sprite)
+        j1 = os.path.join(os.path.dirname(NPCS), "ro_jobs1.txt")
+        with open(j1) as fh:
+            extra = set(int(l.split()[6]) for l in fh if l.startswith("npc ")) - {111}
+        self.assertEqual(sorted(set(r[5] for r in rows) | extra), sorted(api.NPC_SPRITES))        # one sprite per NPC look, nothing extra converted
         for sid, nm in api.NPC_SPRITES.items():
             self.assertRegex(nm, r"^[0-9a-z_]+$")                                       # a client file name, no path
             (api.NPC_PATH % nm).encode("cp949")

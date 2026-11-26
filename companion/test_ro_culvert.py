@@ -23,7 +23,7 @@ class Packs(unittest.TestCase):
         order = list(api.MAP_ORDER)
         self.assertEqual(order[27:31], FLOORS)
         self.assertEqual(tuple(order[:27]), towns.NAMES)
-        self.assertEqual(tuple(order[31:]), dungeons.NAMES)
+        self.assertEqual(tuple(order[31:43]), dungeons.NAMES)          # w41: the job-test maps follow at 43.. (test_ro_jobs1.py)
         self.assertEqual(tuple(culvert.NAMES), tuple(FLOORS))
         self.assertEqual(culvert.ON_DEMAND, -2)                                    # == GsvrRoMaps.ClusterOnDemand
         for n in FLOORS:

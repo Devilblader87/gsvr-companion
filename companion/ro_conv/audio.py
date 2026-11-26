@@ -32,7 +32,7 @@ import rose_audio as AU     # noqa: E402  (wav reader, resampler, mp3 / ogg deco
 
 from . import strfx          # noqa: E402
 
-AUDIO_REV = 1
+AUDIO_REV = 2               # 2 (w42 atmo): + fx/click, fx/cancel, fx/pickup, fx/equip in snd_common; snd_<map> also carries that map's monsters (mon/<sprite>/atk|die|hurt)
 SFX_RATE = 22050
 MUSIC_RATE = 22050
 MUSIC_BUDGET = 15 * 1000 * 1000            # bytes per music pack (VRChat string download limit 18 MB, ro_pack.md)
@@ -146,14 +146,37 @@ def sfx_plan(monsters=DEFAULT_MONSTERS):
             plan.append(('mon/%s/%s' % (m, ev), ['%s_%s.wav' % (m, s) for s in sufs]))
     for sid in sorted(SKILL_SOUNDS):
         plan.append(('skill/%d/fire' % sid, ['effect\\%s.wav' % SKILL_SOUNDS[sid]]))
+    for nm, wav in UI_SOUNDS:          # w42: window click / cancel, item pick up, equip (the client's own UI sounds)
+        plan.append((nm, [wav]))
     return plan
 
 
-def build_sfx(vfs, monsters=DEFAULT_MONSTERS, warn=None):
-    """-> list of clip dicts (rose_audio.enc_snds); clips of the same wav share their samples (key = the wav path)."""
+# w42 atmo: the client's UI sounds (data\wav\; the Korean names are CP949 in the GRF). Item pick up has no file of its own in the iRO client: the coin sound is its closest.
+UI_SOUNDS = (('fx/click', '\ubc84\ud2bc\uc18c\ub9ac.wav'), ('fx/cancel', '\ucde8\uc18c.wav'), ('fx/pickup', 'se_get_coin.wav'), ('fx/equip', 'se_equip_item_01.wav'))
+MAP_MON_EVENTS = ('atk', 'die', 'hurt')          # the per map monster clips (move / stand are ambient noise: not worth 40 % of the pack)
+
+
+def map_monsters(mapname):
+    """monster sprite names of a map (ro_conv.api.MOB_SPRITES: the monsters of its rAthena spawn list) -> tuple, () for a map without monsters"""
+    from .api import MOB_SPRITES
+    return tuple(MOB_SPRITES.get(mapname.lower(), ()))
+
+
+def mon_plan(monsters):
+    """-> [(clip name, [candidate wav])] for the atk / die / hurt sounds of `monsters`"""
+    plan = []
+    for m in monsters:
+        for ev, sufs in MON_EVENTS:
+            if ev in MAP_MON_EVENTS:
+                plan.append(('mon/%s/%s' % (m, ev), ['%s_%s.wav' % (m, s) for s in sufs]))
+    return plan
+
+
+def build_sfx(vfs, monsters=DEFAULT_MONSTERS, warn=None, plan=None):
+    """-> list of clip dicts (rose_audio.enc_snds); clips of the same wav share their samples (key = the wav path). plan = an explicit [(name, [wav])] list (the per map monsters)."""
     clips = []
     cache = {}
-    for name, cands in sfx_plan(monsters):
+    for name, cands in (plan if plan is not None else sfx_plan(monsters)):
         hit = None
         for c in cands:
             p = 'wav\\' + c
@@ -364,11 +387,13 @@ def build(name, folder, out_path, progress=None, cancel=None, log=None, monsters
         tick('music', 0.1)
         c = build_music(folder, vfs, m, warns)
         clips = [c] if c else []
+        mons = build_sfx(vfs, warn=warns, plan=mon_plan(map_monsters(m)))          # w42: this map's monsters (the world's NameMon clip names)
+        clips += mons
         if clips:
             sections += _sections(clips)
         else:
             sections.append((AU.TAG_SNDS, 1, 0, AU.enc_snds([])))     # an empty pack is still a valid pack: the world plays no music for this map
-        info = dict(clips=len(clips), seconds=round(len(c['samples']) / float(c['rate']), 1) if c else 0)
+        info = dict(clips=len(clips), monster_clips=len(mons), seconds=round(len(c['samples']) / float(c['rate']), 1) if c else 0)
     data = P.write_pack(sections)
     tick('write', 0.9)
     part = out_path + '.part'

@@ -15,7 +15,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ro_conv  # noqa: E402
-from ro_conv import api, grf, culvert, dungeons, sprite as S, towns  # noqa: E402
+from ro_conv import api, grf, culvert, dungeons, jobmaps, sprite as S, towns  # noqa: E402
 import ro_conv_stub  # noqa: E402
 import rosebuild  # noqa: E402
 import rpg1 as P  # noqa: E402
@@ -48,11 +48,11 @@ def ro_like_stub():
 
 class Order(unittest.TestCase):
     def test_map_list(self):
-        self.assertEqual([m for m in api.PACKS if m not in dungeons.NAMES], MAPS)          # + the dungeons lane's maps after them (test_ro_dungeons.py)
+        self.assertEqual([m for m in api.PACKS if m not in dungeons.NAMES and m not in jobmaps.NAMES], MAPS)          # + the dungeons lane's maps after them (test_ro_dungeons.py), then the w41 job-test maps (test_ro_jobs1.py)
         self.assertEqual(MAPS[:5], PROTO)                                     # the prototype's ids never move
         self.assertEqual(len(MAPS), 31)                                       # 27 towns + 4 culvert floors (w39: the dungeons' 12 follow as ids 31..42)
         self.assertEqual(list(api.MAP_ORDER[:len(MAPS)]), MAPS)
-        self.assertEqual([m for m in ro_conv.PACKS if m not in dungeons.NAMES], MAPS)                          # the package exports the api names
+        self.assertEqual([m for m in ro_conv.PACKS if m not in dungeons.NAMES and m not in jobmaps.NAMES], MAPS)                          # the package exports the api names
         self.assertEqual(api.SPRITE_PACK, "prontera")
         self.assertTrue(all(p["kind"] == "zone" for p in api.PACKS.values()))     # never two RO builds at once (memory)
         # towns: after a map the world asks for the maps resident around it (cluster + warp neighbours), in id order
@@ -68,7 +68,7 @@ class Order(unittest.TestCase):
         # w39 wiring: PACKS.update(AUDIO_PACKS) in rosebuild - as a VIEW (ro_conv.PACKS stays the map list), the manager builds + serves snd_* too
         mc = rosebuild.merge_audio(ro_conv)
         self.assertIsNot(mc, ro_conv)
-        self.assertEqual(set(mc.PACKS), set(api.PACKS) | set(api.AUDIO_PACKS))
+        self.assertEqual(set(mc.PACKS), set(api.PACKS) | set(api.AUDIO_PACKS) | set(getattr(api, 'UI_PACKS', {})))          # w42 ui-a: + the 'roui' interface pack
         self.assertTrue(all(n not in api.PACKS for n in api.AUDIO_PACKS))            # the module's own table is untouched
         self.assertEqual(mc.PACKS["snd_common"]["kind"], "audio")
         self.assertEqual(rosebuild.conv_version(mc, "snd_common"), api.pack_version("snd_common"))   # attributes delegate
@@ -100,7 +100,7 @@ class Order(unittest.TestCase):
         b = rd(UN, "Editor", "GsvrSceneBuilder.Ragnarok.cs")
         m = re.search(r"RoMapNames\s*=\s*\{([^}]*)\}", b)
         self.assertIsNotNone(m, "GsvrSceneBuilder.Ragnarok.cs RoMapNames")
-        self.assertEqual(re.findall(r'"([a-z0-9_]+)"', re.sub(r"//[^\n]*", "", m.group(1))), MAPS + list(dungeons.NAMES))          # towns + culvert + dungeons = api.MAP_ORDER
+        self.assertEqual(re.findall(r'"([a-z0-9_]+)"', re.sub(r"//[^\n]*", "", m.group(1))), MAPS + list(dungeons.NAMES) + list(jobmaps.NAMES))          # towns + culvert + dungeons + job-test maps = api.MAP_ORDER
         warps = rd(UN, "Editor", "ro_warps.txt")
         used = set()
         for ln in warps.splitlines():
@@ -153,7 +153,7 @@ class Manager(unittest.TestCase):
         self.assertEqual(ro_conv_stub.CALLS, MAPS)                             # warm-up after prontera: the other maps in MAP_ORDER, one at a time
         st = m.state()
         rows = companion.ro_maps(st)
-        self.assertEqual([n for n in rows if n not in dungeons.NAMES], MAPS)
+        self.assertEqual([n for n in rows if n not in dungeons.NAMES and n not in jobmaps.NAMES], MAPS)
         self.assertTrue(all(v == {"state": "ready", "progress": 1.0} for n, v in rows.items() if n in MAPS), rows)
         self.assertTrue(all(rows[n]["state"] == "missing" for n in dungeons.NAMES), rows)         # the dungeons lane is never prebuilt
         for n in MAPS:                                                       # the world's next requests are answered from the cache

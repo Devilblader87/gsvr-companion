@@ -209,6 +209,48 @@ class Table(unittest.TestCase):
         self.assertEqual(table_rows('novice')[0][:6], ['5'] * 6)
 
 
+class World(unittest.TestCase):
+    """w41 (docs/design/ro_mobs.md "w41 multi-map"): the merged table of the 43-map world is what tools/ro_fields_gen.py merge makes from the repo files, and every
+    monster map's pack carries its own monsters + drop items (ro_conv/mobsets.py = generated from that table)."""
+    @staticmethod
+    def _gen():
+        sys.path.insert(0, os.path.join(ROOT, 'tools'))
+        import ro_fields_gen
+        return ro_fields_gen
+
+    def test_merged_table_is_regenerated(self):
+        g = self._gen()
+        txt = g.merge(ROOT)
+        cur = open(os.path.join(ROOT, 'unity', 'Assets', 'GoldSrcVR', 'Editor', 'ro_mobs_all.txt'), encoding='utf-8').read()
+        self.assertEqual(txt, cur, 'Editor/ro_mobs_all.txt is stale: run python3 -I tools/ro_fields_gen.py merge')
+
+    def test_mobsets_match_the_table(self):
+        g = self._gen()
+        ms, di = g.mobsets(g.merge(ROOT))
+        from ro_conv import mobsets
+        self.assertEqual(ms, mobsets.MOB_SPRITES, 'companion/ro_conv/mobsets.py is stale: run python3 -I tools/ro_fields_gen.py merge')
+        self.assertEqual(di, mobsets.DROP_ITEMS)
+        self.assertEqual(len(ms), 27, 'every field / culvert / dungeon map of the world has monsters')
+        for m in ms:
+            self.assertIn(m, api.PACKS, '%s is a world map' % m)
+            self.assertEqual(api.MOB_SPRITES[m], ms[m])
+            self.assertGreaterEqual(api.PACK_REV.get(m, 0), api.MOB_PACK_REV, '%s: a pack built before w41 (map only) is rebuilt with its sprites' % m)
+        self.assertEqual(api.MOB_SPRITES[FIELD], ('lunatic', 'pupa', 'poring', 'drops'), 'the w34 field keeps its list')
+        for town in ('prontera', 'prt_in', 'izlude', 'payon', 'geffen', 'morocc', 'alberta'):
+            self.assertNotIn(town, api.MOB_SPRITES, '%s has no monsters' % town)
+
+    def test_other_map_sections(self):
+        """A monster map other than the w34 field (pay_fild01) gets its own monsters + drop items into its pack (synthetic client)."""
+        mons = api.MOB_SPRITES['pay_fild01']
+        items = [(i, 'it%d' % i) for i in api.DROP_ITEMS['pay_fild01'][:6]]
+        warn = []
+        secs = api.mob_sprite_sections(_Vfs(field_files(monsters=mons, items=items)), 'pay_fild01', warn)
+        self.assertEqual([t for t, _v, _c, _d in secs], [S.TAG_RSAT, S.TAG_RSAN])
+        names = [s['name'] for s in S.dec_rsan(secs[1][3])['sprites']]
+        self.assertEqual(names[:len(mons)], list(mons))
+        self.assertEqual(sorted(n for n in names if n.startswith('item_')), sorted('item_%d' % i for i, _r in items))
+
+
 def write_field_pack(out):
     work = tempfile.mkdtemp(prefix='romobs')
     try:
