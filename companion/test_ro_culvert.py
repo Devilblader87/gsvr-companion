@@ -14,7 +14,7 @@ from ro_conv import api, mappack, culvert, dungeons, towns  # noqa: E402
 
 FLOORS = ["prt_sewb1", "prt_sewb2", "prt_sewb3", "prt_sewb4"]
 ROOT = os.path.dirname(HERE)
-RA_SRC = "/path/to/gsvr-testdata/w34/ra_src"
+RA_SRC = "/path/to/gsvr-testdata"
 
 
 class Packs(unittest.TestCase):

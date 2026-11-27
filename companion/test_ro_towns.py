@@ -3,8 +3,8 @@
 the owner's converted packs / iRO client are checked too when they are on this machine (Mac only, else skipped).
 
   cd companion && python3 -I test_ro_towns.py
-  GSVR_RO_TOWNS_PACKS=<dir with ro__<map>.pack>   real packs (default /path/to/gsvr-testdata/ro_out/towns/packs)
-  GSVR_RO_CLIENT=<iRO client folder>               the RSM survey (default /path/to/gsvr-testdata/ro_data/Ragnarok Online)
+  GSVR_RO_TOWNS_PACKS=<dir with ro__<map>.pack>   real packs (default /path/to/gsvr-testdata)
+  GSVR_RO_CLIENT=<iRO client folder>               the RSM survey (default /path/to/gsvr-testdata Online)
 """
 import collections
 import os
@@ -19,13 +19,13 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "rose_conv"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-from ro_conv import api, culvert, dungeons, jobmaps, towns  # noqa: E402
+from ro_conv import api, culvert, dungeons, jobmaps, maps2, towns  # noqa: E402
 import rpg1 as P  # noqa: E402
 import ro_towns_warps as TW  # noqa: E402
 
 ED = os.path.join(ROOT, "unity", "Assets", "GoldSrcVR", "Editor")
-PACKS_DIR = os.environ.get("GSVR_RO_TOWNS_PACKS", "/path/to/gsvr-testdata/ro_out/towns/packs")
-CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata/ro_data/Ragnarok Online")
+PACKS_DIR = os.environ.get("GSVR_RO_TOWNS_PACKS", "/path/to/gsvr-testdata")
+CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata Online")
 
 
 def rd(*p):
@@ -47,10 +47,10 @@ class Table(unittest.TestCase):
     def test_table(self):
         self.assertEqual(towns.NAMES[:5], ("prontera", "prt_in", "prt_church", "prt_fild08", "izlude"))
         self.assertEqual(len(set(towns.NAMES)), len(towns.NAMES))
-        self.assertLessEqual(len(api.MAP_ORDER), towns.MAX_MAPS)          # GsvrRoMaps.MaxMaps = 64 (two-int masks, w39)
-        self.assertEqual(towns.MAX_MAPS, 64)
+        self.assertLessEqual(len(api.MAP_ORDER), towns.MAX_MAPS)          # w52: world ids 0..254 (GsvrRoMaps.MaxMaps 256, id 255 = lobby)
+        self.assertEqual(towns.MAX_MAPS, 255)
         self.assertEqual(tuple(api.MAP_ORDER[:len(towns.NAMES)]), towns.NAMES)          # w37 integrate: the dungeons lane appends its maps after the towns (test_ro_dungeons.py)
-        self.assertEqual(tuple(api.MAP_ORDER[len(towns.NAMES):]), culvert.NAMES + dungeons.NAMES + jobmaps.NAMES)          # w39: ids 27..30 culvert, 31..42 dungeons; w41: 43..49 job-test maps
+        self.assertEqual(tuple(api.MAP_ORDER[len(towns.NAMES):]), culvert.NAMES + dungeons.NAMES + jobmaps.NAMES + maps2.NAMES)          # w46: 51..62 maps2; w39: ids 27..30 culvert, 31..42 dungeons; w41: 43..49 job-test maps
         for m, label, c, k in towns.WORLD:
             self.assertTrue(re.match(r"^[a-z0-9_]{1,32}$", m), m)
             self.assertTrue(label and k in ("town", "interior", "field"), m)
@@ -75,7 +75,7 @@ class Table(unittest.TestCase):
         self.assertEqual((len(t), len(o)), (len(world), len(world)))
         self.assertTrue(all(0 < x <= 80 for x in t) and all(0 < x <= 700 for x in o), (t, o))   # converter limits: 80 terrain blocks, 700 chunks
         self.assertEqual(re.findall(r'"([^"]+)"', re.search(r"RoMapLabels\s*=\s*\{([^}]*)\}", src).group(1)),
-                         [towns.LABEL[m] for m in towns.NAMES] + [culvert.LABEL[m] for m in culvert.NAMES] + [dungeons.LABEL[m] for m in dungeons.NAMES] + [jobmaps.LABEL[m] for m in jobmaps.NAMES])          # the nav panel's names == the companion's labels
+                         [towns.LABEL[m] for m in towns.NAMES] + [culvert.LABEL[m] for m in culvert.NAMES] + [dungeons.LABEL[m] for m in dungeons.NAMES] + [jobmaps.LABEL[m] for m in jobmaps.NAMES] + [maps2.LABEL[m] for m in maps2.NAMES])          # the nav panel's names == the companion's labels
         self.assertEqual(re.findall(r'"([^"]+)"', re.search(r"RoClusterLabels\s*=\s*\{([^}]*)\}", src).group(1)), [towns.LABEL[c] if c != "morocc" else "Morroc" for c in towns.CLUSTERS])
         self.assertIn("maps.mapCluster = RoMapCluster; maps.ramBudgetMB = RoRamBudgetMB; maps.onDemandBudgetMB = RoOnDemandBudgetMB;", src)
         m = re.search(r"const float RoRamBudgetMB = (\d+)f;", src)
@@ -222,7 +222,7 @@ class RealPacks(unittest.TestCase):
         self.assertGreater(sum(d["mb"] for d in me.values()), budget, "all maps at once would not fit (the budget is real)")
 
 
-@unittest.skipUnless(os.path.isfile("/path/to/gsvr-testdata/ro_out/culvert/ro__prt_sewb1.pack") and os.path.isfile("/path/to/gsvr-testdata/ro_out/w37/ro__pay_dun00.pack"), "no converted culvert / dungeon packs on this machine")
+@unittest.skipUnless(os.path.isfile("/path/to/gsvr-testdata") and os.path.isfile("/path/to/gsvr-testdata"), "no converted culvert / dungeon packs on this machine")
 class OnDemandPools(unittest.TestCase):
     """w39: the builder's pool needs of the culvert floors (ids 27..30) and the dungeons (31..42) are the measured packs"""
     def test_needs_equal_the_measured_packs(self):
@@ -230,7 +230,7 @@ class OnDemandPools(unittest.TestCase):
         t, o = builder_array(src, "RoMapTerrNeed"), builder_array(src, "RoMapObjNeed")
         n = len(towns.NAMES)
         for i, m in enumerate(culvert.NAMES + dungeons.NAMES):
-            d = TW.measure(os.path.join("/path/to/gsvr-testdata/ro_out/culvert" if m in culvert.NAMES else "/path/to/gsvr-testdata/ro_out/w37", "ro__%s.pack" % m))
+            d = TW.measure(os.path.join("/path/to/gsvr-testdata" if m in culvert.NAMES else "/path/to/gsvr-testdata", "ro__%s.pack" % m))
             self.assertEqual((t[n + i], o[n + i]), (d["terr"], d["chunks"]), m)
 
 

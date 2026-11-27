@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(HERE, "rose_conv"))
 ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, "unity", "Assets", "GoldSrcVR", "Editor", "ro_quests.txt")
 NPCS = os.path.join(ROOT, "unity", "Assets", "GoldSrcVR", "Editor", "ro_npcs.txt")
-REAL_PACKS = os.environ.get("GSVR_RO_REAL_DIR", "/path/to/gsvr-testdata/ro_out/lmv3")
+REAL_PACKS = os.environ.get("GSVR_RO_REAL_DIR", "/path/to/gsvr-testdata")
 MAPS = ["prontera", "prt_in", "prt_church", "prt_fild08", "izlude"]
 TALK, KILL, ITEM, GIVE, PAY = 1, 2, 3, 4, 5
 MAX_Q, MAX_STEPS = 32, 6

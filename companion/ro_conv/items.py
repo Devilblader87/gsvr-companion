@@ -20,9 +20,11 @@ import zlib
 from . import img, lub, sprite
 from .itemview import ITEM_VIEW
 
-# anims kept for the character: idle walk standby attack2 attack3 (sprite.PLAYER_ANIMS indices 0 1 4 10 11); weapons are visible in 4 / 10 / 11 only
+# anims kept for the character (sprite.PLAYER_ANIMS indices): idle 0, walk 1, sit 2, pickup 3, standby 4, attack1 5 (bare hand), hurt 6, dead 8, attack2 10, attack3 11, cast 12.
+# w44 anim: the body actions of the original client (GsvrRoAct); weapons are drawn in 4 / 5 / 10 / 11 / 12 only (the weapon ACTs have no layers elsewhere)
+ANIM_PICKUP, ANIM_ATTACK1, ANIM_HURT, ANIM_DEAD, ANIM_CAST = 3, 5, 6, 8, 12
 ANIM_STANDBY, ANIM_ATTACK2, ANIM_ATTACK3 = 4, 10, 11
-PLAYER_KEEP = (sprite.ANIM_IDLE, sprite.ANIM_WALK, ANIM_STANDBY, ANIM_ATTACK2, ANIM_ATTACK3)
+PLAYER_KEEP = (sprite.ANIM_IDLE, sprite.ANIM_WALK, sprite.ANIM_SIT, ANIM_PICKUP, ANIM_STANDBY, ANIM_ATTACK1, ANIM_HURT, ANIM_DEAD, ANIM_ATTACK2, ANIM_ATTACK3, ANIM_CAST)
 STILL = (sprite.ANIM_IDLE, sprite.ANIM_SIT)     # idle frames after the first are head-turn poses
 
 # Which looks the start pack carries (item ids; the look is found through ITEM_VIEW): the shops' weapons + shield, the common headgear,

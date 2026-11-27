@@ -23,8 +23,8 @@ import rpg1 as P  # noqa: E402
 
 ROOT = os.path.dirname(HERE)
 NPCS = os.path.join(ROOT, "unity", "Assets", "GoldSrcVR", "Editor", "ro_npcs.txt")
-REAL_CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata/ro_data/Ragnarok Online")
-REAL_PACKS = os.environ.get("GSVR_RO_REAL_DIR", "/path/to/gsvr-testdata/ro_out/lmv3")
+REAL_CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata Online")
+REAL_PACKS = os.environ.get("GSVR_RO_REAL_DIR", "/path/to/gsvr-testdata")
 
 
 def npc_rows():

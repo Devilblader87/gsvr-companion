@@ -19,9 +19,9 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from ro_conv import api, culvert, dungeons, jobmaps, towns  # noqa: E402
 
 ED = os.path.join(ROOT, 'unity', 'Assets', 'GoldSrcVR', 'Editor')
-RA = os.environ.get('GSVR_RA_JOBS1', '/path/to/gsvr-testdata/w41/jobs_ra')
-PACKS = os.environ.get('GSVR_PACKS_JOBS1', '/path/to/gsvr-testdata/w41/jobs_allpacks')
-CLIENT = os.environ.get('GSVR_RO_CLIENT', '/path/to/gsvr-testdata/ro_data/Ragnarok Online')
+RA = os.environ.get('GSVR_RA_JOBS1', '/path/to/gsvr-testdata')
+PACKS = os.environ.get('GSVR_PACKS_JOBS1', '/path/to/gsvr-testdata')
+CLIENT = os.environ.get('GSVR_RO_CLIENT', '/path/to/gsvr-testdata Online')
 
 
 def rd(p):
@@ -38,7 +38,7 @@ class Table(unittest.TestCase):
     def test_ids_after_the_dungeons(self):
         order = list(api.MAP_ORDER)
         self.assertEqual(jobmaps.JOBMAP_BASE, len(towns.NAMES) + len(culvert.NAMES) + len(dungeons.NAMES))
-        self.assertEqual(tuple(order[jobmaps.JOBMAP_BASE:]), jobmaps.NAMES)
+        self.assertEqual(tuple(order[jobmaps.JOBMAP_BASE:jobmaps.JOBMAP_BASE + len(jobmaps.NAMES)]), jobmaps.NAMES)          # w46: the maps2 lane follows (test_ro_maps2.py)
         self.assertEqual([jobmaps.world_id(m) for m in jobmaps.NAMES], list(range(43, 50)))
         self.assertLessEqual(len(order), towns.MAX_MAPS)
 
@@ -56,10 +56,10 @@ class Table(unittest.TestCase):
         names = builder_list(src, 'RoMapNames', True)
         self.assertEqual(names, list(api.MAP_ORDER))
         b = jobmaps.JOBMAP_BASE
-        self.assertEqual(builder_list(src, 'RoMapLabels', True)[b:], [jobmaps.LABEL[m] for m in jobmaps.NAMES])
-        self.assertEqual(builder_list(src, 'RoMapCluster', False)[b:], [-2] * len(jobmaps.NAMES))
-        self.assertEqual(builder_list(src, 'RoMapTerrNeed', False)[b:], [jobmaps.MEASURED[m][0] for m in jobmaps.NAMES])
-        self.assertEqual(builder_list(src, 'RoMapObjNeed', False)[b:], [jobmaps.MEASURED[m][1] for m in jobmaps.NAMES])
+        self.assertEqual(builder_list(src, 'RoMapLabels', True)[b:b + len(jobmaps.NAMES)], [jobmaps.LABEL[m] for m in jobmaps.NAMES])
+        self.assertEqual(builder_list(src, 'RoMapCluster', False)[b:b + len(jobmaps.NAMES)], [-2] * len(jobmaps.NAMES))
+        self.assertEqual(builder_list(src, 'RoMapTerrNeed', False)[b:b + len(jobmaps.NAMES)], [jobmaps.MEASURED[m][0] for m in jobmaps.NAMES])
+        self.assertEqual(builder_list(src, 'RoMapObjNeed', False)[b:b + len(jobmaps.NAMES)], [jobmaps.MEASURED[m][1] for m in jobmaps.NAMES])
         self.assertIn('RoJobMapBase = %d;' % b, src)
 
     def test_npc_sprites(self):

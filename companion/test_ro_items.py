@@ -23,8 +23,8 @@ import ro_itemdb as DB  # noqa: E402
 import test_ro_e2e as E2E  # noqa: E402
 import test_ro_sprite as RS  # noqa: E402
 
-REAL_CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata/ro_data/Ragnarok Online")
-RA_SRC = os.environ.get("GSVR_RA_SRC", "/path/to/gsvr-testdata/w34/ra_src")
+REAL_CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata Online")
+RA_SRC = os.environ.get("GSVR_RA_SRC", "/path/to/gsvr-testdata")
 DATA = os.path.join(ROOT, "unity", "Assets", "GoldSrcVR", "Editor", "ro_items.txt")
 
 
@@ -460,7 +460,7 @@ class Converter(unittest.TestCase):
         v = grf.Vfs(folder)
         w = []
         secs = api.sprite_sections(v, warn=w)
-        self.assertEqual([s[0] for s in secs], [S.TAG_RSAT, S.TAG_RSAN])
+        self.assertEqual([s[0] for s in secs][:2], [S.TAG_RSAT, S.TAG_RSAN])          # (+ RPAL: w43 equip, test_ro_equip.py)
         info = S.dec_rsan(secs[1][3])
         names = [s['name'] for s in info['sprites']] if isinstance(info, dict) and 'sprites' in info else None
         self.assertIsNotNone(names, 'dec_rsan result shape')
@@ -479,7 +479,7 @@ class Converter(unittest.TestCase):
         w = []
         secs = api.sprite_sections(grf.Vfs(folder), warn=w)
         names = [s['name'] for s in S.dec_rsan(secs[1][3])['sprites']]
-        self.assertEqual(names, ['body_m', 'head_m', 'poring'])               # the synthetic client has no female Novice
+        self.assertEqual(names, ['body_m', 'head_m', 'poring', 'hi_1_m', 'bi_m'])      # the synthetic client has no female Novice; w43 equip adds the indexed hair 1 / body after them
 
 
 @unittest.skipUnless(os.path.isfile(os.path.join(REAL_CLIENT, 'data.grf')), "the owner's client is not on this machine")
@@ -514,9 +514,9 @@ class RealClient(unittest.TestCase):
         secs = api.sprite_sections(self.v, warn=w)
         info = S.dec_rsan(secs[1][3])
         by = dict((x['name'], x) for x in info['sprites'])
-        self.assertEqual(by['body_m']['clips'], 8 * (items.ANIM_ATTACK3 + 1))   # the table reaches anim 11 (standby 4, attack2 10, attack3 11)
-        self.assertEqual(by['head_m']['clips'], 8 * (items.ANIM_ATTACK3 + 1))
-        for a in (items.ANIM_STANDBY, items.ANIM_ATTACK2, items.ANIM_ATTACK3):
+        self.assertEqual(by['body_m']['clips'], 8 * (items.ANIM_CAST + 1))   # the table reaches anim 12 (w44 anim: sit 2, pickup 3, standby 4, attack1 5, hurt 6, dead 8, attack2 10, attack3 11, cast 12)
+        self.assertEqual(by['head_m']['clips'], 8 * (items.ANIM_CAST + 1))
+        for a in (items.ANIM_STANDBY, items.ANIM_ATTACK1, items.ANIM_HURT, items.ANIM_DEAD, items.ANIM_ATTACK2, items.ANIM_ATTACK3, items.ANIM_CAST, items.ANIM_PICKUP, 2):
             c = info['clips'][by['body_m']['first_clip'] + a * 8]
             self.assertGreater(c[1], 0, 'body anim %d has frames' % a)
         self.assertEqual(w, [])

@@ -33,6 +33,7 @@ import rose_audio as AU     # noqa: E402  (wav reader, resampler, mp3 / ogg deco
 from . import strfx          # noqa: E402
 
 AUDIO_REV = 2               # 2 (w42 atmo): + fx/click, fx/cancel, fx/pickup, fx/equip in snd_common; snd_<map> also carries that map's monsters (mon/<sprite>/atk|die|hurt)
+AUDIO_REV = 3               # 3 (w43 fx): snd_common carries NO effects any more (the world's effects = the 'roefx' pack, ro_conv/roefx.py; ~4 MB less to download)
 SFX_RATE = 22050
 MUSIC_RATE = 22050
 MUSIC_BUDGET = 15 * 1000 * 1000            # bytes per music pack (VRChat string download limit 18 MB, ro_pack.md)
@@ -375,8 +376,8 @@ def build(name, folder, out_path, progress=None, cancel=None, log=None, monsters
         else:
             warns.append('sfx: no wav found in the client')
         tick('effects', 0.5)
-        want = list(effects) if effects is not None else list(EFFECT_STR) + list(STAND_INS)
-        refx, rftx, einfo = build_effects(vfs, want, warns)
+        want = list(effects) if effects is not None else []          # w43 fx: the world's effects come from the 'roefx' pack (roefx.py); effects=... keeps the old REFX for tools
+        refx, rftx, einfo = build_effects(vfs, want, warns) if want else (b'', b'', dict(effects=[], textures=0, missing_textures=0, refx_bytes=0, rftx_bytes=0))
         if einfo['effects']:
             sections.append((strfx.TAG_REFX, strfx.SECTION_VERSION, len(einfo['effects']), refx))
         if rftx:

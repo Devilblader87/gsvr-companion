@@ -100,6 +100,9 @@ class _AudioMerged:
         ui = getattr(conv, "UI_PACKS", None)          # w42 ui-a: the 'roui' interface pack (ro_conv.UI_PACKS), served by name like the audio packs
         if isinstance(ui, dict):
             self.PACKS.update(ui)
+        npc = getattr(conv, "NPC_PACKS", None)          # w43 npc lane: the 'npc_<town>' NPC sprite packs (ro_conv.NPC_PACKS), served by name like the ui pack
+        if isinstance(npc, dict):
+            self.PACKS.update(npc)
         self.PACKS.update(conv.AUDIO_PACKS)
 
     def __getattr__(self, name):

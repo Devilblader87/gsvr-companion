@@ -230,7 +230,7 @@ class World(unittest.TestCase):
         from ro_conv import mobsets
         self.assertEqual(ms, mobsets.MOB_SPRITES, 'companion/ro_conv/mobsets.py is stale: run python3 -I tools/ro_fields_gen.py merge')
         self.assertEqual(di, mobsets.DROP_ITEMS)
-        self.assertEqual(len(ms), 27, 'every field / culvert / dungeon map of the world has monsters')
+        self.assertEqual(len(ms), 36, 'every field / culvert / dungeon map of the world has monsters (27 + the 9 monster maps of the w46 maps2 lane)')
         for m in ms:
             self.assertIn(m, api.PACKS, '%s is a world map' % m)
             self.assertEqual(api.MOB_SPRITES[m], ms[m])

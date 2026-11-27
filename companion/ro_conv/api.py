@@ -12,7 +12,7 @@ map only (docs/design/ro_multimap.md: the world loads every map of PACKS at once
 import os
 import struct
 
-from . import items, jobs, mappack, sprite, towns, culvert, dungeons, jobmaps, ui
+from . import equip, items, jobs, mappack, sprite, towns, culvert, dungeons, jobmaps, maps2, ui, roefx, npcs
 from .grf import Vfs, GrfError, MAGICS
 
 VERSION = 'ro-%d.%d' % (mappack.TOOL_VERSION, sprite.RSAN_VERSION)
@@ -40,20 +40,32 @@ for _m in dungeons.NAMES:
 # first jobs lane (docs/design/ro_jobs1.md, w41): the guild / test maps of the six first-job tests = ids 43..49, on demand like the dungeons
 for _m in jobmaps.NAMES:
     PACKS.setdefault(_m, {'kind': 'zone', 'label': jobmaps.LABEL[_m]})
+# maps wave 2 (docs/design/ro_maps2.md, w46): Glast Heim, Comodo, Lutie + Toy Factory = ids 51..62, on demand like the dungeons
+for _m in maps2.NAMES:
+    PACKS.setdefault(_m, {'kind': 'zone', 'label': maps2.LABEL[_m]})
 MAP_ORDER = tuple(PACKS)                                       # == GsvrRoMaps.mapNames in the scene (one index per map on both sides)
-PREBUILD_ORDER = tuple(m for m in MAP_ORDER if m not in dungeons.NAMES and m not in jobmaps.NAMES)
+PREBUILD_ORDER = tuple(m for m in MAP_ORDER if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES)
 # w42 ui-a (docs/design/ro_ui.md): the original interface atlas = its own small pack 'roui' (NOT in PACKS: the world loads every PACKS entry as a map). The build manager
 # serves it like the audio packs (rosebuild merges UI_PACKS); the world asks for it once, right after the start map (GsvrRoFetch ui). Prebuilt right after the start map.
 UI_PACKS = {ui.UI_PACK: {'kind': 'ui', 'label': 'Interface'}}
-PREBUILD_ORDER = PREBUILD_ORDER[:1] + (ui.UI_PACK,) + PREBUILD_ORDER[1:]                                     # rosebuild: background prebuild order (instead of the ROSE lobby / avatar rule)
-NO_PREBUILD = frozenset(dungeons.NAMES) | frozenset(jobmaps.NAMES)                                    # never built in the background: only when the world asks (docs/design/ro_dungeons.md)
+# w43 fx (docs/design/ro_fx.md): the world's skill / level up / warp portal effects = their own pack 'roefx' (ro_conv/roefx.py), served by name like 'roui' (rosebuild merges
+# UI_PACKS), asked for once after snd_common; prebuilt right after the interface.
+UI_PACKS[roefx.FX_PACK] = {'kind': 'ui', 'label': 'Effects'}
+PREBUILD_ORDER = PREBUILD_ORDER[:1] + (ui.UI_PACK, roefx.FX_PACK) + PREBUILD_ORDER[1:]                                     # rosebuild: background prebuild order (instead of the ROSE lobby / avatar rule)
+# w43 npc lane (docs/design/ro_npc_world.md): the classic NPCs' sprite packs, one per town group ('npc_<town>', RSAT + RSAN only, ro_conv/npcs.py). NOT in PACKS (not maps);
+# served by name like the ui / audio packs (rosebuild merges NPC_PACKS); prebuilt: the start town's right after the interface + effects packs (w43 integrate), the others after every map.
+NPC_PACKS = dict(npcs.NPC_PACKS)
+_NPC_FIRST = tuple(g for g in npcs.NPC_ORDER if npcs.group_of(MAP_ORDER[0]) == g)
+PREBUILD_ORDER = PREBUILD_ORDER[:3] + _NPC_FIRST + PREBUILD_ORDER[3:] + tuple(g for g in npcs.NPC_ORDER if g not in _NPC_FIRST)
+NO_PREBUILD = frozenset(dungeons.NAMES) | frozenset(jobmaps.NAMES) | frozenset(maps2.NAMES)                                    # never built in the background: only when the world asks (docs/design/ro_dungeons.md)
 SPRITE_PACK = 'prontera'                                       # the ONLY pack with RSAT / RSAN: the world builds the sprite set once
 
 # w36 sound lane (docs/design/ro_sound.md): audio / effect packs next to the map packs. NOT in PACKS (the world loads every PACKS entry as a map); the lead merges them
 # into the build manager's table (PACKS.update(AUDIO_PACKS) in rosebuild) and the world asks for them by name: snd_common (sound effects + skill effects), snd_<map> (that map's BGM).
 AUDIO_PACKS = dict([('snd_common', {'kind': 'audio', 'label': 'Sounds and effects'})] + [('snd_' + _m, {'kind': 'audio', 'label': 'Music ' + _m}) for _m in PACKS])
 AUDIO_ORDER = tuple(AUDIO_PACKS)
-PACK_REV = {'prontera': 6, 'prt_fild08': 1}                   # prontera 1: start cell 156,191 (rAthena @go); 2: + the NPC sprites (docs/design/ro_npc.md); 3: + the w36 item looks / icons (and, on its own branch, the w37 jobs2 bodies); 4: NPC + items; 5: NPC + items + jobs2 bodies (w37 integrate); 6: + the 16 first-job test NPC sprites (w41 jobs, docs/design/ro_jobs1.md); prt_fild08 1: w34 monster + item sprites
+PACK_REV = {'prontera': 9, 'prt_fild08': 1}                   # prontera 1: start cell 156,191 (rAthena @go); 2: + the NPC sprites (docs/design/ro_npc.md); 3: + the w36 item looks / icons (and, on its own branch, the w37 jobs2 bodies); 4: NPC + items; 5: NPC + items + jobs2 bodies (w37 integrate); 6: + the 16 first-job test NPC sprites (w41 jobs, docs/design/ro_jobs1.md); 7: + the w43 equip look (indexed hair / body, RPAL, robes, IMF flags); 8: + the w44 body actions (sit, pickup, attack1, hurt, dead, cast; docs/design/ro_anim.md); 9: + the w46 second-job guild NPC stand-ins (JOB2_NPC_IDS); prt_fild08 1: w34 monster + item sprites
+EQUIP_LOOK = True                                              # w43 equip (docs/design/ro_equip.md): indexed hair + Novice body, robes, RPAL palette rows, IMF draw-order flags
 JOB2_SPRITES = True                                            # w37 jobs2 (docs/design/ro_jobs2.md): append the second-job bodies body_j<id>_<sex> to the start pack
 SPRITE_SEX = 'm'                                               # body_m / head_m (the scene's GsvrRoSprite names)
 BuildError = mappack.BuildError
@@ -67,14 +79,18 @@ def warm_after(name):
     """rosebuild W10 warm-up hook: the world asked for `name` -> the maps it asks for next (they go to the front of the background queue).
     Towns: the world fetches only the maps resident around the player (GsvrRoMaps.LResident == towns.resident), in map id order; the culvert floors are built after each other once
     one is asked for; the dungeons lane never warms in the background (on demand only, docs/design/ro_dungeons.md)."""
-    if name not in MAP_ORDER or name in dungeons.NAMES or name in jobmaps.NAMES:          # w41: the job maps are on demand like the dungeons
+    if name not in MAP_ORDER or name in dungeons.NAMES or name in jobmaps.NAMES or name in maps2.NAMES:          # w46 maps2 + w41: the job maps are on demand like the dungeons
         return []
     if name in culvert.NAMES:
         return culvert.warm_after(name)
-    return [m for m in towns.warm_after(name, names=MAP_ORDER) if m not in dungeons.NAMES and m not in culvert.NAMES and m not in jobmaps.NAMES]
+    return [m for m in towns.warm_after(name, names=MAP_ORDER) if m not in dungeons.NAMES and m not in culvert.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES]
 
 
 def pack_version(name):
+    if name == roefx.FX_PACK:
+        return 'ro-fx-%d' % roefx.FX_REV
+    if name in NPC_PACKS:
+        return 'ro-npc-%d.%d' % (npcs.NPC_REV, sprite.RSAN_VERSION)
     if name in UI_PACKS:
         return 'ro-ui-%d' % ui.UI_REV
     if name in AUDIO_PACKS:
@@ -175,6 +191,9 @@ NPC_SPRITES = {105: '8w_soldier', 53: '1_m_innkeeper', 54: '1_m_jobguider'}
 NPC_SPRITES.update({119: '2_m_swordmaster', 85: '4_m_03', 92: '4_f_03', 123: '2_f_magicmaster', 88: '4_m_orient01', 93: '4_f_04', 60: '1_m_pastor', 89: '4_m_orient02',
                     95: '4_f_sister', 98: '4w_m_02', 86: '4_m_04', 83: '4_m_01', 47: '1_m_01', 116: '4_f_kafra2', 69: '1_f_04', 118: '2_m_thiefmaster'})
 NPC_PATH = 'data/sprite/npc/%s'
+# w46 jobs2 (docs/design/ro_jobs2.md "w46", Editor/ro_jobs2q.txt): the stand-in second-job guild NPCs (registry rows j2_*) of guilds whose maps the world does not load.
+# Their client file comes from the owner's npcidentity.lub + jobname.lub (ro_conv.npcs.id_files, checked once 2026-11-26: all 19 exist); start pack PACK_REV prontera 9.
+JOB2_NPC_IDS = (55, 57, 60, 70, 86, 101, 109, 120, 724, 727, 730, 735, 741, 743, 744, 747, 749, 750, 754)
 
 
 def _pair(vfs, sex):
@@ -205,6 +224,43 @@ def npc_sprites(vfs, warn=None):
                 warn.append('sprites: npc %d: %s' % (sid, e))
     if miss and warn is not None:          # w41: ONE line for every missing NPC sprite (19 ids would push the other warnings out of the 40-line status list)
         warn.append('sprites: %s not in the client data (placeholders in the world)' % ', '.join('npc %d' % s for s in miss))
+    out.extend(job2_npc_sprites(vfs, warn))
+    return out
+
+
+def job2_npc_sprites(vfs, warn=None):
+    """w46 jobs2: 'npc_<id>' (idle) for JOB2_NPC_IDS not in NPC_SPRITES, the file name through the client's own npcidentity / jobname tables. A client without
+    them (or a missing file) keeps the placeholder; one warning line."""
+    from . import npcs
+    try:
+        table = npcs.id_files(vfs)
+    except (AttributeError, KeyError):
+        table = {}
+    if not table:          # a client without the two tables: placeholders, the NPC sprite warning line of npc_sprites stays the only one
+        return []
+    out, miss = [], []
+    _E = (sprite.FormatError, ValueError, IndexError, struct.error)
+    for sid in JOB2_NPC_IDS:
+        if sid in NPC_SPRITES:
+            continue
+        fn = table.get(sid)
+        if not fn:
+            miss.append(sid)
+            continue
+        base = NPC_PATH % fn
+        try:
+            sp = sprite.convert_sprite('npc_%d' % sid, sprite.KIND_MONSTER, vfs.read(base + '.spr'), vfs.read(base + '.act'), anims=(sprite.ANIM_IDLE,))
+            for d in range(1, 8):
+                if not sp['clips'][d]['frames']:
+                    sp['clips'][d] = sp['clips'][0]
+            out.append(sp)
+        except KeyError:
+            miss.append(sid)
+        except _E as e:
+            if warn is not None:
+                warn.append('sprites: npc %d: %s' % (sid, e))
+    if miss and warn is not None:
+        warn.append('sprites: second-job guild NPCs %s not in the client data (placeholders)' % ', '.join(str(s) for s in miss))
     return out
 
 
@@ -246,8 +302,16 @@ def sprite_sections(vfs, sex=SPRITE_SEX, warn=None):
     sp += items.extra_sprites(vfs, sex, warn)       # w36 items: headgear / weapon / shield looks + item icons, AFTER every other sprite (names + order of the rest unchanged)
     if JOB2_SPRITES:                                            # w37 jobs2: AFTER every other sprite (names + order of the others unchanged)
         sp += jobs.job_sprites(vfs, warn=warn)
+    rpal = None
+    if EQUIP_LOOK:                                              # w43 equip: indexed hair + Novice body, robes, the palette rows (AFTER everything else: names + order of the others unchanged)
+        eq_sp, rpal = equip.equip_sprites(vfs, warn)
+        sp += eq_sp
+        equip.apply_imf_all(vfs, sp, warn)                      # draw order (head behind body) of every body sprite the client has an IMF for
     rsat, rsan = sprite.build_set(sp, ref=ref)
-    return [(sprite.TAG_RSAT, 1, 1, rsat), (sprite.TAG_RSAN, sprite.RSAN_VERSION, len(sp), rsan)]
+    secs = [(sprite.TAG_RSAT, 1, 1, rsat), (sprite.TAG_RSAN, sprite.RSAN_VERSION, len(sp), rsan)]
+    if rpal is not None:
+        secs.append((equip.TAG_RPAL, equip.RPAL_VERSION, 1, rpal))
+    return secs
 
 
 def item_resnames(vfs):
@@ -309,6 +373,10 @@ def mob_sprite_sections(vfs, name, warn=None):
 
 
 def build(name, folder, out_path, progress=None, cancel=None, log=None):
+    if name == roefx.FX_PACK:
+        return roefx.build(name, folder, out_path, progress=progress, cancel=cancel, log=log)
+    if name in NPC_PACKS:
+        return npcs.build(name, folder, out_path, progress=progress, cancel=cancel, log=log)
     if name in UI_PACKS:
         return ui.build(name, folder, out_path, progress=progress, cancel=cancel, log=log)
     if name in AUDIO_PACKS:

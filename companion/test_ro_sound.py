@@ -213,17 +213,22 @@ class Packs(unittest.TestCase):
                                           'poring_die.wav', 'effect\\ef_bash.wav'],
                                  strs=[('h_levelup.str', sample_effect())], textures=['glow1.bmp', 'f0.bmp', 'f1.bmp', 'f2.bmp', 'ring_blue.tga', 'whitelight.tga'])
             r, p = self.build(client, 'snd_common')
-            self.assertEqual(p['order'], [b'SNDS', b'REFX', b'RFTX'])
+            self.assertEqual(p['order'], [b'SNDS'], 'w43 fx: snd_common has no effects any more (the roefx pack carries them, test_ro_fx.py)')
             names = sorted(c['name'] for c in AU.dec_snds(p['sections'][b'SNDS']['data']))
             self.assertEqual(names, ['fx/hit/sword', 'fx/hurt/0', 'fx/levelup', 'fx/portal', 'fx/swing/sword', 'mon/poring/atk', 'mon/poring/die', 'mon/poring/hurt', 'skill/5/fire'],
                              'exactly the wavs the client has (missing ones are skipped)')
-            effs = [e['name'] for e in S.dec_refx(p['sections'][b'REFX']['data'])]
+            out2 = os.path.join(client, 'out_old.pack')
+            r2 = A.build('snd_common', client, out2, effects=list(A.EFFECT_STR) + list(A.STAND_INS))          # the old REFX path stays usable for tools
+            with open(out2, 'rb') as f:
+                p2 = P.read_pack(f.read(), verify=True)
+            self.assertEqual(p2['order'], [b'SNDS', b'REFX', b'RFTX'])
+            effs = [e['name'] for e in S.dec_refx(p2['sections'][b'REFX']['data'])]
             self.assertIn('levelup', effs)
             self.assertIn('portal', effs, 'the procedural stand-ins are always written')
             self.assertNotIn('firewall', effs, 'a .str the client lacks is skipped with a warning')
-            self.assertTrue(any('firewall' in w for w in r['warnings']))
-            self.assertEqual(p['sections'][b'RFTX']['count'], r['info']['textures'])
-            lv = [e for e in S.dec_refx(p['sections'][b'REFX']['data']) if e['name'] == 'levelup'][0]
+            self.assertTrue(any('firewall' in w for w in r2['warnings']))
+            self.assertEqual(p2['sections'][b'RFTX']['count'], r2['info']['textures'])
+            lv = [e for e in S.dec_refx(p2['sections'][b'REFX']['data']) if e['name'] == 'levelup'][0]
             self.assertNotEqual(lv['layers'][0]['texslots'][0], -1)
             clips = AU.dec_snds(p['sections'][b'SNDS']['data'])
             self.assertTrue(all(c['loop_start'] == -1 for c in clips), 'effects do not loop')
@@ -337,7 +342,7 @@ def write_cross_pack(path):
         client = make_client(t, wavs=['levelup.wav', '_attack_sword.wav', '_hit_sword.wav', '_enemy_hit1.wav', 'poring_attack.wav', 'poring_die.wav', 'effect\\ef_bash.wav', 'effect\\ef_portal.wav'],
                              strs=[('h_levelup.str', sample_effect()), ('provoke.str', e2)], textures=['glow1.bmp', 'f0.bmp', 'f1.bmp', 'f2.bmp'])
         out = os.path.join(t, 'x.pack')
-        ro_conv.build('snd_common', client, out)
+        A.build('snd_common', client, out, effects=list(A.EFFECT_STR) + list(A.STAND_INS))          # w43: the world's snd_common has no REFX any more; the cross check keeps the old path
         raw = open(out, 'rb').read()
         p = P.read_pack(raw)
         effs = S.dec_refx(p['sections'][b'REFX']['data'])

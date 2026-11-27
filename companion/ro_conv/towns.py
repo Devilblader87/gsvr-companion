@@ -59,7 +59,7 @@ PROTO = NAMES[:5]                     # the prototype maps (ids 0..4, unchanged)
 LABEL = dict((r[0], r[1]) for r in WORLD)
 KIND = dict((r[0], r[3]) for r in WORLD)
 CLUSTER = dict((r[0], r[2]) for r in WORLD)
-MAX_MAPS = 64                         # GsvrRoMaps.MaxMaps: two-int masks (w39) hold 64 maps = 27 towns + 4 culvert + 12 dungeons = 43
+MAX_MAPS = 255                        # w52 mapcap: world map ids 0..254 (GsvrRoMaps.MaxMaps 256 int[] masks; id 255 = the lobby map word, map + 1 in 8 bits on the monster / origin words); was 64 (w39 two-int masks)
 
 # map -> the other maps its warps lead to (== links(parse_warps(ro_warps.txt)); test_ro_towns.py keeps the two equal). The companion has no copy of
 # the world's warp table, so its prebuild hook (warm_after) uses this.

@@ -131,7 +131,7 @@ class Api(unittest.TestCase):
         self.assertIn(S.TAG_RSAT, secs)
         self.assertIn(S.TAG_RSAN, secs)
         rs = S.dec_rsan(secs[S.TAG_RSAN]['data'])
-        self.assertEqual([s['name'] for s in rs['sprites']], ["body_m", "head_m", "poring"])     # the scene's GsvrRoSprite bodyName / headName
+        self.assertEqual([s['name'] for s in rs['sprites']], ["body_m", "head_m", "poring", "hi_1_m", "bi_m"])     # the scene's GsvrRoSprite bodyName / headName; w43 equip appends the indexed hair 1 / body
         self.assertGreater(rs['ref_height_px'], 0)
         # start = walkable cell nearest the centre, a straight run of 10 walkable cells exists (GsvrRoTest.LFindRun on the same grid in ro_e2e.cs)
         cells = secs[b'CELL']['data']

@@ -2,6 +2,21 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.64
+
+**Ragnarok Online (for the updated world GSVR - RO)**
+- Prontera lobby with the original character select.
+- Smooth VR laser with a hover highlight.
+- The original skill and status windows, and a controls window where you can rebind your keys.
+- Second jobs, cards and pets.
+- More maps, Kafra storage and NPC shops.
+- Status effects, heal and buffs on party members, and elemental arrows.
+- Up to 16 players can fight together; all MVPs are in, with their own sprites.
+- Fly Wing and Butterfly Wing fix.
+- Changed packs rebuild by themselves after the update (a few minutes, then cached).
+
+Works with all current GSVR worlds (they need companion 0.9.57 or newer). Help on Discord: https://discord.gg/nc2rw6Snx
+
 ## 0.9.63
 
 **Ragnarok Online (for the updated world GSVR - RO)**

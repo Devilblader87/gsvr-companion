@@ -4,6 +4,7 @@ Written from the public Lua 5.1 bytecode layout (header, function block, 32 bit 
 the few opcodes the client's data tables use (LOADK, MOVE, GETGLOBAL, SETGLOBAL, SETTABLE, NEWTABLE, SETLIST ordering ignored) and reports
 every "table[key] = value" and "global = value" it sees, with keys / values resolved through constants and earlier GETGLOBAL names:
 
+    tables(data)-> {global name: value}     w43: the data tables of iteminfo / Towninfo / quest lists with NESTED tables evaluated (dict; array part keys 1..n)
     parse(data) -> [(scope, key, value)]   scope = '' for a global assignment, else the global name of the table when it can be told
                                             (the last SETGLOBAL target of the table register is resolved after the function ends)
     flat(data)  -> {key: value}             every assignment merged (later wins); keys / values are str | int | float | ('g', name) for a global reference
@@ -18,6 +19,7 @@ class LubError(ValueError):
 
 
 OP_MOVE, OP_LOADK, OP_LOADBOOL, OP_LOADNIL, OP_GETGLOBAL, OP_GETTABLE, OP_SETGLOBAL, OP_SETTABLE, OP_NEWTABLE = 0, 1, 2, 3, 5, 6, 7, 9, 10
+OP_SETLIST, OP_RETURN, OP_CLOSE, OP_CLOSURE = 34, 30, 35, 36
 
 
 class _R:
@@ -143,3 +145,74 @@ def parse(data):
 
 def flat(data):
     return dict((key, val) for _s, key, val in parse(data))
+
+
+def tables(data):
+    """w43 (docs/design/ro_rotxt.md): evaluates the straight-line data chunk of a client table file (iteminfo.lub, Towninfo.lub, *QuestInfoList*.lub ...):
+    NEWTABLE / SETTABLE / SETLIST / LOADK / LOADBOOL / LOADNIL / MOVE / GETGLOBAL / SETGLOBAL, CLOSURE / CLOSE ignored, nothing else (no calls, no jumps: the loader
+    function `main` of those files is a child function and is not run). -> {global name: value}; a table is a dict (SETLIST array part = keys 1..n), strings are bytes
+    decoded as cp949 (the client's own code page), numbers int / float, booleans bool. Raises LubError on an opcode outside that set that touches a table."""
+    if data[:5] != b'\x1bLuaQ' or data[5:12] != b'\x00\x01\x04\x04\x04\x08\x00':
+        raise LubError('not a Lua 5.1 chunk with the standard sizes')
+    r = _R(data)
+    r.p = 12
+    fns = []
+    _func(r, fns)
+    code, k = fns[-1]
+    reg = {}
+    glob = {}
+
+    def rk(x):
+        return k[x - 256] if x >= 256 else reg.get(x)
+
+    def txt(v):
+        return v.decode('cp949', 'replace') if isinstance(v, (bytes, bytearray)) else v
+
+    for ins in code:
+        op, a, c, b = ins & 63, (ins >> 6) & 255, (ins >> 14) & 511, (ins >> 23) & 511
+        bx = (ins >> 14) & 0x3ffff
+        if op == OP_MOVE:
+            reg[a] = reg.get(b)
+        elif op == OP_LOADK:
+            reg[a] = k[bx]
+        elif op == OP_LOADBOOL:
+            reg[a] = bool(b)
+        elif op == OP_LOADNIL:
+            for i in range(a, b + 1):
+                reg[i] = None
+        elif op == OP_GETGLOBAL:
+            reg[a] = glob.get(txt(k[bx]))
+        elif op == OP_NEWTABLE:
+            reg[a] = {}
+        elif op == OP_SETGLOBAL:
+            glob[txt(k[bx])] = reg.get(a)
+        elif op == OP_SETTABLE:
+            t = reg.get(a)
+            if not isinstance(t, dict):
+                raise LubError('SETTABLE on a non table')
+            t[txt(rk(b))] = rk(c)
+        elif op == OP_SETLIST:
+            t = reg.get(a)
+            if not isinstance(t, dict):
+                raise LubError('SETLIST on a non table')
+            n = b
+            base = (c - 1) * 50 if c else 0
+            for i in range(1, n + 1):
+                t[base + i] = reg.get(a + i)
+        elif op == OP_CLOSURE:
+            reg[a] = None                       # the loader function (main) is only defined here, never run
+        elif op == OP_CLOSE:
+            pass
+        elif op == OP_RETURN:
+            break
+        else:
+            raise LubError('opcode %d outside the data subset' % op)
+    # strings were kept as bytes in registers / constants: decode them in place once
+    def fix(v):
+        if isinstance(v, (bytes, bytearray)):
+            return v.decode('cp949', 'replace')
+        if isinstance(v, dict):
+            for kk in list(v):
+                v[kk] = fix(v[kk])
+        return v
+    return dict((kk, fix(vv)) for kk, vv in glob.items())

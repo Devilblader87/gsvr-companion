@@ -823,7 +823,7 @@ class InteriorTest(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ the owner's converted packs (Mac only, never game data in git): bridges / stairs walk at the GAT height
-REAL = os.environ.get('GSVR_RO_REAL_DIR', '/path/to/gsvr-testdata/ro_out/lmv3')
+REAL = os.environ.get('GSVR_RO_REAL_DIR', '/path/to/gsvr-testdata')
 
 
 def _terr_tops(terr, cell):

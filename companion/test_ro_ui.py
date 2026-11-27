@@ -18,7 +18,7 @@ sys.path.insert(0, HERE)
 from ro_conv import api, grf, img, ui, items  # noqa: E402
 import test_ro_e2e as E2E  # noqa: E402
 
-REAL_CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata/ro_data/Ragnarok Online")
+REAL_CLIENT = os.environ.get("GSVR_RO_CLIENT", "/path/to/gsvr-testdata Online")
 UIP = 'data\\texture\\유저인터페이스\\'
 
 
@@ -56,6 +56,24 @@ class Pack(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_rotxt_section_rides_in_the_pack(self):
+        """w43 txt: with System/iteminfo.lub next to the client's data.grf the pack carries a ROTX section after ROUI; without it only ROUI."""
+        import test_ro_rotxt as RT
+        c = ui_client(os.path.join(self.tmp, 'c'))
+        out = os.path.join(self.tmp, 'a.pack')
+        api.build('roui', c, out)
+        self.assertEqual(sorted(ui.P.read_pack(open(out, 'rb').read())['sections']), [ui.TAG_ROUI])
+        os.makedirs(os.path.join(c, 'System'))
+        with open(os.path.join(c, 'System', 'iteminfo.lub'), 'wb') as f:
+            f.write(RT.Asm().chunk('tbl', RT.ITEMS))
+        out = os.path.join(self.tmp, 'b.pack')
+        r = api.build('roui', c, out)
+        secs = ui.P.read_pack(open(out, 'rb').read())['sections']
+        self.assertEqual(sorted(secs), sorted([ui.TAG_ROUI, ui.rotxt.TAG_ROTX]))
+        items, _msgs, _marks = ui.rotxt.decode(secs[ui.rotxt.TAG_ROTX]['data'])
+        self.assertEqual(items[501][0], 'Red Potion')
+        self.assertTrue(set(items) <= set(ui.icon_ids()))                    # only the ids the world uses are packed (bag / drop / shop ids)
 
     def test_atlas_names_alpha_rows(self):
         c = ui_client(os.path.join(self.tmp, 'c'))

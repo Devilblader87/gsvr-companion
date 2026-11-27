@@ -54,6 +54,7 @@ RSAT_PAGE = struct.Struct('<5I')       # w, h, fmt (3 = RGBA32), data_off (from 
 FMT_RGBA32 = 3
 FF_ANCHOR = 1                          # frame flag: the anchor fields are valid
 FF_EMPTY = 2                           # frame flag: no pixels (w = h = 0)
+FF_HEAD_BEHIND = 0x10                  # w43 equip: BODY frame flag, the head (and its headgear) is drawn BEHIND the body in this frame (data/imf priorities, equip.apply_imf)
 # w34 monsters: a frame composed at 1 / 2^shift of its size (a death anim's 3.6x-scaled ghost layer would be a 370 px composite per frame); bits 8..11 of the
 # flags = shift, the runtime (GsvrRoSpriteSet) multiplies left / top / w / h by 2^shift, so the quad keeps the original size and only the texels are coarser.
 FF_SHIFT_POS = 8
@@ -341,7 +342,7 @@ def compose_frame(spr, frame, scale=1.0):
                     da = out[d + 3]
                     oa = a + da * (255 - a) // 255
                     for k, c in enumerate((r, g, b)):
-                        out[d + k] = (c * a + out[d + k] * da * (255 - a) // 255) // max(1, oa)
+                        out[d + k] = min(255, (c * a + out[d + k] * da * (255 - a) // 255) // max(1, oa))          # w46: the floored oa can push the quotient to 256 (evil_druid's translucent layers raised 'byte must be in range')
                     out[d + 3] = oa
     return (left, top, W, H, bytes(out))
 
@@ -418,12 +419,18 @@ def shift_for(w, h, max_side):
     return s
 
 
-def convert_sprite(name, kind, spr_bytes, act_bytes, anims=None, still_anims=None, max_side=None):
+def convert_sprite(name, kind, spr_bytes, act_bytes, anims=None, still_anims=None, max_side=None, indexed=False):
     """One sprite (SPR + ACT) -> dict(name, kind, clips=[dict(delay_ms, frames=[dict(img_key, left, top, w, h, anchor, shift)])], images={key: rgba}).
     anims: anim ids to keep (default all); the clip table always spans 8 * (max kept anim + 1) clips, skipped anims are empty clips.
     still_anims: anims reduced to their first frame (player idle / sit: the extra frames are the head-turn poses, not an animation).
-    max_side (w34): a composite with a side above it is composed again at 1 / 2^shift (FF_SHIFT; left / top / w / h then in shifted px)."""
+    max_side (w34): a composite with a side above it is composed again at 1 / 2^shift (FF_SHIFT; left / top / w / h then in shifted px).
+    indexed (w43 equip): the image keeps the PALETTE INDEX in its red channel (alpha 255, index 0 transparent) instead of the colour; the world looks the colour
+    up in a palette row (RPAL section, shader GoldSrcVR/RoSprite _PalRow), so one sprite serves every hair / clothes colour. The sprite's own palette is returned
+    as dict key 'palette' (256 x (r, g, b)) for the rows the client has no .pal file for."""
     spr = parse_spr(spr_bytes)
+    own_pal = list(spr['palette'] or [(i, i, i) for i in range(256)])
+    if indexed:
+        spr['palette'] = [(i, 0, 0) for i in range(256)]
     act = parse_act(act_bytes)
     n_anim = (len(act['actions']) + 7) // 8
     keep = set(range(n_anim)) if anims is None else set(a for a in anims if a < n_anim)
@@ -460,7 +467,10 @@ def convert_sprite(name, kind, spr_bytes, act_bytes, anims=None, still_anims=Non
             for d in range(1, 8):
                 if a + d < len(clips) and not clips[a + d]['frames'] and clips[a]['frames']:
                     clips[a + d] = dict(delay_ms=clips[a]['delay_ms'], frames=list(clips[a]['frames']))
-    return dict(name=name, kind=kind, clips=clips, images=images)
+    out = dict(name=name, kind=kind, clips=clips, images=images)
+    if indexed:
+        out['palette'] = own_pal
+    return out
 
 
 def ref_height_px(body, head):
@@ -541,6 +551,7 @@ def build_set(sprites, max_page=MAX_PAGE, ref=None, ref_px=None):
                     flags |= FF_ANCHOR
                     ax, ay = f['anchor']
                 flags |= (f.get('shift', 0) & 15) << FF_SHIFT_POS
+                flags |= f.get('order', 0) & FF_HEAD_BEHIND
                 frecs += RSAN_FRAME.pack(pg, flags, x, y, f['w'], f['h'], _i16(f['left']), _i16(f['top']), _i16(ax), _i16(ay))
                 nframe += 1
     off_s = RSAN_HDR.size

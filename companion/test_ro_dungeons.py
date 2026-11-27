@@ -18,8 +18,8 @@ from ro_conv import api, dungeons  # noqa: E402
 
 ED = os.path.join(ROOT, 'unity', 'Assets', 'GoldSrcVR', 'Editor')
 CS = os.path.join(ROOT, 'unity', 'Assets', 'GoldSrcVR', 'Scripts', 'GsvrRoDungeon.cs')
-CLIENT = '/path/to/gsvr-testdata/ro_data/Ragnarok Online/'
-PACKS = os.environ.get('RO_DUNGEON_PACKS', '/path/to/gsvr-testdata/ro_out/w37')
+CLIENT = '/path/to/gsvr-testdata Online/'
+PACKS = os.environ.get('RO_DUNGEON_PACKS', '/path/to/gsvr-testdata')
 
 
 def rd(p):
@@ -168,13 +168,14 @@ class Data(unittest.TestCase):
 
     def test_mvp_rows(self):
         mv = self.kind('mvp')
-        self.assertEqual([(int(r[1]), r[2], int(r[5]), int(r[6])) for r in mv], [(1150, 'pay_dun04', 3600000, 600000), (1147, 'anthell02', 7200000, 600000)])
+        self.assertEqual([(int(r[1]), r[2], int(r[5]), int(r[6])) for r in mv], [(1150, 'pay_dun04', 3600000, 600000), (1147, 'anthell02', 7200000, 600000), (1086, 'prt_sewb4', 3600000, 600000), (1190, 'gef_fild10', 7200000, 600000), (1272, 'gl_chyard', 3600000, 600000), (1583, 'beach_dun', 18000000, 600000), (1251, 'xmas_dun02', 3600000, 600000)])  # w52 mvpgen: rows for all MvpExp > 0 bosses (7 MVP slots)
         for r in mv:
             mid = r[1]
             self.assertTrue([x for x in self.kind('mvpexp') if x[1] == mid], mid)
-            self.assertEqual(len([x for x in self.kind('mvpdrop') if x[1] == mid]), 3, mid)
-            row = [x for x in self.kind('mob') if x[1] == mid][0]
-            self.assertTrue(int(row[23]) & 0x80000, 'MVP mode bit')
+            self.assertIn(len([x for x in self.kind('mvpdrop') if x[1] == mid]), (1, 2, 3), mid)  # w52 mvpgen: the extra bosses have 1-3 MVP drops
+            rows = [x for x in self.kind('mob') if x[1] == mid]  # the w52 extra bosses live in the main mob table, not in this dungeon one
+            if rows:
+                self.assertTrue(int(rows[0][23]) & 0x80000, 'MVP mode bit')
 
     def test_mob_rows_are_the_mobs_table_shape(self):
         for r in self.kind('mob'):

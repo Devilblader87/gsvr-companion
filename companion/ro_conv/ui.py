@@ -15,7 +15,7 @@ import os
 import struct
 import sys
 
-from . import img, items, mobsets, sprite
+from . import img, items, mobsets, rotxt, sprite
 from .grf import Vfs
 
 _ROSE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rose_conv')
@@ -24,8 +24,9 @@ if _ROSE not in sys.path:
 import rpg1 as P            # noqa: E402
 
 UI_PACK = 'roui'
-UI_REV = 2                                          # 2 = w42 integrate: + the minimap pictures map_<name> (ro_conv.uimap, 64 px)
+UI_REV = 4                                          # 2 = w42 integrate: + the minimap pictures map_<name> (ro_conv.uimap, 64 px); 3 = w43 txt: + window art pieces + the ROTX text section (w43 lobby, on its own branch: + the ROLG login pieces lg_<stem>); 4 = w44 integrate: ROUI + ROLG + ROTX together (one rebuild)
 TAG_ROUI = b'ROUI'
+TAG_ROLG = b'ROLG'                                  # w43 lobby: the login pieces in their OWN atlas section (same layout as ROUI; the 1024 page of ROUI is full with icons + minimaps)
 SECTION_VERSION = 1
 FMT_RGBA32 = 0
 KIND_UI, KIND_ICON, KIND_GEN, KIND_SKILL, KIND_MAP = 0, 1, 2, 3, 4
@@ -42,7 +43,45 @@ UI_FILES = (
     'equipwin_bg', 'shortitem_bg', 'sys_close_off', 'sys_close_on', 'sys_mini_off', 'sys_mini_on', 'sys_base_off', 'sys_base_on',
     'btn_items_off', 'btn_items_on', 'btn_equip_off', 'btn_equip_on', 'btn_skill_off', 'btn_skill_on', 'btn_status_off', 'btn_status_on',
     'btn_option_off', 'btn_option_on', 'btn_map_off', 'btn_map_on',
+    # w43 txt: the original art of the ui-b windows (GsvrRoUiB.LArt): status face, skill head / foot bars + level-up arrows, tabs, buttons, rounded frame corners
+    'statwin0_bg', 'skill_upbar_left', 'skill_upbar_mid', 'skill_upbar_right', 'skill_botbar_left', 'skill_botbar_mid', 'skill_botbar_right', 'skill_up_a', 'skill_up_b',
+    'tab_l', 'tab_m', 'tab_r', 'tab_a_l', 'tab_a_m', 'tab_a_r', 'btn_out_left', 'btn_out_mid', 'btn_out_right', 'btn_over_mid',
+    'sysboxs_lu', 'sysboxs_ru', 'sysboxs_ld', 'sysboxs_rd',
 )
+
+# w43 lobby (docs/design/ro_lobby.md): the classic login flow pieces, data/texture/<ui>/login_interface/<stem>.bmp, drawn by the lobby panels (GsvrRoLobby) as 'lg_<stem>':
+# win_select = the character select window, win_make = "Make Your Characters", arw-<stat>0 / 1 = the six stat hexagon corner arrows (off / on), name-edit = the name field,
+# btn_ok / btn_cancel / btn_make / btn_back / btn_next / btn_close = buttons, etc_empty = the empty slot, box_select = the selection frame, chk_* = check boxes.
+# (Delete / Charge / Login of the original are drawn from the pieces above + our own text; the owner's reference client is a custom one: missing pieces only drop that sprite.)
+PATH_LOGIN = 'data/texture/유저인터페이스/login_interface/%s.bmp'
+LOGIN_PREFIX = 'lg_'
+LOGIN_FILES = (
+    'win_select', 'win_make', 'name-edit', 'box_select', 'etc_empty',
+    'arw-str0', 'arw-str1', 'arw-agi0', 'arw-agi1', 'arw-vit0', 'arw-vit1', 'arw-int0', 'arw-int1', 'arw-dex0', 'arw-dex1', 'arw-luk0', 'arw-luk1',
+    'btn_ok', 'btn_cancel', 'btn_make', 'btn_back', 'btn_next', 'btn_close', 'chk_saveon', 'chk_saveoff',
+)
+
+
+def collect_login(vfs, warn=None):
+    """-> [(name 'lg_<stem>', KIND_UI, 0, w, h, rgba)]: the login / select / make-character pieces the client has (missing ones are a warning)."""
+    out, miss = [], []
+    for stem in LOGIN_FILES:
+        try:
+            w, h, px = img.decode(vfs.read(PATH_LOGIN % stem), stem + '.bmp')
+            px, _a = img.key_magenta(px, w, h)
+        except (KeyError, img.ImageError, ValueError, IndexError, struct.error):
+            miss.append(stem)
+            continue
+        out.append((login_name(stem), KIND_UI, 0, w, h, px))
+    if miss and warn is not None:
+        warn.append('ui: %d login / character select pieces not in the client data (%s)' % (len(miss), ' '.join(miss[:8])))
+    return out
+
+
+def login_name(stem):
+    """Atlas name of a login piece, == GsvrRoLobby.LTex."""
+    return LOGIN_PREFIX + stem
+
 
 # the skill icons of the skills the world knows (rAthena ids + AEGIS names of unity/Assets/GoldSrcVR/Editor/ro_skills.txt, GENERATED there by tools/ro_skills_gen.py;
 # copied here because the companion ships without the Unity tree): the client keeps them as item\\<aegis lower>.bmp; the world draws 'sk_<id>'.
@@ -185,15 +224,25 @@ def dec_roui(d):
     return W, H, out, d[po:po + W * H * 4]
 
 
-def ui_sections(vfs, warn=None, icons=None, maps=None):
-    """-> [(tag, version, count, data)] = [ROUI] (an empty list when the client has no interface piece at all). maps = world map names for the minimap pictures."""
+def ui_sections(vfs, warn=None, icons=None, maps=None, folder=None):
+    """-> [(tag, version, count, data)] = [ROUI] (+ [ROTX] when folder (the client folder with its System/*.lub) is given and has texts; an empty list when the client has no
+    interface piece at all). maps = world map names for the minimap pictures and the town markers."""
     pieces = collect(vfs, warn, icons, maps)
     if not any(p[1] == KIND_UI for p in pieces):
         if warn is not None:
             warn.append('ui: no interface pieces in the client data (the world keeps its plain windows)')
         return []
     W, H, rgba, table = build_atlas(pieces, warn=warn)
-    return [(TAG_ROUI, SECTION_VERSION, len(table), enc_roui(W, H, rgba, table))]
+    out = [(TAG_ROUI, SECTION_VERSION, len(table), enc_roui(W, H, rgba, table))]
+    lg = collect_login(vfs, warn)
+    if lg:
+        W, H, rgba, table = build_atlas(lg, warn=warn)
+        out.append((TAG_ROLG, SECTION_VERSION, len(table), enc_roui(W, H, rgba, table)))
+    if folder:
+        tx = rotxt.section(folder, vfs, tuple(icon_ids() if icons is None else icons), tuple(maps or ()), warn)
+        if tx is not None:
+            out.append(tx)
+    return out
 
 
 def build(name, folder, out_path, progress=None, cancel=None, log=None, icons=None):
@@ -215,7 +264,7 @@ def build(name, folder, out_path, progress=None, cancel=None, log=None, icons=No
     warns = list(vfs.errors)
     tick('ui', 0.2)
     from .api import MAP_ORDER
-    secs = ui_sections(vfs, warns, icons, MAP_ORDER)
+    secs = ui_sections(vfs, warns, icons, MAP_ORDER, folder)
     if not secs:
         raise BuildError('no interface pieces in the client data')
     data = P.write_pack(secs)
@@ -230,6 +279,6 @@ def build(name, folder, out_path, progress=None, cancel=None, log=None, icons=No
         if os.path.exists(part):
             os.remove(part)
     if log is not None:
-        log('ui: %d sprites, %d bytes' % (secs[0][2], len(data)))
+        log('ui: %d sprites, %d section(s), %d bytes' % (secs[0][2], len(secs), len(data)))
     tick('write', 1.0)
     return {'name': name, 'bytes': len(data), 'sprites': secs[0][2], 'warnings': warns}

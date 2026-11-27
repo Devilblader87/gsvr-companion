@@ -19,8 +19,8 @@ import test_ro_e2e as E  # noqa: E402
 import ro_job2db as G  # noqa: E402
 
 TABLE = os.path.join(REPO, 'unity/Assets/GoldSrcVR/Editor/ro_jobs2.txt')
-OWNER = os.environ.get('GSVR_RO_INSTALL', '/path/to/gsvr-testdata/ro_data/Ragnarok Online')
-RA_DIR = os.environ.get('RO_RA_DIR', '/path/to/gsvr-testdata/w37/jobs2_ra')
+OWNER = os.environ.get('GSVR_RO_INSTALL', '/path/to/gsvr-testdata Online')
+RA_DIR = os.environ.get('RO_RA_DIR', '/path/to/gsvr-testdata')
 
 
 class _Vfs:
@@ -103,12 +103,12 @@ class StartPack(unittest.TestCase):
             w = []
             secs = api.sprite_sections(v, warn=w)
             names = [x['name'] for x in S.dec_rsan(secs[1][3])['sprites']]
-            self.assertEqual(secs[1][2], 2 + 1 + 3)        # body_m head_m poring + 3 job bodies (no female Novice in the fixture)
-            self.assertEqual(names, ['body_m', 'head_m', 'poring', 'body_j7_m', 'body_j7_f', 'body_j13_m'])
+            self.assertEqual(secs[1][2], 2 + 1 + 3 + 2)    # body_m head_m poring + 3 job bodies (no female Novice in the fixture) + w43 equip's indexed hair 1 / body
+            self.assertEqual(names, ['body_m', 'head_m', 'poring', 'body_j7_m', 'body_j7_f', 'body_j13_m', 'hi_1_m', 'bi_m'])
             self.assertTrue(any('job bodies not in the client data' in x for x in w), w)
             api.JOB2_SPRITES = False
             try:
-                self.assertEqual(api.sprite_sections(v, warn=[])[1][2], 3)
+                self.assertEqual(api.sprite_sections(v, warn=[])[1][2], 3 + 2)
             finally:
                 api.JOB2_SPRITES = True
 
