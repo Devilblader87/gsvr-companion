@@ -42,7 +42,9 @@ Requests from the world arrive as VRChat log lines:
   [GSVR-REQ] next=<mod>/<map> [req=<id>]    prefetch into next slot
   [GSVR-REQ] ping=<nonce>                   echoed in status.json "ping" (liveness + log latency check)
   [GSVR-REQ] rescan                         re-run ownership + map index
-  [GSVR-REQ] models=<mod> [req=<id>]        build/serve the weapon model+sound pack (status.json "models")
+  [GSVR-REQ] models=<mod> [req=<id>]        build/serve the weapon model+sound pack (status.json "models"); models=codwaw =
+                                            the Call of Duty: World at War weapon pack (companion/codwaw.py, tools/codwaw_pack.py)
+  [GSVR-REQ] map=codwaw/mp_dome [req=<id>]  CoD: WaW map as GSV3 (tools/waw_mappack.py) on /pack/current.bin like every map
   [GSVR-REQ] holo=<mod> maps=<a,b,c> [req=<id>]  build/serve the hub's hologram bundle of those maps (status.json "holo")
   [GSVR-REQ] ro=<map> [req=<id>]            Ragnarok Online: serve <ro dir>/ro__<map>.pack as GET /pack/ro.pack (status.json "ro", same fields as
                                             "rose"); missing / stale + data.grf folder known -> built by rosebuild.py (flavor RO, converter
@@ -61,7 +63,7 @@ Requests from the world arrive as VRChat log lines:
 import argparse, errno, http.server, json, os, queue, re, socket, struct, sys, threading, time, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I drops the script dir from sys.path
-import builder, buildprog, csshare, games as games_mod, holo, hostinfo, i18n, logwatch, mapshare, models, prebuilt, ro, rose, rosebuild, runtime, steam, war3   # noqa: E402
+import builder, buildprog, codwaw, csshare, games as games_mod, holo, hostinfo, i18n, logwatch, mapshare, models, prebuilt, ro, rose, rosebuild, runtime, steam, war3   # noqa: E402
 from version import VERSION                                        # noqa: E402  (single source of truth)
 
 APP = "gsvr-companion"          # status.json "app": the world + GUI accept a status only with this value
@@ -200,6 +202,7 @@ class State:
         self.port = None                                  # bound port (set by main before serving)
         self.ownership, self.index, self.games = {}, {}, []
         self.models, self.models_job, self.mconv = models.new_slot(), None, None   # /pack/models.bin (models.py)
+        self.cwmodels, self.cwconv = None, None    # Call of Duty: WaW weapon pack + map converter (codwaw.py), set by main
         self.models_wake = threading.Event()
         self.holo, self.holo_job, self.hconv = holo.new_slot(), None, None       # /pack/hologram.bin (holo.py)
         self.holo_wake = threading.Event()
@@ -273,8 +276,15 @@ class State:
                 fans.append(mapshare.download_fallback_dir(a.cache_dir))
             idx.update(war3.build_index(w_own, fans, a.cache_dir))
             self.watch_sig = war3.LAST_SCAN.get("pre_sig")   # baseline = taken BEFORE the scan: files that land while it hashes trigger one more rescan
+        if not getattr(a, "no_codwaw", False):          # Call of Duty: World at War (Steam app 10090 or --codwaw-root; codwaw.py)
+            c_own = codwaw.ownership(getattr(a, "codwaw_root", None), getattr(a, "codwaw_lang", None) or "auto")
+            own.update(c_own)
+            idx.update(codwaw.build_index(c_own))
         missing_keys = self.add_share_keys(idx)
         games = games_mod.games_section(own, a.war3_root, a.war3_maps, nonsteam)
+        cg = codwaw.game_entry(own)
+        if cg is not None:
+            games.append(cg)
         with self.lock:
             self.ownership, self.index, self.games = own, idx, games
             self.index_rev += 1
@@ -760,7 +770,8 @@ class State:
                             self.sharer.maybe_share(m["sha256"], m["path"], self.ownership.get(war3.MOD, {}).get("installs", []))
                     else:
                         mod_dir = os.path.join(e["game_root"], m["dir"])
-                        r = conv.build(self.args.cache_dir, mod, name, m["path"], e["game_root"], mod_dir, log=log)
+                        r = (self.cwconv if mod == codwaw.MOD and self.cwconv else conv).build(
+                            self.args.cache_dir, mod, name, m["path"], e["game_root"], mod_dir, log=log)
                         if self.cs_sharer and mod in csshare.MODS:     # CS-SHARE: offer a custom map (+ its custom files) to the guests
                             self.serve_share_key(mod, name, m)
                             self.cs_sharer.maybe_share(m["path"], e["game_root"], mod)
@@ -771,7 +782,7 @@ class State:
                                   path=r["path"], seconds=r["seconds"])
                     log(f"{slot}: ready {mod}/{name} {r['size']} bytes ({'cache hit' if r['cached'] else 'built'}"
                         f" in {r['seconds']} s){' — superseded, rebuilding' if superseded else ''}")
-                    if slot == "current" and mod != war3.MOD and not superseded:
+                    if slot == "current" and mod not in (war3.MOD, codwaw.MOD) and not superseded:
                         nb = [(mod, n) for n in changelevel_targets(m["path"]) if n != name]
                         with self.lock:
                             self.neighbors = nb
@@ -800,6 +811,10 @@ class State:
                     if self.neighbors:
                         self.wake.set()
 
+    def models_conv(self, mod):
+        """the weapon pack builder of a mod: codwaw = the CoD weapon pack (codwaw.WeaponBuilder), everything else modelpack.py"""
+        return self.cwmodels if (mod or "").lower() == codwaw.MOD and self.cwmodels is not None else self.mconv
+
     def models_worker(self, stop):
         """Own thread for the model packs (a first build takes about a minute): map requests never wait behind it.
         After the first index scan it prewarms the pack of every installed mod that has a model profile, so the
@@ -811,9 +826,9 @@ class State:
                 mjob, self.models_job = self.models_job, None
                 warm = self.prewarm.pop(0) if (mjob is None and self.prewarm) else None
             if mjob and self.mconv is not None:
-                models.run_job(self, self.mconv, mjob, log)
+                models.run_job(self, self.models_conv(mjob[0]), mjob, log)
             elif warm and self.mconv is not None:
-                models.prewarm(self, self.mconv, warm, log)
+                models.prewarm(self, self.models_conv(warm), warm, log)
             with self.lock:
                 more = self.models_job is not None or bool(self.prewarm)
             if more:
@@ -1375,6 +1390,13 @@ def main(argv=None):
     ap.add_argument("--war3-root", action="append", help="Warcraft III install folder; repeat for several versions "
                     "(added to the registry / usual folders)")
     ap.add_argument("--no-war3", action="store_true", help="do not look for Warcraft III")
+    ap.add_argument("--codwaw-root", action="append", help="Call of Duty: World at War install folder (main/ + zone/<language>/); "
+                    "default: the Steam libraries (app 10090) and the retail registry keys")
+    ap.add_argument("--codwaw-lang", default="auto", help="zone/<language> folder of the WaW install to read (default: English, "
+                    "then German, then the others)")
+    ap.add_argument("--no-codwaw", action="store_true", help="do not look for Call of Duty: World at War")
+    ap.add_argument("--codwaw-converter", help=argparse.SUPPRESS)        # tests: another weapon pack converter than tools/codwaw_pack.py
+    ap.add_argument("--codwaw-map-converter", help=argparse.SUPPRESS)    # tests: another map converter than tools/waw_mappack.py
     ap.add_argument("--war3-maps", action="append", help="fan-map folder (maps you got yourself, matched by SHA-256: "
                     "key sha-<16 hex>); repeatable")
     ap.add_argument("--war3-converter", default=os.path.join(runtime.tools_dir(), "w3pack.py"))
@@ -1446,6 +1468,11 @@ def main(argv=None):
     st.mconv = (models.PrebuiltModels(a.prebuilt_dir) if a.prebuilt_dir
                 else models.ModelBuilder(a.model_converter, a.models_cmd, timeout=a.build_timeout))
     log(f"models:    {st.mconv.converter} version={st.mconv.version}")
+    if not a.prebuilt_dir and codwaw.MOD in st.index:  # CoD: WaW found: the vendored converters (tools/codwaw_pack.py, tools/waw_mappack.py)
+        st.cwmodels = codwaw.WeaponBuilder(a.codwaw_converter, timeout=a.build_timeout, lang=a.codwaw_lang)
+        st.cwconv = codwaw.MapConverter(a.codwaw_map_converter, timeout=a.build_timeout)
+        log(f"codwaw:    {st.index[codwaw.MOD]['game_root']} zone/{st.index[codwaw.MOD]['lang']}, weapons {st.cwmodels.version}, "
+            f"maps {st.cwconv.version} ({', '.join(st.index[codwaw.MOD]['maps']) or 'no map of ' + ', '.join(codwaw.MAPS)})")
     st.hconv = (holo.PrebuiltHolo(a.prebuilt_dir) if a.prebuilt_dir
                 else holo.HoloBuilder(a.holo_converter, a.holo_cmd, timeout=a.build_timeout))
     log(f"hologram: {st.hconv.converter} version={st.hconv.version}")
@@ -1456,12 +1483,12 @@ def main(argv=None):
     if not a.prebuilt_dir:                          # packs of older converter versions are dead weight now
         builder.prune_cache(a.cache_dir, [conv.version, st.mconv.version,
                                           st.w3conv.version if st.w3conv else None], log=log,
-                           spare=() if st.w3conv else (war3.MOD + "-",))
+                           spare=(codwaw.MOD + "-",) + (() if st.w3conv else (war3.MOD + "-",)))
     stop = threading.Event()
     threading.Thread(target=st.worker, args=(conv, stop), daemon=True).start()
     if not a.prebuilt_dir and not getattr(a, "no_prewarm", False):
         with st.lock:
-            st.prewarm = [m for m in models.PREWARM_MODS if m in st.index]
+            st.prewarm = [m for m in models.PREWARM_MODS + (codwaw.MOD,) if m in st.index]
         if st.prewarm:
             log("models: prewarming " + ", ".join(st.prewarm) + " in the background")
     threading.Thread(target=st.models_worker, args=(stop,), daemon=True).start()

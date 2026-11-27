@@ -2,6 +2,12 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.66-cod1 (test build, branch cod-waw-test)
+
+**Call of Duty: World at War (test)** - bring your own game: you need your own Call of Duty: World at War (Steam).
+- Shooting range on the original map Dome with the Thompson, Kar98k and M1 Garand, original soldier dummies and a hit marker.
+- Test build; multiplayer comes later. Includes everything of 0.9.65.
+
 ## 0.9.65
 
 **Ragnarok Online (for the updated world GSVR - RO, v11)**

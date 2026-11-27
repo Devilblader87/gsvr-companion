@@ -26,7 +26,7 @@ if _miss:
 # the W5+ engine tables and JASS compiler of w3pack_jvm.py: package tools/jvm (synced without its tests)
 JVM_FILES = sorted(f for f in os.listdir(os.path.join(TOOLS, "jvm")) if f.endswith(".py") and not f.startswith("test_"))
 COMPANION_MODULES = ["companion", "gui", "updater", "runtime", "version", "builder", "models", "prebuilt", "games", "steam",
-                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "cachedir", "rose", "rosefind", "rosebuild", "ro", "rofind",
+                     "vdf", "logwatch", "selftest_update", "war3", "mapshare", "csshare", "codwaw", "cachedir", "rose", "rosefind", "rosebuild", "ro", "rofind",
                      "rose_conv_stub", "ro_conv_stub", "modules", "ed25519", "hostinfo", "i18n", "i18n_catalog", "i18n_catalog_worlds", "firstrun", "firstrun_ui", "ui_theme", "gui_sim", "tray", "updsched", "worlds"]    # --selftest runs one stub ROSE build in a child (gsvr-cli --run-rose-build)
 # w3pack.py decodes BLP (JPEG inside) with Pillow; the tools run via runpy, so PyInstaller must be told
 PILLOW_MODULES = ["PIL", "PIL.Image", "PIL.ImageChops", "PIL.JpegImagePlugin", "PIL.BlpImagePlugin",

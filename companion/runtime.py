@@ -18,7 +18,7 @@ WIN = sys.platform == "win32"
 EXE_SUFFIX = ".exe" if WIN else ""
 GUI_EXE = "GSVR" + EXE_SUFFIX
 CLI_EXE = "gsvr-cli" + EXE_SUFFIX
-CONVERTERS = ("pack.py", "modelpack.py", "w3pack.py", "previewpack.py")          # the only scripts --run-converter will execute
+CONVERTERS = ("pack.py", "modelpack.py", "w3pack.py", "previewpack.py", "codwaw_pack.py", "waw_mappack.py")          # the only scripts --run-converter will execute
 
 
 def install_root():

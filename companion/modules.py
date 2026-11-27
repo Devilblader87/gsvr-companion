@@ -37,6 +37,7 @@ SIG_ASSET = "gsvr-modules.json.sig"
 TAG_RE = re.compile(r"modules-(\d{1,9})")
 NAME_RE = re.compile(r"[a-z][a-z0-9]{1,15}")
 VER_RE = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?")         # 4th part = hotfix (0.9.49.1)
+CORE_MIN_RE = re.compile(VER_RE.pattern + r"(?:-[a-z0-9]{1,16})?")           # core_min = the app VERSION at build time, may be a test build (0.9.66-cod1)
 FILE_RE = re.compile(r"gsvr-module-([a-z][a-z0-9]{1,15})-(\d{1,4}\.\d{1,4}\.\d{1,4})\.zip")
 SHA_RE = re.compile(r"[0-9a-f]{64}")
 MEMBER_RE = re.compile(r"[A-Za-z0-9_./-]+")
@@ -186,7 +187,7 @@ def verify_manifest(data, sig_text, pubkeys=None):
             and FILE_RE.fullmatch(e["file"]) and isinstance(e.get("core_min", ""), str)
         if ok:
             fm = FILE_RE.fullmatch(e["file"])
-            ok = fm.group(1) == name and fm.group(2) == e["version"] and (not e.get("core_min") or VER_RE.fullmatch(e["core_min"]))
+            ok = fm.group(1) == name and fm.group(2) == e["version"] and (not e.get("core_min") or CORE_MIN_RE.fullmatch(e["core_min"]))
         if not ok:
             raise ModuleError("manifest entry %r is malformed" % (name,))
     return m

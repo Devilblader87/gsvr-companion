@@ -9,6 +9,7 @@ import os
 import re
 
 ENTRIES = ["pack.py", "modelpack.py", "w3pack.py", "previewpack.py",       # what --run-converter starts (builder.py)
+           "codwaw_pack.py", "waw_mappack.py",                                  # Call of Duty: WaW (companion/codwaw.py)
            "w3info.py", "war3fs.py", "w3mapfolders.py"]                      # imported by companion/war3.py (lobby map info)
 _IMPORT = re.compile(r'^\s*(?:import|from)\s+([A-Za-z_]\w*)(?:\s+as\s+\w+)?', re.M)
 _IMPORT_LIST = re.compile(r'^\s*import\s+([A-Za-z_][\w ,.]*?)\s*(?:#.*)?$', re.M)      # "import navgen, nodegraph": every name of the list
