@@ -73,6 +73,12 @@ The Windows build also runs under Wine/Proton. Since 0.9.42.1 it looks for VRCha
 - **A Warcraft III map behaves like before an update:** update the companion; a new version rebuilds the maps by itself the next time they are played.
 - **No update banner on 0.9.49 / 0.9.49.1:** switch to the **Advanced view** once (button at the top); the yellow "Update available" bar appears there. Later versions show updates in both views and update automatically.
 
+## CoD: World at War (test)
+
+A separate test build of the companion for the Call of Duty: World at War shooting range: original map Dome with the Thompson, Kar98k and M1 Garand, original soldier dummies and a hit marker. Bring your own game: you need your own Call of Duty: World at War (Steam). Test build, multiplayer comes later; it includes everything of 0.9.65. Download: [CoD: World at War test build (0.9.66-cod1)](https://github.com/Devilblader87/gsvr-companion/releases/tag/cod-waw-test-1). The normal releases are not affected.
+
+**CoD: World at War(テスト)** Call of Duty: World at War の射撃場用の、別枠のテストビルドです(原作のマップ Dome、トンプソン、Kar98k、M1ガーランド、原作の兵士ターゲット、ヒットマーカー)。ゲームは各自でご用意ください(Steam 版の Call of Duty: World at War が必要です)。テストビルドで、マルチプレイは後日対応します。0.9.65 のすべての機能を含みます。ダウンロード:[CoD: World at War テストビルド(0.9.66-cod1)](https://github.com/Devilblader87/gsvr-companion/releases/tag/cod-waw-test-1)。通常のリリースには影響しません。
+
 ## Releases & changelog
 
 New versions are published on the [Releases](https://github.com/Devilblader87/gsvr-companion/releases) page; the companion updates itself from there. The full history is in [CHANGELOG.md](CHANGELOG.md).
