@@ -15,7 +15,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ro_conv  # noqa: E402
-from ro_conv import api, grf, culvert, dungeons, jobmaps, maps2, sprite as S, towns  # noqa: E402
+from ro_conv import api, grf, culvert, dungeons, jobmaps, maps2, maps3, sprite as S, towns  # noqa: E402
 import ro_conv_stub  # noqa: E402
 import rosebuild  # noqa: E402
 import rpg1 as P  # noqa: E402
@@ -48,11 +48,11 @@ def ro_like_stub():
 
 class Order(unittest.TestCase):
     def test_map_list(self):
-        self.assertEqual([m for m in api.PACKS if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES], MAPS)          # + the w46 maps2 lane (test_ro_maps2.py), the dungeons lane's maps after them (test_ro_dungeons.py), then the w41 job-test maps (test_ro_jobs1.py)
+        self.assertEqual([m for m in api.PACKS if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES and m not in maps3.NAMES], MAPS)          # + the w46 maps2 lane (test_ro_maps2.py), the dungeons lane's maps after them (test_ro_dungeons.py), then the w41 job-test maps (test_ro_jobs1.py)
         self.assertEqual(MAPS[:5], PROTO)                                     # the prototype's ids never move
         self.assertEqual(len(MAPS), 31)                                       # 27 towns + 4 culvert floors (w39: the dungeons' 12 follow as ids 31..42)
         self.assertEqual(list(api.MAP_ORDER[:len(MAPS)]), MAPS)
-        self.assertEqual([m for m in ro_conv.PACKS if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES], MAPS)                          # the package exports the api names
+        self.assertEqual([m for m in ro_conv.PACKS if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES and m not in maps3.NAMES], MAPS)                          # the package exports the api names
         self.assertEqual(api.SPRITE_PACK, "prontera")
         self.assertTrue(all(p["kind"] == "zone" for p in api.PACKS.values()))     # never two RO builds at once (memory)
         # towns: after a map the world asks for the maps resident around it (cluster + warp neighbours), in id order
@@ -100,7 +100,7 @@ class Order(unittest.TestCase):
         b = rd(UN, "Editor", "GsvrSceneBuilder.Ragnarok.cs")
         m = re.search(r"RoMapNames\s*=\s*\{([^}]*)\}", b)
         self.assertIsNotNone(m, "GsvrSceneBuilder.Ragnarok.cs RoMapNames")
-        self.assertEqual(re.findall(r'"([a-z0-9_]+)"', re.sub(r"//[^\n]*", "", m.group(1))), MAPS + list(dungeons.NAMES) + list(jobmaps.NAMES) + list(maps2.NAMES))          # towns + culvert + dungeons + job-test maps = api.MAP_ORDER
+        self.assertEqual(re.findall(r'"([a-z0-9_]+)"', re.sub(r"//[^\n]*", "", m.group(1))), MAPS + list(dungeons.NAMES) + list(jobmaps.NAMES) + list(maps2.NAMES) + list(maps3.NAMES))          # towns + culvert + dungeons + job-test maps = api.MAP_ORDER
         warps = rd(UN, "Editor", "ro_warps.txt")
         used = set()
         for ln in warps.splitlines():
@@ -153,9 +153,9 @@ class Manager(unittest.TestCase):
         self.assertEqual(ro_conv_stub.CALLS, MAPS)                             # warm-up after prontera: the other maps in MAP_ORDER, one at a time
         st = m.state()
         rows = companion.ro_maps(st)
-        self.assertEqual([n for n in rows if n not in dungeons.NAMES and n not in jobmaps.NAMES and n not in maps2.NAMES], MAPS)
+        self.assertEqual([n for n in rows if n not in dungeons.NAMES and n not in jobmaps.NAMES and n not in maps2.NAMES and n not in maps3.NAMES], MAPS)
         self.assertTrue(all(v == {"state": "ready", "progress": 1.0} for n, v in rows.items() if n in MAPS), rows)
-        self.assertTrue(all(rows[n]["state"] == "missing" for n in dungeons.NAMES + maps2.NAMES), rows)         # the dungeons lane and the w46 maps2 lane are never prebuilt
+        self.assertTrue(all(rows[n]["state"] == "missing" for n in dungeons.NAMES + maps2.NAMES + maps3.NAMES), rows)         # the dungeons lane and the w46 maps2 lane are never prebuilt
         for n in MAPS:                                                       # the world's next requests are answered from the cache
             self.assertEqual(m.request(n)["state"], "ready", n)
             self.assertTrue(os.path.isfile(os.path.join(rdir, "ro__%s.pack" % n)))

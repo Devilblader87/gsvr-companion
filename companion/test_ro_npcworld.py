@@ -51,6 +51,11 @@ class Tables(unittest.TestCase):
         want = {}
         for r in rows("deco"):
             want.setdefault(npcs.group_of(r[1]), set()).add(int(r[5]))
+        qf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "unity", "Assets", "GoldSrcVR", "Editor", "ro_quests.txt")
+        for ln in open(qf, encoding="utf-8"):                                          # w53 quests2: a quest giver on a classic cell replaced its decor row, the sprite stays in the town pack
+            t = ln.split("#")[0].split()
+            if len(t) >= 8 and t[0] == "npc" and t[7].startswith("q_") and int(t[6]) not in (105, 53, 54) and npcs.group_of(t[2]):
+                want.setdefault(npcs.group_of(t[2]), set()).add(int(t[6]))
         self.assertNotIn("", want)                                                     # every decor map has a group
         for g in npcsets.NPC_GROUPS:
             self.assertEqual(sorted(want.get(g, ())), list(npcsets.NPC_SET_IDS[g]), g)   # one sprite per look, nothing extra converted

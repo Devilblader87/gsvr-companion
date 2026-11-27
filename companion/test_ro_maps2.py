@@ -52,10 +52,10 @@ class Table(unittest.TestCase):
         self.assertEqual(len(set(maps2.NAMES)), 12)
         base = len(towns.NAMES) + len(culvert.NAMES) + len(dungeons.NAMES) + len(jobmaps.NAMES)
         self.assertEqual(maps2.MAPS2_BASE, base)                                         # 27 + 4 + 12 + 7 == 50
-        self.assertEqual(tuple(api.MAP_ORDER[maps2.MAPS2_BASE:]), maps2.NAMES)
+        self.assertEqual(tuple(api.MAP_ORDER[maps2.MAPS2_BASE:maps2.MAPS2_BASE + 12]), maps2.NAMES)
         self.assertEqual([maps2.world_id(m) for m in maps2.NAMES], list(range(50, 62)))
         self.assertLessEqual(len(api.MAP_ORDER), towns.MAX_MAPS)                         # 62 of the 255 world map ids (w52)
-        self.assertEqual(len(api.MAP_ORDER), 62)
+        self.assertEqual(len(api.MAP_ORDER), 75)                                         # w53: + the 13 maps of the dungeons3 lane (test_ro_maps3.py)
         for n in maps2.NAMES:
             self.assertRegex(n, r'^[a-z0-9_]{1,32}$')
             self.assertIn(maps2.AREA[n], maps2.AREAS)
@@ -163,10 +163,10 @@ class Builder(unittest.TestCase):
         self.assertEqual(names, list(api.MAP_ORDER))
         b = maps2.MAPS2_BASE
         self.assertIn('RoMaps2Base = %d' % b, src)
-        self.assertEqual(builder_list(src, 'RoMapLabels', True)[b:], [maps2.LABEL[m] for m in maps2.NAMES])
-        self.assertEqual(builder_list(src, 'RoMapCluster', False)[b:], [-2] * len(maps2.NAMES))
-        self.assertEqual(builder_list(src, 'RoMapTerrNeed', False)[b:], [maps2.MEASURED[m][0] for m in maps2.NAMES])
-        self.assertEqual(builder_list(src, 'RoMapObjNeed', False)[b:], [maps2.MEASURED[m][1] for m in maps2.NAMES])
+        self.assertEqual(builder_list(src, 'RoMapLabels', True)[b:b + 12], [maps2.LABEL[m] for m in maps2.NAMES])
+        self.assertEqual(builder_list(src, 'RoMapCluster', False)[b:b + 12], [-2] * len(maps2.NAMES))
+        self.assertEqual(builder_list(src, 'RoMapTerrNeed', False)[b:b + 12], [maps2.MEASURED[m][0] for m in maps2.NAMES])
+        self.assertEqual(builder_list(src, 'RoMapObjNeed', False)[b:b + 12], [maps2.MEASURED[m][1] for m in maps2.NAMES])
         self.assertIn('const float RoOnDemandBudgetMB = %df;' % maps2.ONDEMAND_BUDGET_MB, src)
         self.assertIn('RoMaps2WarpsPath', src)
         self.assertIn('ro_maps2_warps.txt', src)
@@ -218,9 +218,9 @@ class Data(unittest.TestCase):
         self.assertLess(cls, 192)                                                        # GsvrRoMobs.MaxCls
         self.assertLess(len(self.kind('drop', self.all)), 1536)                          # MaxDropRows
         self.assertLess(len(self.kind('item', self.all)), 768)                           # MaxItems
-        self.assertLess(len(spawn_all), 768)                                             # MaxSpawns
+        self.assertLess(len(spawn_all), 1024)                                            # MaxSpawns (w53: 768 -> 1024)
         src = rd(ROOT, 'unity', 'Assets', 'GoldSrcVR', 'Scripts', 'GsvrRoMobs.cs')
-        self.assertIn('MaxCls = 192, MaxDropRows = 1536, MaxItems = 768, MaxSpawns = 768', src)
+        self.assertIn('MaxCls = 192, MaxDropRows = 1536, MaxItems = 768, MaxSpawns = 1024', src)
 
     def test_merge_is_reproducible_and_aliases_steel_chonchon(self):
         sys.path.insert(0, os.path.join(ROOT, 'tools'))

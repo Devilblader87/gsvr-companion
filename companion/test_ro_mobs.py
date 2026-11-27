@@ -230,10 +230,13 @@ class World(unittest.TestCase):
         from ro_conv import mobsets
         self.assertEqual(ms, mobsets.MOB_SPRITES, 'companion/ro_conv/mobsets.py is stale: run python3 -I tools/ro_fields_gen.py merge')
         self.assertEqual(di, mobsets.DROP_ITEMS)
-        self.assertEqual(len(ms), 36, 'every field / culvert / dungeon map of the world has monsters (27 + the 9 monster maps of the w46 maps2 lane)')
+        self.assertEqual(len(ms), 47, 'every field / culvert / dungeon map of the world has monsters (27 + the 9 monster maps of the w46 maps2 lane + the 11 of the w53 maps3 lane)')
         for m in ms:
             self.assertIn(m, api.PACKS, '%s is a world map' % m)
-            self.assertEqual(api.MOB_SPRITES[m], ms[m])
+            from ro_conv import mobskill_sets          # w53 mobskills: + the slave / class-change sprites its summoners bring (generated)
+            self.assertEqual(api.MOB_SPRITES[m], ms[m] + tuple(x for x in mobskill_sets.EXTRA_SPRITES.get(m, ()) if x not in ms[m]))
+            if m in mobskill_sets.EXTRA_SPRITES:
+                self.assertGreaterEqual(api.PACK_REV.get(m, 0), api.MOBSKILL_PACK_REV, '%s: a pack built before w53 is rebuilt with the slave sprites' % m)
             self.assertGreaterEqual(api.PACK_REV.get(m, 0), api.MOB_PACK_REV, '%s: a pack built before w41 (map only) is rebuilt with its sprites' % m)
         self.assertEqual(api.MOB_SPRITES[FIELD], ('lunatic', 'pupa', 'poring', 'drops'), 'the w34 field keeps its list')
         for town in ('prontera', 'prt_in', 'izlude', 'payon', 'geffen', 'morocc', 'alberta'):

@@ -2,6 +2,17 @@
 
 All versions of the GSVR Companion, newest first. Downloads: [Releases](https://github.com/Devilblader87/gsvr-companion/releases). Back to the [README](README.md).
 
+## 0.9.65
+
+**Ragnarok Online (for the updated world GSVR - RO, v11)**
+- New dungeons: Byalan Island, Sunken Ship and Geffen Dungeon.
+- Monsters cast their original skills, and MVPs summon minions.
+- 24 more first-job skills, including Fire Ball, Frost Diver, Teleport, Warp Portal and Safety Wall.
+- Platinum skill quests, item boxes and potions.
+- Fixed walking on the desktop and window dragging.
+- The Prontera lobby now stands on the open square.
+- The original window layout, with a reset button.
+
 ## 0.9.64
 
 **Ragnarok Online (for the updated world GSVR - RO)**

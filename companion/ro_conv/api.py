@@ -12,7 +12,7 @@ map only (docs/design/ro_multimap.md: the world loads every map of PACKS at once
 import os
 import struct
 
-from . import equip, items, jobs, mappack, sprite, towns, culvert, dungeons, jobmaps, maps2, ui, roefx, npcs
+from . import equip, items, jobs, mappack, sprite, towns, culvert, dungeons, jobmaps, maps2, maps3, ui, roefx, npcs
 from .grf import Vfs, GrfError, MAGICS
 
 VERSION = 'ro-%d.%d' % (mappack.TOOL_VERSION, sprite.RSAN_VERSION)
@@ -43,8 +43,11 @@ for _m in jobmaps.NAMES:
 # maps wave 2 (docs/design/ro_maps2.md, w46): Glast Heim, Comodo, Lutie + Toy Factory = ids 51..62, on demand like the dungeons
 for _m in maps2.NAMES:
     PACKS.setdefault(_m, {'kind': 'zone', 'label': maps2.LABEL[_m]})
+# maps wave 3 part 1 (docs/design/ro_maps3.md, w53): Byalan + Undersea Tunnel, Sunken Ship, Geffen Dungeon = ids 62..74, on demand like the dungeons
+for _m in maps3.NAMES:
+    PACKS.setdefault(_m, {'kind': 'zone', 'label': maps3.LABEL[_m]})
 MAP_ORDER = tuple(PACKS)                                       # == GsvrRoMaps.mapNames in the scene (one index per map on both sides)
-PREBUILD_ORDER = tuple(m for m in MAP_ORDER if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES)
+PREBUILD_ORDER = tuple(m for m in MAP_ORDER if m not in dungeons.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES and m not in maps3.NAMES)
 # w42 ui-a (docs/design/ro_ui.md): the original interface atlas = its own small pack 'roui' (NOT in PACKS: the world loads every PACKS entry as a map). The build manager
 # serves it like the audio packs (rosebuild merges UI_PACKS); the world asks for it once, right after the start map (GsvrRoFetch ui). Prebuilt right after the start map.
 UI_PACKS = {ui.UI_PACK: {'kind': 'ui', 'label': 'Interface'}}
@@ -57,7 +60,7 @@ PREBUILD_ORDER = PREBUILD_ORDER[:1] + (ui.UI_PACK, roefx.FX_PACK) + PREBUILD_ORD
 NPC_PACKS = dict(npcs.NPC_PACKS)
 _NPC_FIRST = tuple(g for g in npcs.NPC_ORDER if npcs.group_of(MAP_ORDER[0]) == g)
 PREBUILD_ORDER = PREBUILD_ORDER[:3] + _NPC_FIRST + PREBUILD_ORDER[3:] + tuple(g for g in npcs.NPC_ORDER if g not in _NPC_FIRST)
-NO_PREBUILD = frozenset(dungeons.NAMES) | frozenset(jobmaps.NAMES) | frozenset(maps2.NAMES)                                    # never built in the background: only when the world asks (docs/design/ro_dungeons.md)
+NO_PREBUILD = frozenset(dungeons.NAMES) | frozenset(jobmaps.NAMES) | frozenset(maps2.NAMES) | frozenset(maps3.NAMES)                                    # never built in the background: only when the world asks (docs/design/ro_dungeons.md)
 SPRITE_PACK = 'prontera'                                       # the ONLY pack with RSAT / RSAN: the world builds the sprite set once
 
 # w36 sound lane (docs/design/ro_sound.md): audio / effect packs next to the map packs. NOT in PACKS (the world loads every PACKS entry as a map); the lead merges them
@@ -79,11 +82,11 @@ def warm_after(name):
     """rosebuild W10 warm-up hook: the world asked for `name` -> the maps it asks for next (they go to the front of the background queue).
     Towns: the world fetches only the maps resident around the player (GsvrRoMaps.LResident == towns.resident), in map id order; the culvert floors are built after each other once
     one is asked for; the dungeons lane never warms in the background (on demand only, docs/design/ro_dungeons.md)."""
-    if name not in MAP_ORDER or name in dungeons.NAMES or name in jobmaps.NAMES or name in maps2.NAMES:          # w46 maps2 + w41: the job maps are on demand like the dungeons
+    if name not in MAP_ORDER or name in dungeons.NAMES or name in jobmaps.NAMES or name in maps2.NAMES or name in maps3.NAMES:          # w46 maps2 + w41: the job maps are on demand like the dungeons
         return []
     if name in culvert.NAMES:
         return culvert.warm_after(name)
-    return [m for m in towns.warm_after(name, names=MAP_ORDER) if m not in dungeons.NAMES and m not in culvert.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES]
+    return [m for m in towns.warm_after(name, names=MAP_ORDER) if m not in dungeons.NAMES and m not in culvert.NAMES and m not in jobmaps.NAMES and m not in maps2.NAMES and m not in maps3.NAMES]
 
 
 def pack_version(name):
@@ -178,6 +181,17 @@ MOB_PACK_REV = 1
 for _m in MOB_SPRITES:
     if _m != SPRITE_PACK and PACK_REV.get(_m, 0) < MOB_PACK_REV:
         PACK_REV[_m] = MOB_PACK_REV
+# w53 mobskills (docs/design/ro_mobskills.md): the slave / class-change classes a map's summoners bring (generated ro_conv/mobskill_sets.py) ride in that map's pack too;
+# their packs get PACK_REV >= MOBSKILL_PACK_REV, so packs built before w53 are rebuilt with the extra sprites + drop items.
+from . import mobskill_sets as _mss          # noqa: E402
+MOBSKILL_PACK_REV = 3
+for _m, _v in _mss.EXTRA_SPRITES.items():
+    if _m not in MOB_SPRITES:
+        continue
+    MOB_SPRITES[_m] = tuple(MOB_SPRITES[_m]) + tuple(x for x in _v if x not in MOB_SPRITES[_m])
+    DROP_ITEMS[_m] = tuple(sorted(set(DROP_ITEMS.get(_m, ())) | set(_mss.EXTRA_DROPS.get(_m, ()))))
+    if PACK_REV.get(_m, 0) < MOBSKILL_PACK_REV:
+        PACK_REV[_m] = MOBSKILL_PACK_REV
 PATH_MONSTER = 'data/sprite/몬스터/'                           # + <name>.spr / .act (CP949 in the GRF)
 PATH_ITEM = 'data/sprite/아이템/'
 ITEM_TABLE = 'data/idnum2itemresnametable.txt'

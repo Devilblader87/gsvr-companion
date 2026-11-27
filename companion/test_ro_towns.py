@@ -19,7 +19,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "rose_conv"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-from ro_conv import api, culvert, dungeons, jobmaps, maps2, towns  # noqa: E402
+from ro_conv import api, culvert, dungeons, jobmaps, maps2, maps3, towns  # noqa: E402
 import rpg1 as P  # noqa: E402
 import ro_towns_warps as TW  # noqa: E402
 
@@ -50,7 +50,7 @@ class Table(unittest.TestCase):
         self.assertLessEqual(len(api.MAP_ORDER), towns.MAX_MAPS)          # w52: world ids 0..254 (GsvrRoMaps.MaxMaps 256, id 255 = lobby)
         self.assertEqual(towns.MAX_MAPS, 255)
         self.assertEqual(tuple(api.MAP_ORDER[:len(towns.NAMES)]), towns.NAMES)          # w37 integrate: the dungeons lane appends its maps after the towns (test_ro_dungeons.py)
-        self.assertEqual(tuple(api.MAP_ORDER[len(towns.NAMES):]), culvert.NAMES + dungeons.NAMES + jobmaps.NAMES + maps2.NAMES)          # w46: 51..62 maps2; w39: ids 27..30 culvert, 31..42 dungeons; w41: 43..49 job-test maps
+        self.assertEqual(tuple(api.MAP_ORDER[len(towns.NAMES):]), culvert.NAMES + dungeons.NAMES + jobmaps.NAMES + maps2.NAMES + maps3.NAMES)          # w53: 62..74 maps3; w46: 51..62 maps2; w39: ids 27..30 culvert, 31..42 dungeons; w41: 43..49 job-test maps
         for m, label, c, k in towns.WORLD:
             self.assertTrue(re.match(r"^[a-z0-9_]{1,32}$", m), m)
             self.assertTrue(label and k in ("town", "interior", "field"), m)
@@ -75,7 +75,7 @@ class Table(unittest.TestCase):
         self.assertEqual((len(t), len(o)), (len(world), len(world)))
         self.assertTrue(all(0 < x <= 80 for x in t) and all(0 < x <= 700 for x in o), (t, o))   # converter limits: 80 terrain blocks, 700 chunks
         self.assertEqual(re.findall(r'"([^"]+)"', re.search(r"RoMapLabels\s*=\s*\{([^}]*)\}", src).group(1)),
-                         [towns.LABEL[m] for m in towns.NAMES] + [culvert.LABEL[m] for m in culvert.NAMES] + [dungeons.LABEL[m] for m in dungeons.NAMES] + [jobmaps.LABEL[m] for m in jobmaps.NAMES] + [maps2.LABEL[m] for m in maps2.NAMES])          # the nav panel's names == the companion's labels
+                         [towns.LABEL[m] for m in towns.NAMES] + [culvert.LABEL[m] for m in culvert.NAMES] + [dungeons.LABEL[m] for m in dungeons.NAMES] + [jobmaps.LABEL[m] for m in jobmaps.NAMES] + [maps2.LABEL[m] for m in maps2.NAMES] + [maps3.LABEL[m] for m in maps3.NAMES])          # the nav panel's names == the companion's labels
         self.assertEqual(re.findall(r'"([^"]+)"', re.search(r"RoClusterLabels\s*=\s*\{([^}]*)\}", src).group(1)), [towns.LABEL[c] if c != "morocc" else "Morroc" for c in towns.CLUSTERS])
         self.assertIn("maps.mapCluster = RoMapCluster; maps.ramBudgetMB = RoRamBudgetMB; maps.onDemandBudgetMB = RoOnDemandBudgetMB;", src)
         m = re.search(r"const float RoRamBudgetMB = (\d+)f;", src)

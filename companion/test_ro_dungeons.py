@@ -168,7 +168,7 @@ class Data(unittest.TestCase):
 
     def test_mvp_rows(self):
         mv = self.kind('mvp')
-        self.assertEqual([(int(r[1]), r[2], int(r[5]), int(r[6])) for r in mv], [(1150, 'pay_dun04', 3600000, 600000), (1147, 'anthell02', 7200000, 600000), (1086, 'prt_sewb4', 3600000, 600000), (1190, 'gef_fild10', 7200000, 600000), (1272, 'gl_chyard', 3600000, 600000), (1583, 'beach_dun', 18000000, 600000), (1251, 'xmas_dun02', 3600000, 600000)])  # w52 mvpgen: rows for all MvpExp > 0 bosses (7 MVP slots)
+        self.assertEqual([(int(r[1]), r[2], int(r[5]), int(r[6])) for r in mv], [(1150, 'pay_dun04', 3600000, 600000), (1147, 'anthell02', 7200000, 600000), (1086, 'prt_sewb4', 3600000, 600000), (1190, 'gef_fild10', 7200000, 600000), (1272, 'gl_chyard', 3600000, 600000), (1583, 'beach_dun', 18000000, 600000), (1251, 'xmas_dun02', 3600000, 600000), (1112, 'treasure02', 7200000, 600000), (1389, 'gef_dun01', 3600000, 600000), (1046, 'gef_dun02', 7200000, 600000)])  # w52 mvpgen: rows for all MvpExp > 0 bosses; v11 dungeons3 adds Drake (treasure02), Dracula (gef_dun01), Doppelganger (gef_dun02) = 10 MVP rows
         for r in mv:
             mid = r[1]
             self.assertTrue([x for x in self.kind('mvpexp') if x[1] == mid], mid)
