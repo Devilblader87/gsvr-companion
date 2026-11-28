@@ -13,3 +13,5 @@ wrld_cca6e8e8-d737-494c-8265-4a7a01d00476
 wrld_3a03fa73-b6c8-4116-8785-40fbe353b9b2
 # Ragnarok Online
 wrld_9b3f4e50-27c3-4d0e-b6d6-394957a6748c
+# CoD: World at War range (test)
+wrld_171e8c2c-31dd-4d30-9748-b5e163fdc33e
